@@ -10,11 +10,16 @@ export default function BetaSignupForm() {
   const [niche, setNiche] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [isSuccess, setIsSuccess] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (loading) return;
+
     setLoading(true);
     setMessage("");
+    setIsSuccess(false);
 
     const { error } = await supabase.from("beta-signups").insert([
       {
@@ -26,10 +31,15 @@ export default function BetaSignupForm() {
     ]);
 
     if (error) {
+      setIsSuccess(false);
       setMessage("Something went wrong. Please try again.");
       console.error(error);
     } else {
-      setMessage("You're on the beta list. Welcome to SaaSScout.");
+      setIsSuccess(true);
+      setMessage(
+        "You’re in! Thanks for joining the SaaSScout beta. We’ll contact you soon."
+      );
+
       setName("");
       setEmail("");
       setRole("");
@@ -43,7 +53,7 @@ export default function BetaSignupForm() {
     <form
       id="join-beta"
       onSubmit={handleSubmit}
-      className="mt-10 max-w-xl mx-auto bg-[#0B1020] border border-white/10 rounded-2xl p-6 text-left"
+      className="mt-10 max-w-xl mx-auto bg-[#0B1020] border border-white/10 rounded-2xl p-6 text-left shadow-2xl"
     >
       <div className="grid gap-4">
         <input
@@ -51,7 +61,7 @@ export default function BetaSignupForm() {
           placeholder="Your name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none focus:border-violet-500"
+          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -60,7 +70,7 @@ export default function BetaSignupForm() {
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none focus:border-violet-500"
+          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -68,7 +78,7 @@ export default function BetaSignupForm() {
           placeholder="Your role: founder, developer, indie hacker..."
           value={role}
           onChange={(e) => setRole(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none focus:border-violet-500"
+          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -76,19 +86,27 @@ export default function BetaSignupForm() {
           placeholder="Niche you're interested in"
           value={niche}
           onChange={(e) => setNiche(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none focus:border-violet-500"
+          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
         />
 
         <button
           type="submit"
           disabled={loading}
-          className="bg-violet-600 hover:bg-violet-500 disabled:opacity-60 px-6 py-3 rounded-xl font-semibold"
+          className="bg-violet-600 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60 px-6 py-3 rounded-xl font-semibold transition shadow-lg shadow-violet-600/20"
         >
           {loading ? "Joining..." : "Join Beta"}
         </button>
 
         {message && (
-          <p className="text-sm text-gray-300 text-center">{message}</p>
+          <div
+            className={`rounded-xl border px-4 py-3 text-center text-sm ${
+              isSuccess
+                ? "border-violet-500/30 bg-violet-500/10 text-violet-200"
+                : "border-red-500/30 bg-red-500/10 text-red-200"
+            }`}
+          >
+            {message}
+          </div>
         )}
       </div>
     </form>
