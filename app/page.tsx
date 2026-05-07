@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import BetaSignupForm from "./BetaSignupForm";
 import HeroCarousel from "./HeroCarousel";
 
@@ -11,7 +12,7 @@ export default function Home() {
       <div className="hidden border-b border-white/10 bg-[#02040d] px-6 py-2 text-xs text-gray-400 md:block">
         <div className="mx-auto flex max-w-7xl justify-end gap-6">
           <span>AI Founder Intelligence</span>
-          <span>Early Beta</span>
+          <span>Private Beta</span>
           <span>Built for indie founders</span>
         </div>
       </div>
@@ -45,19 +46,26 @@ export default function Home() {
             </a>
           </div>
 
-          <a
-            href="#join-beta"
-            className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500"
-          >
-            Join Beta
-          </a>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/login"
+              className="hidden rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold text-gray-300 transition hover:bg-white/5 hover:text-white sm:inline-block"
+            >
+              Login
+            </Link>
+
+            <Link
+              href="/login"
+              className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500"
+            >
+              Open App
+            </Link>
+          </div>
         </div>
       </nav>
 
-      {/* Hero Carousel */}
       <HeroCarousel />
 
-      {/* Section 1 */}
       <section id="how-it-works" className="mx-auto max-w-7xl px-6 py-24">
         <div className="mx-auto max-w-3xl text-center">
           <p className="mb-4 text-sm font-semibold uppercase tracking-widest text-violet-400">
@@ -77,16 +85,16 @@ export default function Home() {
         <div className="mt-16 grid gap-6 md:grid-cols-3">
           {[
             {
-              title: "Scan real conversations",
-              text: "Analyze pain points from communities, forums, reviews and founder discussions.",
+              title: "Scan a market",
+              text: "Enter a niche, audience, or customer segment you want to analyze.",
             },
             {
-              title: "Detect repeated pain",
-              text: "Find repeated complaints, manual workflows, expensive tools and unmet needs.",
+              title: "Generate opportunities",
+              text: "SaaSScout turns that market into scored SaaS opportunities with MVP ideas.",
             },
             {
-              title: "Rank SaaS ideas",
-              text: "Score opportunities by urgency, demand, competition and build simplicity.",
+              title: "Save your best ideas",
+              text: "Keep promising opportunities in your private dashboard for later validation.",
             },
           ].map((item) => (
             <div
@@ -96,6 +104,7 @@ export default function Home() {
               <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-600/20 text-xl text-violet-300">
                 ✦
               </div>
+
               <h3 className="text-2xl font-bold">{item.title}</h3>
               <p className="mt-4 leading-relaxed text-gray-400">{item.text}</p>
             </div>
@@ -103,7 +112,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Section 2 */}
       <section id="signals" className="mx-auto max-w-7xl px-6 py-24">
         <div className="grid items-center gap-14 md:grid-cols-2">
           <div>
@@ -116,8 +124,9 @@ export default function Home() {
             </h2>
 
             <p className="mt-6 text-lg leading-relaxed text-gray-400">
-              Instead of generating random startup ideas, SaaSScout looks for
-              repeated frustration that can become useful software.
+              Instead of generating random startup ideas, SaaSScout helps you
+              structure repeated frustration into product opportunities you can
+              evaluate, save, and validate.
             </p>
           </div>
 
@@ -143,7 +152,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Section 3 */}
       <section id="examples" className="mx-auto max-w-7xl px-6 py-24">
         <div className="mx-auto max-w-3xl text-center">
           <p className="mb-4 text-sm font-semibold uppercase tracking-widest text-violet-400">
@@ -153,6 +161,11 @@ export default function Home() {
           <h2 className="text-4xl font-bold tracking-tight md:text-5xl">
             Ideas founders can actually evaluate.
           </h2>
+
+          <p className="mt-6 text-lg leading-relaxed text-gray-400">
+            The private beta already includes login, scans, results, opportunity
+            details, and saved ideas.
+          </p>
         </div>
 
         <div className="mt-16 grid gap-6 md:grid-cols-3">
@@ -191,9 +204,41 @@ export default function Home() {
         </div>
       </section>
 
-      {/* CTA + Form */}
+      <section className="mx-auto max-w-7xl px-6 py-24">
+        <div className="rounded-[2rem] border border-white/10 bg-[#0B1020] p-10 text-center shadow-2xl md:p-14">
+          <p className="text-sm font-semibold uppercase tracking-widest text-violet-400">
+            Private beta app
+          </p>
+
+          <h2 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
+            Already invited? Open your SaaSScout dashboard.
+          </h2>
+
+          <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-gray-400">
+            Create scans, review opportunities, inspect details, and save the
+            ideas you want to validate.
+          </p>
+
+          <div className="mt-8 flex flex-col justify-center gap-4 sm:flex-row">
+            <Link
+              href="/login"
+              className="rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500"
+            >
+              Open App
+            </Link>
+
+            <a
+              href="#join-beta"
+              className="rounded-xl border border-white/10 px-6 py-3 font-semibold text-gray-300 transition hover:bg-white/5 hover:text-white"
+            >
+              Join Waitlist
+            </a>
+          </div>
+        </div>
+      </section>
+
       <section id="join-beta" className="w-full py-28">
-        <div className=" border-y border-white/10 bg-gradient-to-r from-violet-600/20 to-cyan-500/10 px-6 py-20 text-center shadow-2xl md:px-20">
+        <div className="border-y border-white/10 bg-gradient-to-r from-violet-600/20 to-cyan-500/10 px-6 py-20 text-center shadow-2xl md:px-20">
           <Image
             src="/brand/logo-icon.png"
             alt="SaaSScout"
@@ -207,15 +252,32 @@ export default function Home() {
           </h2>
 
           <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-gray-300">
-            Join the SaaSScout beta and help shape a better way to discover
-            software opportunities before building.
+            Join the SaaSScout beta or open the private app if you already have
+            access.
           </p>
 
-          <BetaSignupForm />
+          <div className="mx-auto mt-8 flex max-w-xl flex-col justify-center gap-4 sm:flex-row">
+            <Link
+              href="/login"
+              className="rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500"
+            >
+              Open App
+            </Link>
+
+            <a
+              href="#beta-form"
+              className="rounded-xl border border-white/10 px-6 py-3 font-semibold text-gray-300 transition hover:bg-white/5 hover:text-white"
+            >
+              Join Waitlist
+            </a>
+          </div>
+
+          <div id="beta-form">
+            <BetaSignupForm />
+          </div>
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="border-t border-white/10 px-6 py-10">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-6 md:flex-row">
           <Image
@@ -226,16 +288,25 @@ export default function Home() {
             className="h-9 w-auto"
           />
 
-          <div className="flex gap-6 text-sm text-gray-400">
-            <a href="#" className="transition hover:text-white">
+          <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-400">
+            <Link href="/privacy" className="transition hover:text-white">
               Privacy
-            </a>
-            <a href="#" className="transition hover:text-white">
+            </Link>
+
+            <Link href="/terms" className="transition hover:text-white">
               Terms
-            </a>
-            <a href="#" className="transition hover:text-white">
+            </Link>
+
+            <a
+              href="mailto:contact@trysaasscout.com"
+              className="transition hover:text-white"
+            >
               Contact
             </a>
+
+            <Link href="/login" className="transition hover:text-white">
+              Login
+            </Link>
           </div>
 
           <p className="text-sm text-gray-500">

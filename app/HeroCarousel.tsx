@@ -54,21 +54,14 @@ export default function HeroCarousel() {
 
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050816]/70 via-transparent to-[#050816]/10" />
 
-        <div className="absolute bottom-10 left-8 z-10 hidden gap-4 md:flex">
-          <a
-            href="#join-beta"
-            className="rounded-xl bg-violet-600 px-7 py-3.5 font-semibold text-white shadow-xl shadow-violet-600/40 transition hover:-translate-y-0.5 hover:bg-violet-500"
-          >
-            Get Early Access
-          </a>
-
-          <button
-            onClick={() => alert("Coming soon 🚀")}
-            className="rounded-xl border border-white/20 bg-white/10 px-7 py-3.5 font-semibold text-white backdrop-blur-md transition hover:-translate-y-0.5 hover:bg-white/20"
-          >
-            View Demo
-          </button>
-        </div>
+        <div className="absolute bottom-10 left-8 z-10 hidden md:flex">
+  <a
+    href="/login"
+    className="rounded-xl bg-violet-600 px-7 py-3.5 font-semibold text-white shadow-xl shadow-violet-600/40 transition hover:-translate-y-0.5 hover:bg-violet-500"
+  >
+    Open Private Beta
+  </a>
+</div>
 
         <div className="absolute bottom-10 right-8 z-10 flex gap-3">
           {slides.map((_, index) => (
