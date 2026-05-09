@@ -31,7 +31,10 @@ export default function HeroCarousel() {
 
   return (
     <section className="w-full bg-[#050816] pb-24">
-      <div className="relative h-[640px] w-full overflow-hidden border-b border-white/10 bg-[#050816] shadow-2xl shadow-violet-950/40">
+      <div
+  className="relative w-full overflow-hidden border-b border-white/10 bg-[#050816] shadow-2xl shadow-violet-950/40"
+  style={{ height: "clamp(240px, 45vw, 640px)" }}
+>
         {slides.map((slide, index) => (
           <div
             key={slide.image}
@@ -54,6 +57,7 @@ export default function HeroCarousel() {
 
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050816]/70 via-transparent to-[#050816]/10" />
 
+        
         <div className="absolute bottom-10 left-8 z-10 hidden md:flex">
   <a
     href="/login"
