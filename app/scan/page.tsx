@@ -6,6 +6,16 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 
+type GeneratedOpportunity = {
+  title: string;
+  score: number;
+  pain: string;
+  customer: string;
+  mvp: string;
+  pricing: string;
+  difficulty: string;
+};
+
 export default function ScanPage() {
   const router = useRouter();
 
@@ -26,10 +36,11 @@ export default function ScanPage() {
 
       if (!user) {
         router.push("/login");
-      } else {
-        setUserId(user.id);
-        setLoadingAuth(false);
+        return;
       }
+
+      setUserId(user.id);
+      setLoadingAuth(false);
     }
 
     checkUser();
@@ -43,75 +54,94 @@ export default function ScanPage() {
     setLoading(true);
     setMessage("");
 
-    const { data: scanData, error: scanError } = await supabase
-      .from("scan")
-      .insert([
-        {
-          user_id: userId,
-          market,
-          audience,
-          region,
-          status: "completed",
+    try {
+      const { data: scanData, error: scanError } = await supabase
+        .from("scan")
+        .insert([
+          {
+            user_id: userId,
+            market: market.trim(),
+            audience: audience.trim() || null,
+            region: region.trim() || null,
+            status: "pending",
+          },
+        ])
+        .select()
+        .single();
+
+      if (scanError || !scanData) {
+        console.error(scanError);
+        setMessage("Something went wrong creating your scan. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch("/api/generate-opportunities", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      ])
-      .select()
-      .single();
+        body: JSON.stringify({
+          market: market.trim(),
+          audience: audience.trim(),
+          region: region.trim(),
+        }),
+      });
 
-    if (scanError || !scanData) {
-      console.error(scanError);
-      setMessage("Something went wrong creating your scan. Please try again.");
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error(result);
+        setMessage(result.error || "AI generation failed. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      const generatedOpportunities: GeneratedOpportunity[] =
+        result.opportunities || [];
+
+      if (generatedOpportunities.length === 0) {
+        setMessage("No opportunities were generated. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      const opportunitiesToInsert = generatedOpportunities
+        .slice(0, 3)
+        .map((opportunity) => ({
+          user_id: userId,
+          scan_id: scanData.id,
+          title: opportunity.title,
+          score: Number(opportunity.score) || 7,
+          pain: opportunity.pain,
+          customer: opportunity.customer,
+          mvp: opportunity.mvp,
+          pricing: opportunity.pricing,
+          difficulty: opportunity.difficulty,
+        }));
+
+      const { error: opportunityError } = await supabase
+        .from("opportunities")
+        .insert(opportunitiesToInsert);
+
+      if (opportunityError) {
+        console.error(opportunityError);
+        setMessage("Scan was created, but opportunities could not be saved.");
+        setLoading(false);
+        return;
+      }
+
+      await supabase
+        .from("scan")
+        .update({ status: "completed" })
+        .eq("id", scanData.id);
+
+      router.push("/results");
+    } catch (error) {
+      console.error(error);
+      setMessage("Something went wrong generating your opportunities.");
       setLoading(false);
-      return;
     }
-
-    const demoOpportunities = [
-      {
-        user_id: userId,
-        scan_id: scanData.id,
-        title: `CRM for ${market}`,
-        score: 8.6,
-        pain: "Users manage clients manually across spreadsheets, chats and notes.",
-        customer: `${market} professionals`,
-        mvp: "Client dashboard, reminders, notes, pipeline and simple automation.",
-        pricing: "$19/mo",
-        difficulty: "Medium",
-      },
-      {
-        user_id: userId,
-        scan_id: scanData.id,
-        title: `${market} Analytics Platform`,
-        score: 7.9,
-        pain: "Businesses lack visibility into performance, customer behavior and growth signals.",
-        customer: `${market} founders and operators`,
-        mvp: "Analytics dashboard, weekly reports, insights and alerts.",
-        pricing: "$29/mo",
-        difficulty: "Medium",
-      },
-      {
-        user_id: userId,
-        scan_id: scanData.id,
-        title: `AI Assistant for ${market}`,
-        score: 7.4,
-        pain: "Too much repetitive work and manual operations reduce productivity.",
-        customer: `${market} teams`,
-        mvp: "AI chat assistant, task suggestions, templates and automation flows.",
-        pricing: "$49/mo",
-        difficulty: "High",
-      },
-    ];
-
-    const { error: opportunityError } = await supabase
-      .from("opportunities")
-      .insert(demoOpportunities);
-
-    if (opportunityError) {
-      console.error(opportunityError);
-      setMessage("Scan was created, but opportunities could not be generated.");
-      setLoading(false);
-      return;
-    }
-
-    router.push("/results");
   }
 
   if (loadingAuth) {
@@ -154,8 +184,8 @@ export default function ScanPage() {
           </h1>
 
           <p className="mt-5 max-w-2xl text-lg text-gray-400">
-            Enter a niche, industry or customer group. SaaSScout will generate
-            opportunities based on pain signals and repeated frustrations.
+            Enter a niche, industry or customer group. SaaSScout will use AI to
+            generate potential SaaS opportunities based on market pain.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-10 grid gap-5">
@@ -167,6 +197,7 @@ export default function ScanPage() {
               <input
                 type="text"
                 required
+                maxLength={120}
                 placeholder="Freelance designers"
                 value={market}
                 onChange={(e) => setMarket(e.target.value)}
@@ -181,6 +212,7 @@ export default function ScanPage() {
 
               <input
                 type="text"
+                maxLength={120}
                 placeholder="Solo founders, agencies, coaches..."
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
@@ -195,6 +227,7 @@ export default function ScanPage() {
 
               <input
                 type="text"
+                maxLength={80}
                 placeholder="Global"
                 value={region}
                 onChange={(e) => setRegion(e.target.value)}
@@ -207,7 +240,9 @@ export default function ScanPage() {
               disabled={loading}
               className="mt-4 rounded-2xl bg-violet-600 px-6 py-4 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:opacity-60"
             >
-              {loading ? "Generating opportunities..." : "Find Opportunities"}
+              {loading
+                ? "Generating AI opportunities..."
+                : "Find Opportunities"}
             </button>
 
             {message && (
