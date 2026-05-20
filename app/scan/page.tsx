@@ -25,6 +25,8 @@ export default function ScanPage() {
   const [market, setMarket] = useState("");
   const [audience, setAudience] = useState("");
   const [region, setRegion] = useState("");
+  const [evidence, setEvidence] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -55,14 +57,20 @@ export default function ScanPage() {
     setMessage("");
 
     try {
+      const cleanMarket = market.trim();
+      const cleanAudience = audience.trim();
+      const cleanRegion = region.trim();
+      const cleanEvidence = evidence.trim().slice(0, 6000);
+
       const { data: scanData, error: scanError } = await supabase
         .from("scan")
         .insert([
           {
             user_id: userId,
-            market: market.trim(),
-            audience: audience.trim() || null,
-            region: region.trim() || null,
+            market: cleanMarket,
+            audience: cleanAudience || null,
+            region: cleanRegion || null,
+            evidence: cleanEvidence || null,
             status: "pending",
           },
         ])
@@ -82,9 +90,10 @@ export default function ScanPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          market: market.trim(),
-          audience: audience.trim(),
-          region: region.trim(),
+          market: cleanMarket,
+          audience: cleanAudience,
+          region: cleanRegion,
+          evidence: cleanEvidence,
         }),
       });
 
@@ -184,8 +193,9 @@ export default function ScanPage() {
           </h1>
 
           <p className="mt-5 max-w-2xl text-lg text-gray-400">
-            Enter a niche, industry or customer group. SaaSScout will use AI to
-            generate potential SaaS opportunities based on market pain.
+            Enter a niche, industry or customer group. You can also paste real
+            conversations, reviews, transcripts or complaints to make the scan
+            more accurate.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-10 grid gap-5">
@@ -235,13 +245,38 @@ export default function ScanPage() {
               />
             </div>
 
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-4">
+                <label className="block text-sm text-gray-300">
+                  Evidence / Source Text (optional)
+                </label>
+
+                <span className="text-xs text-gray-500">
+                  {evidence.length}/6000
+                </span>
+              </div>
+
+              <textarea
+                maxLength={6000}
+                placeholder="Paste Reddit comments, podcast transcripts, customer reviews, support tickets, YouTube transcript, forum posts, notes, or any text you want SaaSScout to analyze..."
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
+                className="min-h-[220px] w-full resize-y rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
+              />
+
+              <p className="mt-2 text-sm text-gray-500">
+                This helps SaaSScout generate opportunities based on real market
+                signals instead of only guessing from the niche.
+              </p>
+            </div>
+
             <button
               type="submit"
               disabled={loading}
               className="mt-4 rounded-2xl bg-violet-600 px-6 py-4 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:opacity-60"
             >
               {loading
-                ? "Generating AI opportunities..."
+                ? "Analyzing evidence and generating opportunities..."
                 : "Find Opportunities"}
             </button>
 

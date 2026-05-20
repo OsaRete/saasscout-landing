@@ -30,6 +30,7 @@ export async function POST(request: Request) {
     const market = String(body.market || "").trim();
     const audience = String(body.audience || "").trim();
     const region = String(body.region || "").trim();
+    const evidence = String(body.evidence || "").trim();
 
     if (!market) {
       return Response.json({ error: "Market is required." }, { status: 400 });
@@ -38,21 +39,29 @@ export async function POST(request: Request) {
     const limitedMarket = market.slice(0, 120);
     const limitedAudience = audience.slice(0, 120);
     const limitedRegion = region.slice(0, 80);
+    const limitedEvidence = evidence.slice(0, 6000);
 
     const prompt = `
 You are SaaSScout, an AI market opportunity analyst.
 
-Analyze this market and generate exactly 3 SaaS product opportunities.
+Analyze the market and generate exactly 3 SaaS product opportunities.
 
 Market: ${limitedMarket}
 Audience: ${limitedAudience || "Not specified"}
 Region: ${limitedRegion || "Global"}
 
+User-provided evidence:
+${limitedEvidence || "No user-provided evidence."}
+
 Rules:
 - Focus on practical SaaS ideas that can become MVPs.
 - Avoid generic ideas.
 - Make the pain specific.
+- If evidence is provided, prioritize repeated problems, complaints, workflows, frustrations, and unmet needs found in the evidence.
+- If evidence is provided, make the opportunities feel grounded in that evidence.
+- If evidence is not provided, infer reasonable opportunities from the market, audience, and region.
 - Keep each field concise.
+- Return exactly 3 opportunities.
 - Return ONLY valid JSON.
 - Do not include markdown.
 - Do not include explanations outside JSON.
@@ -79,7 +88,7 @@ JSON format:
         {
           role: "system",
           content:
-            "You generate practical SaaS opportunities from market pain. Always respond with valid JSON only.",
+            "You generate practical SaaS opportunities from market pain and user-provided evidence. Always respond with valid JSON only.",
         },
         {
           role: "user",
@@ -87,7 +96,7 @@ JSON format:
         },
       ],
       temperature: 0.35,
-      max_tokens: 1000,
+      max_tokens: 1100,
     });
 
     const content = completion.choices[0]?.message?.content;

@@ -72,9 +72,7 @@ export default function OpportunityPage() {
         .eq("opportunity_id", opportunityId)
         .maybeSingle();
 
-      if (savedError) {
-        console.error(savedError);
-      }
+      if (savedError) console.error(savedError);
 
       if (savedData) {
         setIsSaved(true);
@@ -154,6 +152,43 @@ export default function OpportunityPage() {
     .map((item) => item.trim())
     .filter(Boolean);
 
+  const roadmap = [
+    {
+      title: "Week 1 — Validate the pain",
+      text: "Interview 5–10 people in the target market and confirm this problem happens frequently.",
+    },
+    {
+      title: "Week 2 — Build the core workflow",
+      text: `Create the simplest version of: ${mvpFeatures
+        .slice(0, 3)
+        .join(", ")}.`,
+    },
+    {
+      title: "Week 3 — Test with early users",
+      text: "Give the MVP to a small group and watch where they get stuck or ask for improvements.",
+    },
+    {
+      title: "Week 4 — Launch paid beta",
+      text: `Offer a simple paid plan around ${opportunity.pricing} and measure willingness to pay.`,
+    },
+  ];
+
+  const validationQuestions = [
+    `How are you solving this problem today?`,
+    `How often does this problem happen?`,
+    `What happens if you do not solve it?`,
+    `Have you paid for a tool or service to solve this before?`,
+    `Would you pay ${opportunity.pricing} for a focused solution?`,
+  ];
+
+  const acquisitionChannels = [
+    "Reddit communities and niche forums",
+    "Cold outreach to the ideal customer",
+    "Founder-led LinkedIn or X posts",
+    "Niche newsletters and communities",
+    "Direct interviews with early users",
+  ];
+
   return (
     <main className="min-h-screen bg-[#050816] text-white">
       <div className="mx-auto max-w-7xl px-6 py-10">
@@ -224,14 +259,34 @@ export default function OpportunityPage() {
         <div className="mt-8 grid gap-8 lg:grid-cols-3">
           <div className="space-y-8 lg:col-span-2">
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Problem detected</h2>
+              <h2 className="text-2xl font-bold">Problem summary</h2>
               <p className="mt-4 leading-relaxed text-gray-400">
                 {opportunity.pain}
               </p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Suggested MVP Features</h2>
+              <h2 className="text-2xl font-bold">MVP roadmap</h2>
+
+              <div className="mt-6 space-y-4">
+                {roadmap.map((step) => (
+                  <div
+                    key={step.title}
+                    className="rounded-2xl border border-white/10 bg-white/[0.04] p-5"
+                  >
+                    <h3 className="font-semibold text-violet-200">
+                      {step.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-400">
+                      {step.text}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
+              <h2 className="text-2xl font-bold">Suggested MVP features</h2>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 {mvpFeatures.map((feature) => (
@@ -246,29 +301,72 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Build difficulty</h2>
+              <h2 className="text-2xl font-bold">Validation questions</h2>
+
+              <div className="mt-5 space-y-3">
+                {validationQuestions.map((question) => (
+                  <div
+                    key={question}
+                    className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-gray-300"
+                  >
+                    {question}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
+              <h2 className="text-2xl font-bold">Landing page angle</h2>
+
               <p className="mt-4 leading-relaxed text-gray-400">
-                {opportunity.difficulty}
+                Position this product around a direct outcome for{" "}
+                <span className="text-violet-200">{opportunity.customer}</span>.
+                Lead with the pain, show the manual workflow it replaces, and
+                offer a simple call-to-action like “Join the beta” or “Get early
+                access”.
               </p>
             </div>
           </div>
 
           <div className="space-y-8">
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Ideal Customer</h3>
+              <h3 className="text-xl font-bold">Target customer</h3>
               <p className="mt-4 text-gray-400">{opportunity.customer}</p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Pricing Angle</h3>
+              <h3 className="text-xl font-bold">Pricing angle</h3>
               <p className="mt-4 text-3xl font-bold text-violet-300">
                 {opportunity.pricing}
+              </p>
+              <p className="mt-3 text-sm text-gray-500">
+                Use this as an early pricing hypothesis, not a final price.
               </p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Next Step</h3>
-              <p className="mt-4 text-gray-400">
+              <h3 className="text-xl font-bold">Build difficulty</h3>
+              <p className="mt-4 text-gray-400">{opportunity.difficulty}</p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
+              <h3 className="text-xl font-bold">Acquisition channels</h3>
+
+              <div className="mt-5 space-y-3">
+                {acquisitionChannels.map((channel) => (
+                  <div
+                    key={channel}
+                    className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm text-gray-300"
+                  >
+                    {channel}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-violet-500/30 bg-violet-500/10 p-7">
+              <h3 className="text-xl font-bold">Next step</h3>
+              <p className="mt-4 text-gray-300">
                 Validate this idea with 5–10 people in the target market before
                 building the full MVP.
               </p>

@@ -19,26 +19,41 @@ export default function LoginPage() {
   async function handleAuth(e: React.FormEvent) {
     e.preventDefault();
 
+    if (loading) return;
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail || !cleanPassword) {
+      setMessage("Email and password are required.");
+      return;
+    }
+
     setLoading(true);
     setMessage("");
 
     if (mode === "signup") {
       const { error } = await supabase.auth.signUp({
-        email,
-        password,
+        email: cleanEmail,
+        password: cleanPassword,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
       });
 
       if (error) {
         setMessage(error.message);
       } else {
-        setMessage("Account created. Check your email if confirmation is required.");
+        setMessage(
+          "Account created. Please check your email to confirm your account."
+        );
       }
     }
 
     if (mode === "login") {
       const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+        email: cleanEmail,
+        password: cleanPassword,
       });
 
       if (error) {
@@ -49,6 +64,25 @@ export default function LoginPage() {
     }
 
     setLoading(false);
+  }
+
+  async function handleGoogleLogin() {
+    if (loading) return;
+
+    setLoading(true);
+    setMessage("");
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+
+    if (error) {
+      setMessage(error.message);
+      setLoading(false);
+    }
   }
 
   return (
@@ -95,7 +129,22 @@ export default function LoginPage() {
                 : "Join the private beta and start exploring opportunities."}
             </p>
 
-            <form onSubmit={handleAuth} className="mt-8 space-y-4">
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="mt-8 w-full rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3 font-semibold text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? "Please wait..." : "Continue with Google"}
+            </button>
+
+            <div className="my-6 flex items-center gap-4">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-xs text-gray-500">or</span>
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
+
+            <form onSubmit={handleAuth} className="space-y-4">
               <input
                 type="email"
                 required
@@ -115,10 +164,21 @@ export default function LoginPage() {
                 className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition focus:border-violet-500"
               />
 
+              {mode === "login" && (
+                <div className="text-right">
+                  <Link
+                    href="/reset-password"
+                    className="text-sm text-violet-300 hover:text-violet-200"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:opacity-60"
+                className="w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading
                   ? "Please wait..."
@@ -135,6 +195,7 @@ export default function LoginPage() {
             )}
 
             <button
+              type="button"
               onClick={() => {
                 setMessage("");
                 setMode(mode === "login" ? "signup" : "login");
