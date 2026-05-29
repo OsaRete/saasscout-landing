@@ -18,7 +18,38 @@ type Opportunity = {
   mvp: string;
   pricing: string;
   difficulty: string;
+  problem_summary: string | null;
+  target_customer: string | null;
+  mvp_roadmap: string | null;
+  validation_questions: string | null;
+  landing_page_idea: string | null;
+  acquisition_channels: string | null;
 };
+
+function splitByComma(text: string | null | undefined) {
+  return String(text || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitByPipe(text: string | null | undefined) {
+  return String(text || "")
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitRoadmap(text: string | null | undefined) {
+  const value = String(text || "").trim();
+
+  if (!value) return [];
+
+  return value
+    .split(/Phase\s*\d+:|Week\s*\d+:|Step\s*\d+:/i)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 export default function OpportunityPage() {
   const router = useRouter();
@@ -65,14 +96,12 @@ export default function OpportunityPage() {
 
       setOpportunity(data);
 
-      const { data: savedData, error: savedError } = await supabase
+      const { data: savedData } = await supabase
         .from("saved_ideas")
         .select("*")
         .eq("user_id", user.id)
         .eq("opportunity_id", opportunityId)
         .maybeSingle();
-
-      if (savedError) console.error(savedError);
 
       if (savedData) {
         setIsSaved(true);
@@ -147,47 +176,28 @@ export default function OpportunityPage() {
     );
   }
 
-  const mvpFeatures = opportunity.mvp
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const mvpFeatures = splitByComma(opportunity.mvp);
+  const roadmapItems = splitRoadmap(opportunity.mvp_roadmap);
+  const validationQuestions =
+    splitByPipe(opportunity.validation_questions).length > 0
+      ? splitByPipe(opportunity.validation_questions)
+      : [
+          "How are you solving this problem today?",
+          "How often does this problem happen?",
+          "What happens if you do not solve it?",
+          "Have you paid for a tool or service to solve this before?",
+          `Would you pay ${opportunity.pricing} for this?`,
+        ];
 
-  const roadmap = [
-    {
-      title: "Week 1 — Validate the pain",
-      text: "Interview 5–10 people in the target market and confirm this problem happens frequently.",
-    },
-    {
-      title: "Week 2 — Build the core workflow",
-      text: `Create the simplest version of: ${mvpFeatures
-        .slice(0, 3)
-        .join(", ")}.`,
-    },
-    {
-      title: "Week 3 — Test with early users",
-      text: "Give the MVP to a small group and watch where they get stuck or ask for improvements.",
-    },
-    {
-      title: "Week 4 — Launch paid beta",
-      text: `Offer a simple paid plan around ${opportunity.pricing} and measure willingness to pay.`,
-    },
-  ];
-
-  const validationQuestions = [
-    `How are you solving this problem today?`,
-    `How often does this problem happen?`,
-    `What happens if you do not solve it?`,
-    `Have you paid for a tool or service to solve this before?`,
-    `Would you pay ${opportunity.pricing} for a focused solution?`,
-  ];
-
-  const acquisitionChannels = [
-    "Reddit communities and niche forums",
-    "Cold outreach to the ideal customer",
-    "Founder-led LinkedIn or X posts",
-    "Niche newsletters and communities",
-    "Direct interviews with early users",
-  ];
+  const acquisitionChannels =
+    splitByComma(opportunity.acquisition_channels).length > 0
+      ? splitByComma(opportunity.acquisition_channels)
+      : [
+          "Reddit communities",
+          "LinkedIn outreach",
+          "Niche communities",
+          "Cold email",
+        ];
 
   return (
     <main className="min-h-screen bg-[#050816] text-white">
@@ -222,20 +232,14 @@ export default function OpportunityPage() {
         </div>
 
         {saveMessage && (
-          <div
-            className={`mt-6 rounded-xl border px-4 py-3 text-sm ${
-              isSaved
-                ? "border-violet-500/30 bg-violet-500/10 text-violet-200"
-                : "border-red-500/30 bg-red-500/10 text-red-200"
-            }`}
-          >
+          <div className="mt-6 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-200">
             {saveMessage}
           </div>
         )}
 
         <section className="mt-14 rounded-[2rem] border border-white/10 bg-[#0B1020] p-8 shadow-2xl md:p-12">
           <p className="text-sm uppercase tracking-widest text-violet-400">
-            Opportunity Detail
+            Opportunity Intelligence
           </p>
 
           <div className="mt-5 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -245,7 +249,7 @@ export default function OpportunityPage() {
               </h1>
 
               <p className="mt-5 max-w-3xl text-lg leading-relaxed text-gray-400">
-                {opportunity.pain}
+                {opportunity.problem_summary || opportunity.pain}
               </p>
             </div>
 
@@ -259,26 +263,35 @@ export default function OpportunityPage() {
         <div className="mt-8 grid gap-8 lg:grid-cols-3">
           <div className="space-y-8 lg:col-span-2">
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Problem summary</h2>
+              <h2 className="text-2xl font-bold">Problem Summary</h2>
               <p className="mt-4 leading-relaxed text-gray-400">
-                {opportunity.pain}
+                {opportunity.problem_summary || opportunity.pain}
               </p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">MVP roadmap</h2>
+              <h2 className="text-2xl font-bold">MVP Roadmap</h2>
 
               <div className="mt-6 space-y-4">
-                {roadmap.map((step) => (
+                {(roadmapItems.length > 0
+                  ? roadmapItems
+                  : [
+                      "Validate the pain with 5–10 potential customers.",
+                      `Build the core workflow around: ${mvpFeatures
+                        .slice(0, 3)
+                        .join(", ")}.`,
+                      "Launch a small paid beta and measure willingness to pay.",
+                    ]
+                ).map((step, index) => (
                   <div
-                    key={step.title}
+                    key={index}
                     className="rounded-2xl border border-white/10 bg-white/[0.04] p-5"
                   >
                     <h3 className="font-semibold text-violet-200">
-                      {step.title}
+                      Phase {index + 1}
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-gray-400">
-                      {step.text}
+                      {step}
                     </p>
                   </div>
                 ))}
@@ -286,7 +299,7 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Suggested MVP features</h2>
+              <h2 className="text-2xl font-bold">Suggested MVP Features</h2>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 {mvpFeatures.map((feature) => (
@@ -301,7 +314,7 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Validation questions</h2>
+              <h2 className="text-2xl font-bold">Validation Questions</h2>
 
               <div className="mt-5 space-y-3">
                 {validationQuestions.map((question) => (
@@ -316,26 +329,25 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h2 className="text-2xl font-bold">Landing page angle</h2>
+              <h2 className="text-2xl font-bold">Landing Page Idea</h2>
 
               <p className="mt-4 leading-relaxed text-gray-400">
-                Position this product around a direct outcome for{" "}
-                <span className="text-violet-200">{opportunity.customer}</span>.
-                Lead with the pain, show the manual workflow it replaces, and
-                offer a simple call-to-action like “Join the beta” or “Get early
-                access”.
+                {opportunity.landing_page_idea ||
+                  `Position this product around a direct outcome for ${opportunity.customer}. Lead with the pain and offer a simple beta CTA.`}
               </p>
             </div>
           </div>
 
           <div className="space-y-8">
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Target customer</h3>
-              <p className="mt-4 text-gray-400">{opportunity.customer}</p>
+              <h3 className="text-xl font-bold">Target Customer</h3>
+              <p className="mt-4 text-gray-400">
+                {opportunity.target_customer || opportunity.customer}
+              </p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Pricing angle</h3>
+              <h3 className="text-xl font-bold">Pricing Angle</h3>
               <p className="mt-4 text-3xl font-bold text-violet-300">
                 {opportunity.pricing}
               </p>
@@ -345,12 +357,12 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Build difficulty</h3>
+              <h3 className="text-xl font-bold">Build Difficulty</h3>
               <p className="mt-4 text-gray-400">{opportunity.difficulty}</p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-              <h3 className="text-xl font-bold">Acquisition channels</h3>
+              <h3 className="text-xl font-bold">Acquisition Channels</h3>
 
               <div className="mt-5 space-y-3">
                 {acquisitionChannels.map((channel) => (
@@ -365,7 +377,7 @@ export default function OpportunityPage() {
             </div>
 
             <div className="rounded-3xl border border-violet-500/30 bg-violet-500/10 p-7">
-              <h3 className="text-xl font-bold">Next step</h3>
+              <h3 className="text-xl font-bold">Next Step</h3>
               <p className="mt-4 text-gray-300">
                 Validate this idea with 5–10 people in the target market before
                 building the full MVP.

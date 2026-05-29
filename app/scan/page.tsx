@@ -14,6 +14,12 @@ type GeneratedOpportunity = {
   mvp: string;
   pricing: string;
   difficulty: string;
+  problem_summary: string;
+  target_customer: string;
+  mvp_roadmap: string;
+  validation_questions: string;
+  landing_page_idea: string;
+  acquisition_channels: string;
 };
 
 export default function ScanPage() {
@@ -98,6 +104,7 @@ export default function ScanPage() {
       });
 
       const result = await response.json();
+      console.log("AI generation result:", result);
 
       if (!response.ok) {
         console.error(result);
@@ -120,13 +127,22 @@ export default function ScanPage() {
         .map((opportunity) => ({
           user_id: userId,
           scan_id: scanData.id,
-          title: opportunity.title,
+          title: opportunity.title || "Untitled opportunity",
           score: Number(opportunity.score) || 7,
-          pain: opportunity.pain,
-          customer: opportunity.customer,
-          mvp: opportunity.mvp,
-          pricing: opportunity.pricing,
-          difficulty: opportunity.difficulty,
+          pain: opportunity.pain || "No pain point provided.",
+          customer: opportunity.customer || "Not specified.",
+          mvp: opportunity.mvp || "Not specified.",
+          pricing: opportunity.pricing || "Not specified.",
+          difficulty: opportunity.difficulty || "Medium",
+
+          problem_summary:
+            opportunity.problem_summary || opportunity.pain || null,
+          target_customer:
+            opportunity.target_customer || opportunity.customer || null,
+          mvp_roadmap: opportunity.mvp_roadmap || null,
+          validation_questions: opportunity.validation_questions || null,
+          landing_page_idea: opportunity.landing_page_idea || null,
+          acquisition_channels: opportunity.acquisition_channels || null,
         }));
 
       const { error: opportunityError } = await supabase
