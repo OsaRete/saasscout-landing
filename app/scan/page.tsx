@@ -6,6 +6,19 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 
+const ADMIN_EMAIL = "cedeomartineze@gmail.com";
+const FREE_SCAN_LIMIT = 3;
+const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+type LoadingStep =
+  | "idle"
+  | "checking"
+  | "extracting"
+  | "saving"
+  | "generating"
+  | "completed";
+
 type GeneratedOpportunity = {
   title: string;
   score: number;
@@ -22,19 +35,33 @@ type GeneratedOpportunity = {
   acquisition_channels: string;
 };
 
+function formatFileSize(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function getFileType(fileName: string) {
+  const extension = fileName.split(".").pop()?.toUpperCase();
+  return extension || "FILE";
+}
+
 export default function ScanPage() {
   const router = useRouter();
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const [market, setMarket] = useState("");
   const [audience, setAudience] = useState("");
   const [region, setRegion] = useState("");
   const [evidence, setEvidence] = useState("");
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<LoadingStep>("idle");
   const [message, setMessage] = useState("");
+
+  const isAdmin = userEmail?.toLowerCase() === ADMIN_EMAIL;
 
   useEffect(() => {
     async function checkUser() {
@@ -48,11 +75,102 @@ export default function ScanPage() {
       }
 
       setUserId(user.id);
+      setUserEmail(user.email || null);
       setLoadingAuth(false);
     }
 
     checkUser();
   }, [router]);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+
+    setMessage("");
+
+    if (!file) {
+      setEvidenceFile(null);
+      return;
+    }
+
+    const allowedExtensions = [".txt", ".pdf", ".docx"];
+    const fileName = file.name.toLowerCase();
+    const isAllowed = allowedExtensions.some((extension) =>
+      fileName.endsWith(extension)
+    );
+
+    if (!isAllowed) {
+      setEvidenceFile(null);
+      setMessage("Only .txt, .pdf, and .docx files are supported.");
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setEvidenceFile(null);
+      setMessage(`File is too large. Maximum size is ${MAX_FILE_SIZE_MB}MB.`);
+      return;
+    }
+
+    setEvidenceFile(file);
+  }
+
+  function removeSelectedFile() {
+    setEvidenceFile(null);
+    setMessage("");
+  }
+
+  async function extractFileText(file: File) {
+    if (file.name.toLowerCase().endsWith(".txt")) {
+      return await file.text();
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/extract-file-text", {
+      method: "POST",
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not extract file text.");
+    }
+
+    return String(result.text || "");
+  }
+
+  async function uploadEvidenceFile(scanId: string, file: File) {
+    const safeFileName = file.name
+      .replace(/[^a-zA-Z0-9._-]/g, "-")
+      .toLowerCase();
+
+    const filePath = `${userId}/${scanId}/${Date.now()}-${safeFileName}`;
+
+    const { error } = await supabase.storage
+      .from("evidence-files")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    return filePath;
+  }
+
+  function getButtonText() {
+    if (!loading) return "Find Opportunities";
+
+    if (loadingStep === "checking") return "Checking scan limit...";
+    if (loadingStep === "extracting") return "Extracting document...";
+    if (loadingStep === "saving") return "Saving scan...";
+    if (loadingStep === "generating") return "Generating opportunities...";
+
+    return "Analyzing...";
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,13 +178,65 @@ export default function ScanPage() {
     if (!market.trim() || !userId) return;
 
     setLoading(true);
+    setLoadingStep("checking");
     setMessage("");
 
     try {
+      if (!isAdmin) {
+        const { count, error: countError } = await supabase
+          .from("scan")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId);
+
+        if (countError) {
+          console.error(countError);
+          setMessage("Could not verify your scan limit. Please try again.");
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+
+        if ((count || 0) >= FREE_SCAN_LIMIT) {
+          setMessage(
+            "You have reached the free limit of 3 scans. Paid plans are coming soon."
+          );
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+
       const cleanMarket = market.trim();
       const cleanAudience = audience.trim();
       const cleanRegion = region.trim();
-      const cleanEvidence = evidence.trim().slice(0, 6000);
+
+      let cleanEvidence = evidence.trim();
+
+      if (evidenceFile) {
+        try {
+          setLoadingStep("extracting");
+
+          const fileText = await extractFileText(evidenceFile);
+
+          if (fileText.trim()) {
+            cleanEvidence = `${cleanEvidence}\n\nUploaded file content:\n${fileText}`;
+          }
+        } catch (extractError) {
+          console.error(extractError);
+          setMessage(
+            extractError instanceof Error
+              ? extractError.message
+              : "Could not extract text from the uploaded file."
+          );
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+
+      cleanEvidence = cleanEvidence.trim().slice(0, 6000);
+
+      setLoadingStep("saving");
 
       const { data: scanData, error: scanError } = await supabase
         .from("scan")
@@ -77,6 +247,7 @@ export default function ScanPage() {
             audience: cleanAudience || null,
             region: cleanRegion || null,
             evidence: cleanEvidence || null,
+            file_url: null,
             status: "pending",
           },
         ])
@@ -87,8 +258,28 @@ export default function ScanPage() {
         console.error(scanError);
         setMessage("Something went wrong creating your scan. Please try again.");
         setLoading(false);
+        setLoadingStep("idle");
         return;
       }
+
+      if (evidenceFile) {
+        try {
+          const filePath = await uploadEvidenceFile(scanData.id, evidenceFile);
+
+          await supabase
+            .from("scan")
+            .update({ file_url: filePath })
+            .eq("id", scanData.id);
+        } catch (uploadError) {
+          console.error(uploadError);
+          setMessage("File upload failed. Please try again.");
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+
+      setLoadingStep("generating");
 
       const response = await fetch("/api/generate-opportunities", {
         method: "POST",
@@ -104,12 +295,12 @@ export default function ScanPage() {
       });
 
       const result = await response.json();
-      console.log("AI generation result:", result);
 
       if (!response.ok) {
         console.error(result);
         setMessage(result.error || "AI generation failed. Please try again.");
         setLoading(false);
+        setLoadingStep("idle");
         return;
       }
 
@@ -119,6 +310,7 @@ export default function ScanPage() {
       if (generatedOpportunities.length === 0) {
         setMessage("No opportunities were generated. Please try again.");
         setLoading(false);
+        setLoadingStep("idle");
         return;
       }
 
@@ -134,7 +326,6 @@ export default function ScanPage() {
           mvp: opportunity.mvp || "Not specified.",
           pricing: opportunity.pricing || "Not specified.",
           difficulty: opportunity.difficulty || "Medium",
-
           problem_summary:
             opportunity.problem_summary || opportunity.pain || null,
           target_customer:
@@ -153,6 +344,7 @@ export default function ScanPage() {
         console.error(opportunityError);
         setMessage("Scan was created, but opportunities could not be saved.");
         setLoading(false);
+        setLoadingStep("idle");
         return;
       }
 
@@ -161,11 +353,14 @@ export default function ScanPage() {
         .update({ status: "completed" })
         .eq("id", scanData.id);
 
+      setLoadingStep("completed");
+
       router.push("/results");
     } catch (error) {
       console.error(error);
       setMessage("Something went wrong generating your opportunities.");
       setLoading(false);
+      setLoadingStep("idle");
     }
   }
 
@@ -200,21 +395,36 @@ export default function ScanPage() {
         </div>
 
         <section className="mt-16 rounded-[2rem] border border-white/10 bg-[#0B1020] p-8 shadow-2xl md:p-12">
-          <p className="text-sm uppercase tracking-widest text-violet-400">
-            New Market Scan
-          </p>
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-widest text-violet-400">
+                New Market Scan
+              </p>
 
-          <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
-            What market do you want to analyze?
-          </h1>
+              <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
+                What market do you want to analyze?
+              </h1>
 
-          <p className="mt-5 max-w-2xl text-lg text-gray-400">
-            Enter a niche, industry or customer group. You can also paste real
-            conversations, reviews, transcripts or complaints to make the scan
-            more accurate.
-          </p>
+              <p className="mt-5 max-w-2xl text-lg text-gray-400">
+                Add a niche, paste real market evidence, or upload a document.
+                SaaSScout will detect pain points and generate actionable SaaS
+                opportunities.
+              </p>
+            </div>
 
-          <form onSubmit={handleSubmit} className="mt-10 grid gap-5">
+            {isAdmin ? (
+           <div className="inline-flex shrink-0 items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-violet-200">
+            Admin · Unlimited scans
+           </div>
+                
+            ) : (
+              <div className="w-fit rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-300">
+                Free beta · {FREE_SCAN_LIMIT} scans
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} className="mt-10 grid gap-6">
             <div>
               <label className="mb-2 block text-sm text-gray-300">
                 Market / Niche *
@@ -224,76 +434,144 @@ export default function ScanPage() {
                 type="text"
                 required
                 maxLength={120}
-                placeholder="Freelance designers"
+                placeholder="Freelance designers, fitness coaches, book authors..."
                 value={market}
                 onChange={(e) => setMarket(e.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition focus:border-violet-500"
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
               />
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm text-gray-300">
-                Target audience (optional)
-              </label>
-
-              <input
-                type="text"
-                maxLength={120}
-                placeholder="Solo founders, agencies, coaches..."
-                value={audience}
-                onChange={(e) => setAudience(e.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition focus:border-violet-500"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-gray-300">
-                Region (optional)
-              </label>
-
-              <input
-                type="text"
-                maxLength={80}
-                placeholder="Global"
-                value={region}
-                onChange={(e) => setRegion(e.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition focus:border-violet-500"
-              />
-            </div>
-
-            <div>
-              <div className="mb-2 flex items-center justify-between gap-4">
-                <label className="block text-sm text-gray-300">
-                  Evidence / Source Text (optional)
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Target audience
                 </label>
 
-                <span className="text-xs text-gray-500">
-                  {evidence.length}/6000
-                </span>
+                <input
+                  type="text"
+                  maxLength={120}
+                  placeholder="Solo founders, agencies, coaches..."
+                  value={audience}
+                  onChange={(e) => setAudience(e.target.value)}
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
+                />
               </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Region
+                </label>
+
+                <input
+                  type="text"
+                  maxLength={80}
+                  placeholder="Global, US, Brazil, LatAm..."
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.02] p-5">
+              <p className="text-sm font-semibold text-white">
+                Option 1: Paste evidence
+              </p>
+
+              <p className="mt-2 text-sm text-gray-500">
+                Paste real conversations, reviews, support tickets, interview
+                notes, market reports, or podcast transcripts.
+              </p>
 
               <textarea
                 maxLength={6000}
-                placeholder="Paste Reddit comments, podcast transcripts, customer reviews, support tickets, YouTube transcript, forum posts, notes, or any text you want SaaSScout to analyze..."
+                placeholder="Example: Paste Reddit posts, customer reviews, support tickets, interview notes, podcast transcripts, or market research here..."
                 value={evidence}
                 onChange={(e) => setEvidence(e.target.value)}
-                className="min-h-[220px] w-full resize-y rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
+                className="mt-4 min-h-[220px] w-full resize-y rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
               />
 
-              <p className="mt-2 text-sm text-gray-500">
-                This helps SaaSScout generate opportunities based on real market
-                signals instead of only guessing from the niche.
+              <div className="mt-2 flex justify-end text-xs text-gray-500">
+                {evidence.length}/6000
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs uppercase tracking-widest text-gray-500">
+              <div className="h-px flex-1 bg-white/10" />
+              or
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
+
+            <div className="rounded-3xl border border-dashed border-white/15 bg-white/[0.03] p-5">
+              <p className="text-sm font-semibold text-white">
+                Option 2: Upload evidence file
               </p>
+
+              <p className="mt-2 text-sm text-gray-500">
+                Upload a TXT, PDF, or DOCX file. Maximum size:{" "}
+                {MAX_FILE_SIZE_MB}MB.
+              </p>
+
+              <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center">
+                <label
+                  htmlFor="evidence-file"
+                  className="inline-flex cursor-pointer items-center justify-center rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 transition hover:bg-violet-500"
+                >
+                  Choose File
+                </label>
+
+                <input
+                  id="evidence-file"
+                  type="file"
+                  accept=".txt,.pdf,.docx"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+
+                <p className="text-sm text-gray-400">
+                  {evidenceFile ? evidenceFile.name : "No file selected"}
+                </p>
+              </div>
+
+              {evidenceFile && (
+                <div className="mt-5 flex items-center justify-between gap-4 rounded-2xl border border-violet-500/30 bg-violet-500/10 px-5 py-4">
+                  <div>
+                    <p className="text-sm font-semibold text-violet-100">
+                      📄 {evidenceFile.name}
+                    </p>
+
+                    <p className="mt-1 text-xs text-violet-200/80">
+                      {getFileType(evidenceFile.name)} ·{" "}
+                      {formatFileSize(evidenceFile.size)}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={removeSelectedFile}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs text-gray-300 transition hover:bg-white/10"
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-5 grid gap-3 text-sm text-gray-500 sm:grid-cols-2">
+                <p>✓ Reddit discussions</p>
+                <p>✓ Customer interviews</p>
+                <p>✓ Product reviews</p>
+                <p>✓ Support tickets</p>
+                <p>✓ Podcast transcripts</p>
+                <p>✓ Market reports</p>
+              </div>
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="mt-4 rounded-2xl bg-violet-600 px-6 py-4 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:opacity-60"
+              className="mt-4 rounded-2xl bg-violet-600 px-6 py-4 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading
-                ? "Analyzing evidence and generating opportunities..."
-                : "Find Opportunities"}
+              {getButtonText()}
             </button>
 
             {message && (
@@ -303,20 +581,6 @@ export default function ScanPage() {
             )}
           </form>
         </section>
-
-        <div className="mt-10 grid gap-5 md:grid-cols-3">
-          {["Freelancers", "Fitness Coaches", "Local Businesses"].map(
-            (item) => (
-              <div
-                key={item}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
-              >
-                <p className="text-sm text-gray-400">Popular search</p>
-                <p className="mt-2 font-semibold">{item}</p>
-              </div>
-            )
-          )}
-        </div>
       </div>
     </main>
   );
