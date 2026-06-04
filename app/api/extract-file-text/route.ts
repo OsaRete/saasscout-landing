@@ -1,10 +1,13 @@
-import { PDFParse } from "pdf-parse";
+// @ts-expect-error pdf-parse internal path does not include TypeScript types
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import mammoth from "mammoth";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-
     const file = formData.get("file") as File | null;
 
     if (!file) {
@@ -13,25 +16,31 @@ export async function POST(request: Request) {
 
     const fileName = file.name.toLowerCase();
 
+    if (!fileName.endsWith(".pdf") && !fileName.endsWith(".docx")) {
+      return Response.json(
+        { error: "Unsupported file type." },
+        { status: 400 }
+      );
+    }
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
     let extractedText = "";
 
     if (fileName.endsWith(".pdf")) {
-      const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
+      const result = await pdfParse(buffer);
+      extractedText = result.text || "";
+    }
 
-      extractedText = result.text;
-    } else if (fileName.endsWith(".docx")) {
-      const result = await mammoth.extractRawText({
-        buffer,
-      });
+    if (fileName.endsWith(".docx")) {
+      const result = await mammoth.extractRawText({ buffer });
+      extractedText = result.value || "";
+    }
 
-      extractedText = result.value;
-    } else {
+    if (!extractedText.trim()) {
       return Response.json(
-        { error: "Unsupported file type." },
+        { error: "No readable text found in this file." },
         { status: 400 }
       );
     }
@@ -42,11 +51,9 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("File extraction error:", error);
 
-    return Response.json(
-      {
-        error: "Failed to extract text.",
-      },
-      { status: 500 }
-    );
+    const message =
+      error instanceof Error ? error.message : "Failed to extract text.";
+
+    return Response.json({ error: message }, { status: 500 });
   }
 }

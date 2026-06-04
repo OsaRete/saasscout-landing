@@ -15,6 +15,7 @@ type LoadingStep =
   | "idle"
   | "checking"
   | "extracting"
+  | "analyzingEvidence"
   | "saving"
   | "generating"
   | "completed";
@@ -33,6 +34,18 @@ type GeneratedOpportunity = {
   validation_questions: string;
   landing_page_idea: string;
   acquisition_channels: string;
+};
+
+type EvidenceAnalysis = {
+  inferred_market: string;
+  audience_summary: string;
+  evidence_summary: string;
+  pain_points: string;
+  repeated_patterns: string;
+  workflow_problems: string;
+  willingness_to_pay_signals: string;
+  opportunity_angles: string;
+  confidence_score: number;
 };
 
 function formatFileSize(bytes: number) {
@@ -131,13 +144,58 @@ export default function ScanPage() {
       body: formData,
     });
 
-    const result = await response.json();
+    const rawResponse = await response.text();
+
+    let result;
+
+    try {
+      result = JSON.parse(rawResponse);
+    } catch {
+      console.error("Raw extract-file-text response:", rawResponse);
+
+      throw new Error(
+        "The file extraction API returned an invalid response. Check the terminal for the real error."
+      );
+    }
 
     if (!response.ok) {
       throw new Error(result.error || "Could not extract file text.");
     }
 
     return String(result.text || "");
+  }
+
+  async function analyzeEvidence({
+    market,
+    audience,
+    region,
+    evidence,
+  }: {
+    market: string;
+    audience: string;
+    region: string;
+    evidence: string;
+  }) {
+    const response = await fetch("/api/analyze-evidence", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        market,
+        audience,
+        region,
+        evidence,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Evidence analysis failed.");
+    }
+
+    return result.analysis as EvidenceAnalysis;
   }
 
   async function uploadEvidenceFile(scanId: string, file: File) {
@@ -161,11 +219,37 @@ export default function ScanPage() {
     return filePath;
   }
 
+  async function saveEvidenceAnalysis(
+    scanId: string,
+    evidenceAnalysis: EvidenceAnalysis
+  ) {
+    const { error } = await supabase.from("evidence_analysis").insert([
+      {
+        scan_id: scanId,
+        inferred_market: evidenceAnalysis.inferred_market,
+        audience_summary: evidenceAnalysis.audience_summary,
+        evidence_summary: evidenceAnalysis.evidence_summary,
+        pain_points: evidenceAnalysis.pain_points,
+        repeated_patterns: evidenceAnalysis.repeated_patterns,
+        workflow_problems: evidenceAnalysis.workflow_problems,
+        willingness_to_pay_signals:
+          evidenceAnalysis.willingness_to_pay_signals,
+        opportunity_angles: evidenceAnalysis.opportunity_angles,
+        confidence_score: evidenceAnalysis.confidence_score,
+      },
+    ]);
+
+    if (error) {
+      console.error("Evidence analysis insert error:", error);
+    }
+  }
+
   function getButtonText() {
     if (!loading) return "Find Opportunities";
 
     if (loadingStep === "checking") return "Checking scan limit...";
     if (loadingStep === "extracting") return "Extracting document...";
+    if (loadingStep === "analyzingEvidence") return "Analyzing evidence...";
     if (loadingStep === "saving") return "Saving scan...";
     if (loadingStep === "generating") return "Generating opportunities...";
 
@@ -175,7 +259,12 @@ export default function ScanPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!market.trim() || !userId) return;
+    if (!userId) return;
+
+    if (!market.trim() && !evidence.trim() && !evidenceFile) {
+      setMessage("Please provide a market, paste evidence, or upload a file.");
+      return;
+    }
 
     setLoading(true);
     setLoadingStep("checking");
@@ -211,6 +300,7 @@ export default function ScanPage() {
       const cleanRegion = region.trim();
 
       let cleanEvidence = evidence.trim();
+      let finalMarket = cleanMarket;
 
       if (evidenceFile) {
         try {
@@ -236,6 +326,51 @@ export default function ScanPage() {
 
       cleanEvidence = cleanEvidence.trim().slice(0, 6000);
 
+      let evidenceAnalysis: EvidenceAnalysis | null = null;
+
+      if (cleanEvidence) {
+        try {
+          setLoadingStep("analyzingEvidence");
+
+          evidenceAnalysis = await analyzeEvidence({
+            market: cleanMarket,
+            audience: cleanAudience,
+            region: cleanRegion,
+            evidence: cleanEvidence,
+          });
+
+          finalMarket = cleanMarket || evidenceAnalysis.inferred_market || "";
+
+          cleanEvidence = `
+Original evidence:
+${cleanEvidence}
+
+Evidence Intelligence:
+Inferred market: ${evidenceAnalysis.inferred_market}
+Audience summary: ${evidenceAnalysis.audience_summary}
+Evidence summary: ${evidenceAnalysis.evidence_summary}
+Pain points: ${evidenceAnalysis.pain_points}
+Repeated patterns: ${evidenceAnalysis.repeated_patterns}
+Workflow problems: ${evidenceAnalysis.workflow_problems}
+Willingness to pay signals: ${evidenceAnalysis.willingness_to_pay_signals}
+Opportunity angles: ${evidenceAnalysis.opportunity_angles}
+Confidence score: ${evidenceAnalysis.confidence_score}
+`.trim();
+        } catch (analysisError) {
+          console.error("Evidence analysis error:", analysisError);
+
+          setMessage(
+            analysisError instanceof Error
+              ? analysisError.message
+              : "Could not analyze the evidence."
+          );
+
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+
       setLoadingStep("saving");
 
       const { data: scanData, error: scanError } = await supabase
@@ -243,7 +378,7 @@ export default function ScanPage() {
         .insert([
           {
             user_id: userId,
-            market: cleanMarket,
+            market: finalMarket || null,
             audience: cleanAudience || null,
             region: cleanRegion || null,
             evidence: cleanEvidence || null,
@@ -262,6 +397,10 @@ export default function ScanPage() {
         return;
       }
 
+      if (evidenceAnalysis) {
+        await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
+      }
+
       if (evidenceFile) {
         try {
           const filePath = await uploadEvidenceFile(scanData.id, evidenceFile);
@@ -271,8 +410,14 @@ export default function ScanPage() {
             .update({ file_url: filePath })
             .eq("id", scanData.id);
         } catch (uploadError) {
-          console.error(uploadError);
-          setMessage("File upload failed. Please try again.");
+          console.error("UPLOAD ERROR:", uploadError);
+
+          setMessage(
+            uploadError instanceof Error
+              ? uploadError.message
+              : JSON.stringify(uploadError)
+          );
+
           setLoading(false);
           setLoadingStep("idle");
           return;
@@ -287,7 +432,7 @@ export default function ScanPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          market: cleanMarket,
+          market: finalMarket,
           audience: cleanAudience,
           region: cleanRegion,
           evidence: cleanEvidence,
@@ -395,7 +540,7 @@ export default function ScanPage() {
         </div>
 
         <section className="mt-16 rounded-[2rem] border border-white/10 bg-[#0B1020] p-8 shadow-2xl md:p-12">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-sm uppercase tracking-widest text-violet-400">
                 New Market Scan
@@ -413,10 +558,9 @@ export default function ScanPage() {
             </div>
 
             {isAdmin ? (
-           <div className="inline-flex shrink-0 items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-violet-200">
-            Admin · Unlimited scans
-           </div>
-                
+              <div className="inline-flex shrink-0 items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-violet-200">
+                Admin · Unlimited scans
+              </div>
             ) : (
               <div className="w-fit rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-300">
                 Free beta · {FREE_SCAN_LIMIT} scans
@@ -427,14 +571,13 @@ export default function ScanPage() {
           <form onSubmit={handleSubmit} className="mt-10 grid gap-6">
             <div>
               <label className="mb-2 block text-sm text-gray-300">
-                Market / Niche *
+                Market / Niche
               </label>
 
               <input
                 type="text"
-                required
                 maxLength={120}
-                placeholder="Freelance designers, fitness coaches, book authors..."
+                placeholder="Optional: Freelance designers, fitness coaches, book authors..."
                 value={market}
                 onChange={(e) => setMarket(e.target.value)}
                 className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"

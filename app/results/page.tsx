@@ -10,7 +10,7 @@ type Scan = {
   id: string;
   created_at: string;
   user_id: string;
-  market: string;
+  market: string | null;
   audience: string | null;
   region: string | null;
   status: string;
@@ -36,6 +36,27 @@ type SavedIdea = {
   opportunity_id: string;
 };
 
+type EvidenceAnalysis = {
+  id: string;
+  scan_id: string;
+  inferred_market: string | null;
+  audience_summary: string | null;
+  evidence_summary: string | null;
+  pain_points: string | null;
+  repeated_patterns: string | null;
+  workflow_problems: string | null;
+  willingness_to_pay_signals: string | null;
+  opportunity_angles: string | null;
+  confidence_score: number | null;
+};
+
+function splitByPipe(value: string | null) {
+  return String(value || "")
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export default function ResultsPage() {
   const router = useRouter();
 
@@ -44,6 +65,9 @@ export default function ResultsPage() {
   const [scans, setScans] = useState<Scan[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [savedIdeas, setSavedIdeas] = useState<SavedIdea[]>([]);
+  const [evidenceAnalyses, setEvidenceAnalyses] = useState<EvidenceAnalysis[]>(
+    []
+  );
   const [userId, setUserId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -73,6 +97,8 @@ export default function ResultsPage() {
         return;
       }
 
+      const scanIds = (scansData || []).map((scan) => scan.id);
+
       const { data: opportunitiesData, error: opportunitiesError } =
         await supabase
           .from("opportunities")
@@ -93,9 +119,25 @@ export default function ResultsPage() {
         console.error(savedError);
       }
 
+      let analysisData: EvidenceAnalysis[] = [];
+
+      if (scanIds.length > 0) {
+        const { data, error } = await supabase
+          .from("evidence_analysis")
+          .select("*")
+          .in("scan_id", scanIds);
+
+        if (error) {
+          console.error(error);
+        } else {
+          analysisData = data || [];
+        }
+      }
+
       setScans(scansData || []);
       setOpportunities(opportunitiesData || []);
       setSavedIdeas(savedData || []);
+      setEvidenceAnalyses(analysisData);
       setLoadingData(false);
     }
 
@@ -112,6 +154,10 @@ export default function ResultsPage() {
 
   function getOpportunitiesForScan(scanId: string) {
     return opportunities.filter((opportunity) => opportunity.scan_id === scanId);
+  }
+
+  function getEvidenceAnalysisForScan(scanId: string) {
+    return evidenceAnalyses.find((analysis) => analysis.scan_id === scanId);
   }
 
   function isIdeaSaved(opportunityId: string) {
@@ -196,8 +242,8 @@ export default function ResultsPage() {
           </h1>
 
           <p className="mt-5 max-w-2xl text-lg text-gray-400">
-            These opportunities are connected to the scans you created. Later,
-            we will replace demo generation with real AI analysis.
+            Review the evidence insights, market signals, and generated SaaS
+            opportunities from your scans.
           </p>
         </section>
 
@@ -239,6 +285,15 @@ export default function ResultsPage() {
             <div className="space-y-10">
               {scans.map((scan, index) => {
                 const scanOpportunities = getOpportunitiesForScan(scan.id);
+                const evidenceAnalysis = getEvidenceAnalysisForScan(scan.id);
+
+                const painPoints = splitByPipe(evidenceAnalysis?.pain_points || null);
+                const repeatedPatterns = splitByPipe(
+                  evidenceAnalysis?.repeated_patterns || null
+                );
+                const opportunityAngles = splitByPipe(
+                  evidenceAnalysis?.opportunity_angles || null
+                );
 
                 return (
                   <div
@@ -252,7 +307,7 @@ export default function ResultsPage() {
                         </p>
 
                         <h2 className="mt-3 text-3xl font-bold">
-                          {scan.market}
+                          {scan.market || evidenceAnalysis?.inferred_market || "Untitled scan"}
                         </h2>
 
                         <p className="mt-4 max-w-3xl leading-relaxed text-gray-400">
@@ -272,7 +327,9 @@ export default function ResultsPage() {
                       <div className="rounded-2xl bg-white/[0.04] p-5">
                         <p className="text-sm text-gray-500">Audience</p>
                         <p className="mt-2 text-sm text-gray-200">
-                          {scan.audience || "Not specified"}
+                          {scan.audience ||
+                            evidenceAnalysis?.audience_summary ||
+                            "Not specified"}
                         </p>
                       </div>
 
@@ -290,6 +347,109 @@ export default function ResultsPage() {
                         </p>
                       </div>
                     </div>
+
+                    {evidenceAnalysis && (
+                      <div className="mt-8 rounded-3xl border border-violet-500/20 bg-violet-500/10 p-6">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <p className="text-sm uppercase tracking-widest text-violet-300">
+                              Evidence Intelligence
+                            </p>
+
+                            <h3 className="mt-3 text-2xl font-bold">
+                              Detected Market:{" "}
+                              {evidenceAnalysis.inferred_market || "Unknown"}
+                            </h3>
+
+                            <p className="mt-3 max-w-4xl text-sm leading-relaxed text-gray-300">
+                              {evidenceAnalysis.evidence_summary ||
+                                "No evidence summary available."}
+                            </p>
+                          </div>
+
+                          <div className="w-fit rounded-2xl border border-violet-400/30 bg-black/20 px-5 py-4 text-center">
+                            <p className="text-2xl font-bold text-violet-100">
+                              {evidenceAnalysis.confidence_score || 7}
+                            </p>
+                            <p className="text-xs text-gray-400">confidence</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-6 grid gap-5 lg:grid-cols-3">
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold text-white">
+                              Top Pain Points
+                            </h4>
+
+                            <div className="mt-4 space-y-3">
+                              {(painPoints.length > 0
+                                ? painPoints
+                                : ["No pain points found."]
+                              ).map((item) => (
+                                <p
+                                  key={item}
+                                  className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
+                                >
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold text-white">
+                              Repeated Patterns
+                            </h4>
+
+                            <div className="mt-4 space-y-3">
+                              {(repeatedPatterns.length > 0
+                                ? repeatedPatterns
+                                : ["No repeated patterns found."]
+                              ).map((item) => (
+                                <p
+                                  key={item}
+                                  className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
+                                >
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold text-white">
+                              Opportunity Angles
+                            </h4>
+
+                            <div className="mt-4 space-y-3">
+                              {(opportunityAngles.length > 0
+                                ? opportunityAngles
+                                : ["No opportunity angles found."]
+                              ).map((item) => (
+                                <p
+                                  key={item}
+                                  className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
+                                >
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {evidenceAnalysis.willingness_to_pay_signals && (
+                          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold text-white">
+                              Willingness To Pay Signals
+                            </h4>
+
+                            <p className="mt-3 text-sm leading-relaxed text-gray-300">
+                              {evidenceAnalysis.willingness_to_pay_signals}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="mt-8 space-y-5">
                       {scanOpportunities.length === 0 ? (
@@ -378,7 +538,11 @@ export default function ResultsPage() {
                                   disabled={saving || saved}
                                   className="rounded-xl border border-white/10 px-5 py-3 font-semibold text-gray-300 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  {saving ? "Saving..." : saved ? "Saved" : "Save Idea"}
+                                  {saving
+                                    ? "Saving..."
+                                    : saved
+                                    ? "Saved"
+                                    : "Save Idea"}
                                 </button>
                               </div>
                             </div>
