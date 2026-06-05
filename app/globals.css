@@ -28,3 +28,107 @@ body {
 html {
   scroll-behavior: smooth;
 }
+
+@media print {
+  @page {
+    size: A4;
+    margin: 20mm;
+  }
+
+  html,
+  body {
+    background: white !important;
+    color: black !important;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12pt;
+  }
+
+  main {
+    background: white !important;
+    color: black !important;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  a {
+    color: black !important;
+    text-decoration: none !important;
+  }
+
+  .rounded-3xl,
+  .rounded-2xl,
+  .rounded-xl {
+    border-radius: 0 !important;
+  }
+
+  .bg-\[\#050816\],
+  .bg-\[\#0B1020\] {
+    background: white !important;
+  }
+
+  .text-white,
+  .text-gray-300,
+  .text-gray-400,
+  .text-gray-500,
+  .text-violet-300,
+  .text-violet-200,
+  .text-green-200,
+  .text-green-300 {
+    color: black !important;
+  }
+
+  .border,
+  .border-white\/10,
+  .border-violet-500\/30,
+  .border-green-500\/30,
+  .border-green-500\/20 {
+    border-color: #d1d5db !important;
+  }
+
+  h1 {
+    font-size: 26pt !important;
+    margin-bottom: 12px !important;
+  }
+
+  h2 {
+    font-size: 18pt !important;
+    margin-bottom: 8px !important;
+  }
+
+  h3 {
+    font-size: 14pt !important;
+  }
+
+  section,
+  div {
+    break-inside: avoid;
+  }
+
+  .print-report-title {
+    font-size: 28pt;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .print-report-subtitle {
+    font-size: 12pt;
+    color: #666;
+    margin-bottom: 20px;
+  }
+
+  .print-score {
+    font-size: 36pt;
+    font-weight: bold;
+  }
+
+  .print-section {
+    margin-top: 20px;
+  }
+}
