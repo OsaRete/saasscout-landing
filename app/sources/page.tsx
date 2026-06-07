@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -30,7 +30,7 @@ type ScanSource = {
   created_at: string;
 };
 
-export default function SourcesPage() {
+function SourcesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const scanId = searchParams.get("scanId");
@@ -63,7 +63,7 @@ export default function SourcesPage() {
         .eq("user_id", user.id)
         .single();
 
-      if (scanError) {
+      if (scanError || !scanData) {
         console.error(scanError);
         setLoading(false);
         return;
@@ -277,9 +277,7 @@ export default function SourcesPage() {
           ) : filteredSources.length === 0 ? (
             <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
               <h2 className="text-2xl font-bold">No matching sources</h2>
-              <p className="mt-3 text-gray-400">
-                Try another search term.
-              </p>
+              <p className="mt-3 text-gray-400">Try another search term.</p>
             </div>
           ) : (
             <div className="grid gap-5 lg:grid-cols-2">
@@ -308,7 +306,9 @@ export default function SourcesPage() {
                   </div>
 
                   <p className="mt-5 text-sm leading-relaxed text-gray-400">
-                    {source.snippet || source.raw_text || "No source text available."}
+                    {source.snippet ||
+                      source.raw_text ||
+                      "No source text available."}
                   </p>
 
                   <div className="mt-6 flex flex-wrap gap-3">
@@ -334,5 +334,19 @@ export default function SourcesPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function SourcesPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
+          <p className="text-gray-400">Loading external sources...</p>
+        </main>
+      }
+    >
+      <SourcesContent />
+    </Suspense>
   );
 }
