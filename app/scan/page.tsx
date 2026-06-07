@@ -15,6 +15,7 @@ type LoadingStep =
   | "idle"
   | "checking"
   | "extracting"
+  | "collectingSources"
   | "analyzingEvidence"
   | "saving"
   | "generating"
@@ -46,6 +47,16 @@ type EvidenceAnalysis = {
   willingness_to_pay_signals: string;
   opportunity_angles: string;
   confidence_score: number;
+};
+
+type ExternalSource = {
+  source_type: string;
+  source_name: string | null;
+  title: string | null;
+  url: string | null;
+  snippet: string | null;
+  raw_text: string | null;
+  source_score: number | null;
 };
 
 function formatFileSize(bytes: number) {
@@ -198,6 +209,85 @@ export default function ScanPage() {
     return result.analysis as EvidenceAnalysis;
   }
 
+  async function collectExternalSources({
+    market,
+    audience,
+    region,
+  }: {
+    market: string;
+    audience: string;
+    region: string;
+  }) {
+    const response = await fetch("/api/collect-sources", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        market,
+        audience,
+        region,
+      }),
+    });
+  
+    const result = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(result.error || "Could not collect external sources.");
+    }
+  
+    return (result.sources || []) as ExternalSource[];
+  }
+  
+  async function saveExternalSources({
+    scanId,
+    userId,
+    sources,
+  }: {
+    scanId: string;
+    userId: string;
+    sources: ExternalSource[];
+  }) {
+    if (sources.length === 0) return;
+  
+    const rows = sources.map((source) => ({
+      scan_id: scanId,
+      user_id: userId,
+      source_type: source.source_type,
+      source_name: source.source_name,
+      title: source.title,
+      url: source.url,
+      snippet: source.snippet,
+      raw_text: source.raw_text,
+      source_score: source.source_score,
+    }));
+  
+    const { error } = await supabase.from("scan_sources").insert(rows);
+  
+    if (error) {
+      console.error("Scan sources insert error:", error);
+    }
+  }
+  
+  function formatExternalSourcesForEvidence(sources: ExternalSource[]) {
+    if (sources.length === 0) return "";
+  
+    return sources
+      .map(
+        (source, index) => `
+  External Source ${index + 1}
+  Type: ${source.source_type}
+  Source: ${source.source_name || "Unknown"}
+  Title: ${source.title || "Untitled"}
+  URL: ${source.url || "No URL"}
+  Snippet: ${source.snippet || "No snippet"}
+  Text: ${source.raw_text || "No extracted text"}
+  Source score: ${source.source_score || "N/A"}
+  `
+      )
+      .join("\n\n");
+  }
+
   async function uploadEvidenceFile(scanId: string, file: File) {
     const safeFileName = file.name
       .replace(/[^a-zA-Z0-9._-]/g, "-")
@@ -249,6 +339,7 @@ export default function ScanPage() {
 
     if (loadingStep === "checking") return "Checking scan limit...";
     if (loadingStep === "extracting") return "Extracting document...";
+    if (loadingStep === "collectingSources") return "Collecting externalsources...";
     if (loadingStep === "analyzingEvidence") return "Analyzing evidence...";
     if (loadingStep === "saving") return "Saving scan...";
     if (loadingStep === "generating") return "Generating opportunities...";
@@ -301,6 +392,7 @@ export default function ScanPage() {
 
       let cleanEvidence = evidence.trim();
       let finalMarket = cleanMarket;
+      let externalSources: ExternalSource[] = [];
 
       if (evidenceFile) {
         try {
@@ -318,6 +410,42 @@ export default function ScanPage() {
               ? extractError.message
               : "Could not extract text from the uploaded file."
           );
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+      
+      if (cleanMarket) {
+        try {
+          setLoadingStep("collectingSources");
+      
+          externalSources = await collectExternalSources({
+            market: cleanMarket,
+            audience: cleanAudience,
+            region: cleanRegion,
+          });
+      
+          const externalEvidence = formatExternalSourcesForEvidence(externalSources);
+      
+          if (externalEvidence.trim()) {
+            cleanEvidence = `
+      User-provided evidence:
+      ${cleanEvidence || "No user-provided evidence."}
+      
+      External source evidence:
+      ${externalEvidence}
+      `.trim();
+          }
+        } catch (sourceError) {
+          console.error("External sources error:", sourceError);
+      
+          setMessage(
+            sourceError instanceof Error
+              ? sourceError.message
+              : "Could not collect external sources."
+          );
+      
           setLoading(false);
           setLoadingStep("idle");
           return;
@@ -400,6 +528,11 @@ Confidence score: ${evidenceAnalysis.confidence_score}
       if (evidenceAnalysis) {
         await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
       }
+      await saveExternalSources({
+        scanId: scanData.id,
+        userId,
+        sources: externalSources,
+      });
 
       if (evidenceFile) {
         try {
@@ -551,7 +684,7 @@ Confidence score: ${evidenceAnalysis.confidence_score}
               </h1>
 
               <p className="mt-5 max-w-2xl text-lg text-gray-400">
-                Add a niche, paste real market evidence, or upload a document.
+                Add a niche to search external sources, or optionally paste/upload your own evidence.
                 SaaSScout will detect pain points and generate actionable SaaS
                 opportunities.
               </p>

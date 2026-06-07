@@ -50,6 +50,17 @@ type EvidenceAnalysis = {
   confidence_score: number | null;
 };
 
+type ScanSource = {
+  id: string;
+  scan_id: string;
+  source_type: string;
+  source_name: string | null;
+  title: string | null;
+  url: string | null;
+  snippet: string | null;
+  source_score: number | null;
+};
+
 function splitByPipe(value: string | null) {
   return String(value || "")
     .split("|")
@@ -68,6 +79,7 @@ export default function ResultsPage() {
   const [evidenceAnalyses, setEvidenceAnalyses] = useState<EvidenceAnalysis[]>(
     []
   );
+  const [scanSources, setScanSources] = useState<ScanSource[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -134,10 +146,26 @@ export default function ResultsPage() {
         }
       }
 
+      let sourcesData: ScanSource[] = [];
+
+if (scanIds.length > 0) {
+  const { data, error } = await supabase
+    .from("scan_sources")
+    .select("*")
+    .in("scan_id", scanIds);
+
+  if (error) {
+    console.error(error);
+  } else {
+    sourcesData = data || [];
+  }
+}
+
       setScans(scansData || []);
       setOpportunities(opportunitiesData || []);
       setSavedIdeas(savedData || []);
       setEvidenceAnalyses(analysisData);
+      setScanSources(sourcesData);
       setLoadingData(false);
     }
 
@@ -158,6 +186,20 @@ export default function ResultsPage() {
 
   function getEvidenceAnalysisForScan(scanId: string) {
     return evidenceAnalyses.find((analysis) => analysis.scan_id === scanId);
+  }
+
+  function getSourcesForScan(scanId: string) {
+    return scanSources.filter((source) => source.scan_id === scanId);
+  }
+  
+  function getSourceTypesForScan(scanId: string) {
+    const sources = getSourcesForScan(scanId);
+  
+    return Array.from(
+      new Set(
+        sources.map((source) => source.source_name || source.source_type)
+      )
+    );
   }
 
   function isIdeaSaved(opportunityId: string) {
@@ -286,7 +328,8 @@ export default function ResultsPage() {
               {scans.map((scan, index) => {
                 const scanOpportunities = getOpportunitiesForScan(scan.id);
                 const evidenceAnalysis = getEvidenceAnalysisForScan(scan.id);
-
+                const sources = getSourcesForScan(scan.id);
+                const sourceTypes = getSourceTypesForScan(scan.id);
                 const painPoints = splitByPipe(evidenceAnalysis?.pain_points || null);
                 const repeatedPatterns = splitByPipe(
                   evidenceAnalysis?.repeated_patterns || null
@@ -347,6 +390,75 @@ export default function ResultsPage() {
                         </p>
                       </div>
                     </div>
+
+                    {sources.length > 0 && (
+  <div className="mt-6 rounded-3xl border border-cyan-500/20 bg-cyan-500/10 p-6">
+    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+      <div>
+        <p className="text-sm uppercase tracking-widest text-cyan-300">
+          External Sources
+        </p>
+
+        <h3 className="mt-3 text-2xl font-bold">
+          {sources.length} sources collected
+        </h3>
+
+        <p className="mt-3 max-w-3xl text-sm leading-relaxed text-gray-300">
+          SaaSScout used external market signals to support this scan.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {sourceTypes.map((type) => (
+          <span
+            key={type}
+            className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-200"
+          >
+            {type}
+          </span>
+        ))}
+      </div>
+    </div>
+
+    <div className="mt-5 grid gap-4 md:grid-cols-3">
+      {sources.slice(0, 3).map((source) => (
+        <div
+          key={source.id}
+          className="rounded-2xl border border-white/10 bg-black/20 p-5"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs uppercase tracking-widest text-cyan-300">
+              {source.source_name || source.source_type}
+            </p>
+
+            <p className="text-xs text-gray-500">
+              Score {source.source_score || "-"}
+            </p>
+          </div>
+
+          <h4 className="mt-3 font-semibold text-white">
+            {source.title || "Untitled source"}
+          </h4>
+
+          <p className="mt-3 text-sm leading-relaxed text-gray-400">
+            {source.snippet || "No snippet available."}
+          </p>
+
+          {source.url && (
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 inline-block text-sm font-medium text-cyan-300 hover:text-cyan-200"
+            >
+              Open source
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
                     {evidenceAnalysis && (
                       <div className="mt-8 rounded-3xl border border-violet-500/20 bg-violet-500/10 p-6">
@@ -532,6 +644,13 @@ export default function ResultsPage() {
                                 >
                                   View Details
                                 </Link>
+
+                                <Link
+  href={`/sources?scanId=${scan.id}`}
+  className="rounded-xl border border-green-500/30 px-5 py-3 text-center font-semibold text-green-200 hover:bg-green-500/10"
+>
+  External Sources
+</Link>
 
                                 <button
                                   onClick={() => handleSaveIdea(opportunity.id)}
