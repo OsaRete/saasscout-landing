@@ -17,6 +17,7 @@ type WeeklyReport = {
   average_trend_score: number | null;
   average_pain_intensity: number | null;
   status: string;
+  is_global: boolean | null;
   created_at: string;
 };
 
@@ -32,17 +33,8 @@ type WeeklyNiche = {
   repeated_problems: string | null;
   opportunity_angle: string | null;
   movement: string | null;
-};
-
-type GeneratedNiche = {
-  niche: string;
-  category: string;
-  trend_score: number;
-  pain_intensity: number;
-  source_volume: number;
-  repeated_problems: string;
-  opportunity_angle: string;
-  movement: string;
+  is_global: boolean | null;
+  created_at: string;
 };
 
 function splitProblems(value: string | null) {
@@ -60,18 +52,28 @@ function formatDate(date: string) {
   });
 }
 
+function scoreWidth(score: number | null) {
+  return `${Math.min(100, Math.max(0, Number(score || 0) * 10))}%`;
+}
+
+function sourceWidth(sourceVolume: number | null, maxSourceVolume: number) {
+  if (!maxSourceVolume) return "0%";
+
+  return `${Math.min(
+    100,
+    Math.max(0, (Number(sourceVolume || 0) / maxSourceVolume) * 100)
+  )}%`;
+}
+
 export default function WeeklyPage() {
   const router = useRouter();
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
-  const [generating, setGenerating] = useState(false);
 
-  const [userId, setUserId] = useState<string | null>(null);
   const [reports, setReports] = useState<WeeklyReport[]>([]);
   const [niches, setNiches] = useState<WeeklyNiche[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
 
   useEffect(() => {
     async function loadWeeklyData() {
@@ -84,13 +86,12 @@ export default function WeeklyPage() {
         return;
       }
 
-      setUserId(user.id);
       setLoadingAuth(false);
 
       const { data: reportsData, error: reportsError } = await supabase
         .from("weekly_reports")
         .select("*")
-        .eq("user_id", user.id)
+        .or(`user_id.eq.${user.id},is_global.eq.true`)
         .order("week_start", { ascending: false });
 
       if (reportsError) {
@@ -137,88 +138,12 @@ export default function WeeklyPage() {
       .sort((a, b) => Number(b.trend_score || 0) - Number(a.trend_score || 0));
   }, [niches, selectedReport]);
 
-  async function handleGenerateWeeklyReport() {
-    if (!userId || generating) return;
-
-    setGenerating(true);
-    setMessage("");
-
-    try {
-      const response = await fetch("/api/generate-weekly-report", {
-        method: "POST",
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        setMessage(result.error || "Could not generate weekly report.");
-        setGenerating(false);
-        return;
-      }
-
-      const report = result.report;
-
-      const { data: reportData, error: reportError } = await supabase
-        .from("weekly_reports")
-        .insert([
-          {
-            user_id: userId,
-            week_start: report.week_start,
-            week_end: report.week_end,
-            summary: report.summary,
-            strongest_trend: report.strongest_trend,
-            total_sources_analyzed: report.total_sources_analyzed,
-            average_trend_score: report.average_trend_score,
-            average_pain_intensity: report.average_pain_intensity,
-            status: "completed",
-          },
-        ])
-        .select()
-        .single();
-
-      if (reportError || !reportData) {
-        console.error(reportError);
-        setMessage("Could not save weekly report.");
-        setGenerating(false);
-        return;
-      }
-
-      const nichesToInsert = (report.niches as GeneratedNiche[]).map((item) => ({
-        weekly_report_id: reportData.id,
-        user_id: userId,
-        niche: item.niche,
-        category: item.category,
-        trend_score: item.trend_score,
-        pain_intensity: item.pain_intensity,
-        source_volume: item.source_volume,
-        repeated_problems: item.repeated_problems,
-        opportunity_angle: item.opportunity_angle,
-        movement: item.movement,
-      }));
-
-      const { data: insertedNiches, error: nichesError } = await supabase
-        .from("weekly_niches")
-        .insert(nichesToInsert)
-        .select();
-
-      if (nichesError) {
-        console.error(nichesError);
-        setMessage("Report created, but niches could not be saved.");
-        setGenerating(false);
-        return;
-      }
-
-      setReports((current) => [reportData, ...current]);
-      setNiches((current) => [...(insertedNiches || []), ...current]);
-      setSelectedReportId(reportData.id);
-      setMessage("Weekly report generated successfully.");
-    } catch (error) {
-      console.error(error);
-      setMessage("Something went wrong generating the weekly report.");
-    }
-
-    setGenerating(false);
-  }
+  const topNiche = selectedNiches[0] || null;
+  const topThreeNiches = selectedNiches.slice(0, 3);
+  const maxSourceVolume = Math.max(
+    ...selectedNiches.map((item) => Number(item.source_volume || 0)),
+    1
+  );
 
   if (loadingAuth || loadingData) {
     return (
@@ -259,52 +184,59 @@ export default function WeeklyPage() {
           </div>
         </div>
 
-        <section className="mt-14 rounded-[2rem] border border-white/10 bg-gradient-to-br from-white/[0.05] to-violet-600/[0.08] p-8 shadow-2xl md:p-12">
-          <p className="text-sm uppercase tracking-widest text-violet-300">
-            Weekly Market Intelligence
-          </p>
-
-          <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+        <section className="mt-14 rounded-[2rem] border border-white/10 bg-gradient-to-br from-white/[0.06] via-violet-600/[0.08] to-cyan-600/[0.06] p-8 shadow-2xl md:p-12">
+          <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h1 className="text-4xl font-bold tracking-tight md:text-5xl">
+              <p className="text-sm uppercase tracking-widest text-violet-300">
+                Weekly Market Intelligence
+              </p>
+
+              <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
                 Trending SaaS opportunities this week.
               </h1>
 
               <p className="mt-5 max-w-3xl text-gray-400">
                 Track trending niches, repeated market problems, pain intensity,
-                and opportunity angles across multiple markets.
+                source volume, and opportunity angles across multiple markets.
               </p>
             </div>
 
-            <button
-              onClick={handleGenerateWeeklyReport}
-              disabled={generating}
-              className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {generating ? "Generating..." : "Generate Weekly Update"}
-            </button>
-          </div>
-
-          {message && (
-            <div className="mt-6 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-200">
-              {message}
+            <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">
+              <p className="text-xs uppercase tracking-widest text-violet-300">
+                Auto-updated
+              </p>
+              <p className="mt-1 text-sm text-gray-300">
+                Generated weekly from external market signals.
+              </p>
             </div>
-          )}
+          </div>
         </section>
 
         {reports.length === 0 ? (
           <section className="mt-10 rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
             <h2 className="text-2xl font-bold">No weekly updates yet</h2>
             <p className="mt-3 text-gray-400">
-              Generate your first weekly market intelligence report.
+              The first automatic weekly market intelligence report has not been
+              generated yet.
             </p>
           </section>
         ) : (
           <>
             <div className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-5">
-              <p className="text-sm font-semibold text-gray-300">
-                Weekly history
-              </p>
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-gray-300">
+                    Weekly history
+                  </p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Compare recent weeks and track market movement over time.
+                  </p>
+                </div>
+
+                <p className="text-sm text-gray-500">
+                  {reports.length} report{reports.length === 1 ? "" : "s"}
+                </p>
+              </div>
 
               <div className="mt-4 flex flex-wrap gap-3">
                 {reports.map((report) => (
@@ -319,6 +251,11 @@ export default function WeeklyPage() {
                   >
                     {formatDate(report.week_start)} -{" "}
                     {formatDate(report.week_end)}
+                    {report.is_global && (
+                      <span className="ml-2 text-xs text-violet-300">
+                        Global
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -356,38 +293,233 @@ export default function WeeklyPage() {
                   </div>
                 </div>
 
+                {topNiche && (
+                  <section className="mt-8 rounded-3xl border border-violet-500/20 bg-gradient-to-br from-violet-500/10 to-cyan-500/10 p-7 shadow-2xl">
+                    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className="text-sm uppercase tracking-widest text-violet-300">
+                          Top Opportunity This Week
+                        </p>
+
+                        <h2 className="mt-3 text-3xl font-bold">
+                          {topNiche.niche}
+                        </h2>
+
+                        <p className="mt-4 max-w-3xl leading-relaxed text-gray-300">
+                          {topNiche.opportunity_angle ||
+                            "No opportunity angle available."}
+                        </p>
+
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-300">
+                            {topNiche.category || "Market segment"}
+                          </span>
+
+                          <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs text-green-200">
+                            {topNiche.movement || "Stable"}
+                          </span>
+
+                          <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
+                            Global intelligence
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid min-w-[260px] gap-3">
+                        <div className="rounded-2xl border border-violet-500/30 bg-black/20 p-4">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Trend</span>
+                            <span className="text-violet-200">
+                              {topNiche.trend_score || 0}/10
+                            </span>
+                          </div>
+                          <div className="mt-3 h-3 rounded-full bg-white/[0.06]">
+                            <div
+                              className="h-3 rounded-full bg-violet-500"
+                              style={{
+                                width: scoreWidth(topNiche.trend_score),
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-red-500/30 bg-black/20 p-4">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Pain</span>
+                            <span className="text-red-200">
+                              {topNiche.pain_intensity || 0}/10
+                            </span>
+                          </div>
+                          <div className="mt-3 h-3 rounded-full bg-white/[0.06]">
+                            <div
+                              className="h-3 rounded-full bg-red-500"
+                              style={{
+                                width: scoreWidth(topNiche.pain_intensity),
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <Link
+                          href="/scan"
+                          className="rounded-2xl bg-violet-600 px-5 py-4 text-center text-sm font-semibold text-white hover:bg-violet-500"
+                        >
+                          Scan this niche
+                        </Link>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-                  <h2 className="text-2xl font-bold">Weekly Summary</h2>
-                  <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
-                    {selectedReport.summary}
-                  </p>
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold">Weekly Summary</h2>
+                      <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
+                        {selectedReport.summary ||
+                          "No weekly summary available."}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-gray-300">
+                      {formatDate(selectedReport.week_start)} -{" "}
+                      {formatDate(selectedReport.week_end)}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="mt-8 grid gap-6 lg:grid-cols-3">
+                  <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7 lg:col-span-2">
+                    <h2 className="text-2xl font-bold">
+                      Trend vs Pain Overview
+                    </h2>
+
+                    <p className="mt-2 text-sm text-gray-500">
+                      Compare opportunity momentum against problem intensity.
+                    </p>
+
+                    <div className="mt-6 space-y-5">
+                      {selectedNiches.map((item) => (
+                        <div key={item.id}>
+                          <div className="mb-2 flex items-center justify-between text-sm">
+                            <span className="font-medium text-gray-300">
+                              {item.niche}
+                            </span>
+                            <span className="text-gray-500">
+                              Trend {item.trend_score || 0} · Pain{" "}
+                              {item.pain_intensity || 0}
+                            </span>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
+                              <div
+                                className="h-full rounded-full bg-violet-500"
+                                style={{
+                                  width: scoreWidth(item.trend_score),
+                                }}
+                              />
+                            </div>
+
+                            <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
+                              <div
+                                className="h-full rounded-full bg-red-500"
+                                style={{
+                                  width: scoreWidth(item.pain_intensity),
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
+                    <h2 className="text-2xl font-bold">Source Volume</h2>
+
+                    <p className="mt-2 text-sm text-gray-500">
+                      Simple view of where market signal density is highest.
+                    </p>
+
+                    <div className="mt-6 space-y-4">
+                      {selectedNiches.slice(0, 7).map((item) => (
+                        <div key={item.id}>
+                          <div className="mb-2 flex justify-between text-sm">
+                            <span className="max-w-[180px] truncate text-gray-300">
+                              {item.niche}
+                            </span>
+                            <span className="text-cyan-300">
+                              {item.source_volume || 0}
+                            </span>
+                          </div>
+
+                          <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
+                            <div
+                              className="h-full rounded-full bg-cyan-500"
+                              style={{
+                                width: sourceWidth(
+                                  item.source_volume,
+                                  maxSourceVolume
+                                ),
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </section>
 
                 <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-                  <h2 className="text-2xl font-bold">Trend Score Overview</h2>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold">Top 3 Rising Niches</h2>
+                      <p className="mt-1 text-sm text-gray-500">
+                        Highest ranked markets based on trend, pain, and source
+                        signals.
+                      </p>
+                    </div>
+                  </div>
 
-                  <div className="mt-6 space-y-4">
-                    {selectedNiches.map((item) => (
-                      <div key={item.id}>
-                        <div className="mb-2 flex items-center justify-between text-sm">
-                          <span className="font-medium text-gray-300">
-                            {item.niche}
-                          </span>
-                          <span className="text-violet-300">
-                            {item.trend_score || 0}/10
-                          </span>
-                        </div>
+                  <div className="mt-6 grid gap-5 md:grid-cols-3">
+                    {topThreeNiches.map((item, index) => (
+                      <div
+                        key={item.id}
+                        className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"
+                      >
+                        <p className="text-sm text-violet-300">
+                          #{index + 1}
+                        </p>
 
-                        <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
-                          <div
-                            className="h-full rounded-full bg-violet-500"
-                            style={{
-                              width: `${Math.min(
-                                100,
-                                Number(item.trend_score || 0) * 10
-                              )}%`,
-                            }}
-                          />
+                        <h3 className="mt-3 text-xl font-bold">{item.niche}</h3>
+
+                        <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-gray-400">
+                          {item.opportunity_angle ||
+                            "No opportunity angle available."}
+                        </p>
+
+                        <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                          <div className="rounded-xl bg-black/20 px-3 py-2">
+                            <p className="font-bold">
+                              {item.trend_score || 0}
+                            </p>
+                            <p className="text-xs text-gray-500">trend</p>
+                          </div>
+
+                          <div className="rounded-xl bg-black/20 px-3 py-2">
+                            <p className="font-bold">
+                              {item.pain_intensity || 0}
+                            </p>
+                            <p className="text-xs text-gray-500">pain</p>
+                          </div>
+
+                          <div className="rounded-xl bg-black/20 px-3 py-2">
+                            <p className="font-bold">
+                              {item.source_volume || 0}
+                            </p>
+                            <p className="text-xs text-gray-500">sources</p>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -414,7 +546,8 @@ export default function WeeklyPage() {
                             </h3>
 
                             <p className="mt-4 max-w-3xl text-gray-400">
-                              {item.opportunity_angle}
+                              {item.opportunity_angle ||
+                                "No opportunity angle available."}
                             </p>
                           </div>
 
@@ -450,6 +583,12 @@ export default function WeeklyPage() {
                           <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs text-green-200">
                             {item.movement || "Stable"}
                           </span>
+
+                          {item.is_global && (
+                            <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
+                              Global intelligence
+                            </span>
+                          )}
                         </div>
 
                         <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -472,18 +611,17 @@ export default function WeeklyPage() {
                           </div>
 
                           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                            <h4 className="font-semibold">
-                              Suggested Action
-                            </h4>
+                            <h4 className="font-semibold">Suggested Action</h4>
 
                             <p className="mt-4 text-sm leading-relaxed text-gray-300">
                               Use this niche as a starting point for a focused
-                              SaaSScout scan. Validate the repeated problems and
-                              look for willingness-to-pay signals.
+                              SaaSScout scan. Validate repeated problems,
+                              compare external sources, and look for
+                              willingness-to-pay signals.
                             </p>
 
                             <Link
-                              href={`/scan`}
+                              href="/scan"
                               className="mt-5 inline-block rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500"
                             >
                               Scan this niche
