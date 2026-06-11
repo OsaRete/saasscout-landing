@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 
 const ADMIN_EMAIL = "cedeomartineze@gmail.com";
-const FREE_SCAN_LIMIT = 3;
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
@@ -59,6 +58,17 @@ type ExternalSource = {
   source_score: number | null;
 };
 
+type UserProfile = {
+  id: string;
+  user_id: string;
+  plan: string;
+  scan_limit: number;
+  scans_used: number;
+  external_sources_limit: number;
+  weekly_intelligence_enabled: boolean;
+  pdf_export_enabled: boolean;
+};
+
 function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
@@ -74,6 +84,7 @@ export default function ScanPage() {
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
   const [market, setMarket] = useState("");
   const [audience, setAudience] = useState("");
@@ -100,6 +111,19 @@ export default function ScanPage() {
 
       setUserId(user.id);
       setUserEmail(user.email || null);
+      const { data: profileData, error: profileError } = await supabase
+  .from("user_profiles")
+  .select("*")
+  .eq("user_id", user.id)
+  .maybeSingle();
+
+if (profileError) {
+  console.error("Profile error:", profileError);
+}
+
+if (profileData) {
+  setUserProfile(profileData);
+}
       setLoadingAuth(false);
     }
 
@@ -339,7 +363,7 @@ export default function ScanPage() {
 
     if (loadingStep === "checking") return "Checking scan limit...";
     if (loadingStep === "extracting") return "Extracting document...";
-    if (loadingStep === "collectingSources") return "Collecting externalsources...";
+    if (loadingStep === "collectingSources") return "Collecting external sources...";
     if (loadingStep === "analyzingEvidence") return "Analyzing evidence...";
     if (loadingStep === "saving") return "Saving scan...";
     if (loadingStep === "generating") return "Generating opportunities...";
@@ -349,57 +373,51 @@ export default function ScanPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
+  
     if (!userId) return;
-
+  
     if (!market.trim() && !evidence.trim() && !evidenceFile) {
       setMessage("Please provide a market, paste evidence, or upload a file.");
       return;
     }
-
+  
     setLoading(true);
     setLoadingStep("checking");
     setMessage("");
-
+  
     try {
       if (!isAdmin) {
-        const { count, error: countError } = await supabase
-          .from("scan")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", userId);
-
-        if (countError) {
-          console.error(countError);
-          setMessage("Could not verify your scan limit. Please try again.");
+        if (!userProfile) {
+          setMessage("Could not load your plan. Please refresh and try again.");
           setLoading(false);
           setLoadingStep("idle");
           return;
         }
-
-        if ((count || 0) >= FREE_SCAN_LIMIT) {
+  
+        if (userProfile.scans_used >= userProfile.scan_limit) {
           setMessage(
-            "You have reached the free limit of 3 scans. Paid plans are coming soon."
+            `You have reached your ${userProfile.plan} plan limit of ${userProfile.scan_limit} scans. Upgrade options are coming soon.`
           );
           setLoading(false);
           setLoadingStep("idle");
           return;
         }
       }
-
+  
       const cleanMarket = market.trim();
       const cleanAudience = audience.trim();
       const cleanRegion = region.trim();
-
+  
       let cleanEvidence = evidence.trim();
       let finalMarket = cleanMarket;
       let externalSources: ExternalSource[] = [];
-
+  
       if (evidenceFile) {
         try {
           setLoadingStep("extracting");
-
+  
           const fileText = await extractFileText(evidenceFile);
-
+  
           if (fileText.trim()) {
             cleanEvidence = `${cleanEvidence}\n\nUploaded file content:\n${fileText}`;
           }
@@ -415,92 +433,93 @@ export default function ScanPage() {
           return;
         }
       }
-      
+  
       if (cleanMarket) {
         try {
           setLoadingStep("collectingSources");
-      
+  
           externalSources = await collectExternalSources({
             market: cleanMarket,
             audience: cleanAudience,
             region: cleanRegion,
           });
-      
-          const externalEvidence = formatExternalSourcesForEvidence(externalSources);
-      
+  
+          const externalEvidence =
+            formatExternalSourcesForEvidence(externalSources);
+  
           if (externalEvidence.trim()) {
             cleanEvidence = `
-      User-provided evidence:
-      ${cleanEvidence || "No user-provided evidence."}
-      
-      External source evidence:
-      ${externalEvidence}
-      `.trim();
+  User-provided evidence:
+  ${cleanEvidence || "No user-provided evidence."}
+  
+  External source evidence:
+  ${externalEvidence}
+  `.trim();
           }
         } catch (sourceError) {
           console.error("External sources error:", sourceError);
-      
+  
           setMessage(
             sourceError instanceof Error
               ? sourceError.message
               : "Could not collect external sources."
           );
-      
+  
           setLoading(false);
           setLoadingStep("idle");
           return;
         }
       }
-
+  
       cleanEvidence = cleanEvidence.trim().slice(0, 6000);
-
+  
       let evidenceAnalysis: EvidenceAnalysis | null = null;
-
+  
       if (cleanEvidence) {
         try {
           setLoadingStep("analyzingEvidence");
-
+  
           evidenceAnalysis = await analyzeEvidence({
             market: cleanMarket,
             audience: cleanAudience,
             region: cleanRegion,
             evidence: cleanEvidence,
           });
-
+  
           finalMarket = cleanMarket || evidenceAnalysis.inferred_market || "";
-
+  
           cleanEvidence = `
-Original evidence:
-${cleanEvidence}
-
-Evidence Intelligence:
-Inferred market: ${evidenceAnalysis.inferred_market}
-Audience summary: ${evidenceAnalysis.audience_summary}
-Evidence summary: ${evidenceAnalysis.evidence_summary}
-Pain points: ${evidenceAnalysis.pain_points}
-Repeated patterns: ${evidenceAnalysis.repeated_patterns}
-Workflow problems: ${evidenceAnalysis.workflow_problems}
-Willingness to pay signals: ${evidenceAnalysis.willingness_to_pay_signals}
-Opportunity angles: ${evidenceAnalysis.opportunity_angles}
-Confidence score: ${evidenceAnalysis.confidence_score}
-`.trim();
+  Original evidence:
+  ${cleanEvidence}
+  
+  Evidence Intelligence:
+  Inferred market: ${evidenceAnalysis.inferred_market}
+  Audience summary: ${evidenceAnalysis.audience_summary}
+  Evidence summary: ${evidenceAnalysis.evidence_summary}
+  Pain points: ${evidenceAnalysis.pain_points}
+  Repeated patterns: ${evidenceAnalysis.repeated_patterns}
+  Workflow problems: ${evidenceAnalysis.workflow_problems}
+  Willingness to pay signals: ${evidenceAnalysis.willingness_to_pay_signals}
+  Opportunity angles: ${evidenceAnalysis.opportunity_angles}
+  Confidence score: ${evidenceAnalysis.confidence_score}
+  `.trim();
         } catch (analysisError) {
           console.error("Evidence analysis error:", analysisError);
-
+  
           setMessage(
             analysisError instanceof Error
               ? analysisError.message
               : "Could not analyze the evidence."
           );
-
+  
           setLoading(false);
           setLoadingStep("idle");
           return;
         }
       }
-
+  
       setLoadingStep("saving");
-
+  
       const { data: scanData, error: scanError } = await supabase
         .from("scan")
         .insert([
@@ -516,7 +535,7 @@ Confidence score: ${evidenceAnalysis.confidence_score}
         ])
         .select()
         .single();
-
+  
       if (scanError || !scanData) {
         console.error(scanError);
         setMessage("Something went wrong creating your scan. Please try again.");
@@ -524,41 +543,42 @@ Confidence score: ${evidenceAnalysis.confidence_score}
         setLoadingStep("idle");
         return;
       }
-
+  
       if (evidenceAnalysis) {
         await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
       }
+  
       await saveExternalSources({
         scanId: scanData.id,
         userId,
         sources: externalSources,
       });
-
+  
       if (evidenceFile) {
         try {
           const filePath = await uploadEvidenceFile(scanData.id, evidenceFile);
-
+  
           await supabase
             .from("scan")
             .update({ file_url: filePath })
             .eq("id", scanData.id);
         } catch (uploadError) {
           console.error("UPLOAD ERROR:", uploadError);
-
+  
           setMessage(
             uploadError instanceof Error
               ? uploadError.message
               : JSON.stringify(uploadError)
           );
-
+  
           setLoading(false);
           setLoadingStep("idle");
           return;
         }
       }
-
+  
       setLoadingStep("generating");
-
+  
       const response = await fetch("/api/generate-opportunities", {
         method: "POST",
         headers: {
@@ -571,9 +591,9 @@ Confidence score: ${evidenceAnalysis.confidence_score}
           evidence: cleanEvidence,
         }),
       });
-
+  
       const result = await response.json();
-
+  
       if (!response.ok) {
         console.error(result);
         setMessage(result.error || "AI generation failed. Please try again.");
@@ -581,17 +601,17 @@ Confidence score: ${evidenceAnalysis.confidence_score}
         setLoadingStep("idle");
         return;
       }
-
+  
       const generatedOpportunities: GeneratedOpportunity[] =
         result.opportunities || [];
-
+  
       if (generatedOpportunities.length === 0) {
         setMessage("No opportunities were generated. Please try again.");
         setLoading(false);
         setLoadingStep("idle");
         return;
       }
-
+  
       const opportunitiesToInsert = generatedOpportunities
         .slice(0, 3)
         .map((opportunity) => ({
@@ -613,11 +633,11 @@ Confidence score: ${evidenceAnalysis.confidence_score}
           landing_page_idea: opportunity.landing_page_idea || null,
           acquisition_channels: opportunity.acquisition_channels || null,
         }));
-
+  
       const { error: opportunityError } = await supabase
         .from("opportunities")
         .insert(opportunitiesToInsert);
-
+  
       if (opportunityError) {
         console.error(opportunityError);
         setMessage("Scan was created, but opportunities could not be saved.");
@@ -625,14 +645,35 @@ Confidence score: ${evidenceAnalysis.confidence_score}
         setLoadingStep("idle");
         return;
       }
-
+  
       await supabase
         .from("scan")
         .update({ status: "completed" })
         .eq("id", scanData.id);
-
+  
+      if (!isAdmin && userProfile) {
+        const newScansUsed = userProfile.scans_used + 1;
+  
+        const { error: profileUpdateError } = await supabase
+          .from("user_profiles")
+          .update({
+            scans_used: newScansUsed,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", userId);
+  
+        if (profileUpdateError) {
+          console.error("Profile scan usage update error:", profileUpdateError);
+        } else {
+          setUserProfile({
+            ...userProfile,
+            scans_used: newScansUsed,
+          });
+        }
+      }
+  
       setLoadingStep("completed");
-
+  
       router.push("/results");
     } catch (error) {
       console.error(error);
@@ -640,8 +681,8 @@ Confidence score: ${evidenceAnalysis.confidence_score}
       setLoading(false);
       setLoadingStep("idle");
     }
-  }
 
+  }
   if (loadingAuth) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
@@ -696,7 +737,11 @@ Confidence score: ${evidenceAnalysis.confidence_score}
               </div>
             ) : (
               <div className="w-fit rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-300">
-                Free beta · {FREE_SCAN_LIMIT} scans
+                {userProfile
+  ? `${userProfile.plan.toUpperCase()} · ${
+      userProfile.scan_limit - userProfile.scans_used
+    } scans left`
+  : "Loading plan..."}
               </div>
             )}
           </div>
