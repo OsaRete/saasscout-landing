@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../supabase";
 
 const ADMIN_EMAIL = "cedeomartineze@gmail.com";
@@ -78,8 +78,13 @@ function getFileType(fileName: string) {
   return extension || "FILE";
 }
 
-export default function ScanPage() {
+function ScanPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const discoveryIdParam = searchParams.get("discoveryId");
+  const problemIdParam = searchParams.get("problemId");
+  
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -129,6 +134,23 @@ if (profileData) {
 
     checkUser();
   }, [router]);
+
+  useEffect(() => {
+    const marketParam = searchParams.get("market");
+    const evidenceParam = searchParams.get("evidence");
+  
+    const timer = setTimeout(() => {
+      if (marketParam) {
+        setMarket(marketParam);
+      }
+  
+      if (evidenceParam) {
+        setEvidence(evidenceParam);
+      }
+    }, 0);
+  
+    return () => clearTimeout(timer);
+  }, [searchParams]);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -650,7 +672,52 @@ if (profileData) {
         .from("scan")
         .update({ status: "completed" })
         .eq("id", scanData.id);
-  
+      
+      if (discoveryIdParam && problemIdParam) {
+          await supabase.from("discovery_actions").insert([
+            {
+              user_id: userId,
+              discovery_id: discoveryIdParam,
+              problem_id: problemIdParam,
+              action_type: "converted_to_scan",
+              problem_title: finalMarket || cleanMarket || null,
+              affected_niches: cleanAudience || null,
+              suggested_solutions: cleanEvidence.slice(0, 1000),
+            },
+          ]);
+      }
+
+      if (discoveryIdParam && problemIdParam) {
+        const problemTitle = finalMarket || cleanMarket;
+      
+        const { data: existingProblem, error: existingProblemError } = await supabase
+          .from("problem_intelligence")
+          .select("*")
+          .eq("problem_title", problemTitle)
+          .maybeSingle();
+      
+        if (existingProblemError) {
+          console.error("Problem intelligence fetch error:", existingProblemError);
+        }
+      
+        if (existingProblem) {
+          const { error: updateIntelligenceError } = await supabase
+            .from("problem_intelligence")
+            .update({
+              converted_count: Number(existingProblem.converted_count || 0) + 1,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existingProblem.id);
+      
+          if (updateIntelligenceError) {
+            console.error(
+              "Problem intelligence conversion update error:",
+              updateIntelligenceError
+            );
+          }
+        }
+      }
+
       if (!isAdmin && userProfile) {
         const newScansUsed = userProfile.scans_used + 1;
   
@@ -904,5 +971,19 @@ if (profileData) {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function ScanPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
+          <p className="text-gray-400">Loading scan...</p>
+        </main>
+      }
+    >
+      <ScanPageContent />
+    </Suspense>
   );
 }

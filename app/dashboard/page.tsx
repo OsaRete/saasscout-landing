@@ -194,6 +194,13 @@ export default function DashboardPage() {
             </Link>
 
             <Link
+              href="/discover"
+              className="block rounded-xl px-4 py-3 hover:bg-white/5 hover:text-white"
+            >
+              Discover Opportunities
+            </Link>
+
+            <Link
               href="/scans"
               className="block rounded-xl px-4 py-3 hover:bg-white/5 hover:text-white"
             >
@@ -257,6 +264,8 @@ export default function DashboardPage() {
                 >
                   New Market Scan
                 </Link>
+
+
               </div>
             </div>
           </header>
@@ -486,6 +495,13 @@ export default function DashboardPage() {
                     className="rounded-2xl bg-violet-600 px-5 py-4 font-semibold hover:bg-violet-500"
                   >
                     New Market Scan
+                  </Link>
+
+                  <Link
+                       href="/discover"
+                       className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-5 py-4 font-semibold text-cyan-200 hover:bg-cyan-500/20"
+                     >
+                     Opportunity Discovery
                   </Link>
 
                   <Link
