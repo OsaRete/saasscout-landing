@@ -84,6 +84,7 @@ function ScanPageContent() {
 
   const discoveryIdParam = searchParams.get("discoveryId");
   const problemIdParam = searchParams.get("problemId");
+  const problemTitleParam = searchParams.get("problemTitle");
   
 
   const [loadingAuth, setLoadingAuth] = useState(true);
@@ -635,26 +636,29 @@ if (profileData) {
       }
   
       const opportunitiesToInsert = generatedOpportunities
-        .slice(0, 3)
-        .map((opportunity) => ({
-          user_id: userId,
-          scan_id: scanData.id,
-          title: opportunity.title || "Untitled opportunity",
-          score: Number(opportunity.score) || 7,
-          pain: opportunity.pain || "No pain point provided.",
-          customer: opportunity.customer || "Not specified.",
-          mvp: opportunity.mvp || "Not specified.",
-          pricing: opportunity.pricing || "Not specified.",
-          difficulty: opportunity.difficulty || "Medium",
-          problem_summary:
-            opportunity.problem_summary || opportunity.pain || null,
-          target_customer:
-            opportunity.target_customer || opportunity.customer || null,
-          mvp_roadmap: opportunity.mvp_roadmap || null,
-          validation_questions: opportunity.validation_questions || null,
-          landing_page_idea: opportunity.landing_page_idea || null,
-          acquisition_channels: opportunity.acquisition_channels || null,
-        }));
+  .slice(0, 3)
+  .map((opportunity) => ({
+    user_id: userId,
+    scan_id: scanData.id,
+    source_problem_title: problemTitleParam || finalMarket || cleanMarket || null,
+    source_problem_id: problemIdParam || null,
+    source_discovery_id: discoveryIdParam || null,
+    title: opportunity.title || "Untitled opportunity",
+    score: Number(opportunity.score) || 7,
+    pain: opportunity.pain || "No pain point provided.",
+    customer: opportunity.customer || "Not specified.",
+    mvp: opportunity.mvp || "Not specified.",
+    pricing: opportunity.pricing || "Not specified.",
+    difficulty: opportunity.difficulty || "Medium",
+    problem_summary:
+      opportunity.problem_summary || opportunity.pain || null,
+    target_customer:
+      opportunity.target_customer || opportunity.customer || null,
+    mvp_roadmap: opportunity.mvp_roadmap || null,
+    validation_questions: opportunity.validation_questions || null,
+    landing_page_idea: opportunity.landing_page_idea || null,
+    acquisition_channels: opportunity.acquisition_channels || null,
+  }));
   
       const { error: opportunityError } = await supabase
         .from("opportunities")
@@ -688,7 +692,7 @@ if (profileData) {
       }
 
       if (discoveryIdParam && problemIdParam) {
-        const problemTitle = finalMarket || cleanMarket;
+        const problemTitle =problemTitleParam|| finalMarket || cleanMarket;
       
         const { data: existingProblem, error: existingProblemError } = await supabase
           .from("problem_intelligence")
@@ -701,10 +705,25 @@ if (profileData) {
         }
       
         if (existingProblem) {
+          const newConvertedCount = Number(existingProblem.converted_count || 0) + 1;
+      
+          const intelligenceScore = Number(
+            (
+              (
+                Number(existingProblem.avg_pain_score || 0) * 0.35 +
+                Number(existingProblem.avg_revenue_score || 0) * 0.35 +
+                Number(existingProblem.avg_urgency_score || 0) * 0.2 +
+                Math.min(Number(existingProblem.prepared_count || 0), 20) * 0.1 +
+                Math.min(newConvertedCount, 20) * 0.25
+              ) * 10
+            ).toFixed(1)
+          );
+      
           const { error: updateIntelligenceError } = await supabase
             .from("problem_intelligence")
             .update({
-              converted_count: Number(existingProblem.converted_count || 0) + 1,
+              converted_count: newConvertedCount,
+              intelligence_score: intelligenceScore,
               updated_at: new Date().toISOString(),
             })
             .eq("id", existingProblem.id);

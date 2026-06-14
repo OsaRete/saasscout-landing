@@ -40,6 +40,20 @@ type EvidenceAnalysis = {
   confidence_score: number | null;
 };
 
+
+
+type OpportunityIntelligence = {
+  id: string;
+  opportunity_id: string;
+  user_id: string;
+  founder_fit_score: number;
+  intelligence_score: number;
+  prepared_count: number;
+  converted_count: number;
+  confidence_label: string | null;
+  recommendation: string | null;
+};
+
 function splitByComma(text: string | null | undefined) {
   return String(text || "")
     .split(",")
@@ -73,7 +87,9 @@ export default function OpportunityPage() {
   const [loadingOpportunity, setLoadingOpportunity] = useState(true);
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
   const [evidenceAnalysis, setEvidenceAnalysis] =
-    useState<EvidenceAnalysis | null>(null);
+  useState<EvidenceAnalysis | null>(null);
+  const [opportunityIntelligence, setOpportunityIntelligence] =
+  useState<OpportunityIntelligence | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -137,6 +153,26 @@ export default function OpportunityPage() {
       if (savedData) {
         setIsSaved(true);
         setSaveMessage("Idea already saved.");
+      }
+
+      const intelligenceResponse = await fetch("/api/opportunity-intelligence", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          opportunityId,
+          problemTitle: data.problem_summary || data.title,
+        }),
+      });
+      
+      const intelligenceResult = await intelligenceResponse.json();
+      
+      if (intelligenceResponse.ok && intelligenceResult.intelligence) {
+        setOpportunityIntelligence(intelligenceResult.intelligence);
+      } else {
+        console.error("Opportunity intelligence error:", intelligenceResult);
       }
 
       setLoadingOpportunity(false);
@@ -553,6 +589,53 @@ export default function OpportunityPage() {
                 </p>
               </div>
             )}
+
+<div className="rounded-3xl border border-cyan-500/30 bg-cyan-500/10 p-7">
+  <p className="text-sm uppercase tracking-widest text-cyan-300">
+    Opportunity Intelligence
+  </p>
+
+  <h3 className="mt-3 text-2xl font-bold">
+    {opportunityIntelligence?.recommendation || "Calculating..."}
+  </h3>
+
+  <div className="mt-6 grid grid-cols-2 gap-3">
+    <div className="rounded-2xl bg-black/20 p-4">
+      <p className="text-xs text-gray-500">Founder Fit</p>
+      <p className="mt-1 text-2xl font-bold">
+        {opportunityIntelligence?.founder_fit_score || 0}
+      </p>
+    </div>
+
+    <div className="rounded-2xl bg-black/20 p-4">
+      <p className="text-xs text-gray-500">Market Signal</p>
+      <p className="mt-1 text-2xl font-bold">
+        {opportunityIntelligence?.intelligence_score || 0}
+      </p>
+    </div>
+
+    <div className="rounded-2xl bg-black/20 p-4">
+      <p className="text-xs text-gray-500">Prepared</p>
+      <p className="mt-1 text-2xl font-bold">
+        {opportunityIntelligence?.prepared_count || 0}
+      </p>
+    </div>
+
+    <div className="rounded-2xl bg-black/20 p-4">
+      <p className="text-xs text-gray-500">Converted</p>
+      <p className="mt-1 text-2xl font-bold">
+        {opportunityIntelligence?.converted_count || 0}
+      </p>
+    </div>
+  </div>
+
+  <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
+    <p className="text-xs text-gray-500">Confidence</p>
+    <p className="mt-1 text-lg font-bold text-cyan-200">
+      {opportunityIntelligence?.confidence_label || "Low"}
+    </p>
+  </div>
+</div>
 
             <div className="rounded-3xl border border-violet-500/30 bg-violet-500/10 p-7">
               <h3 className="text-xl font-bold">Recommended Next Step</h3>
