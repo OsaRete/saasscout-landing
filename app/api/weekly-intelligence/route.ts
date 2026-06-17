@@ -9,6 +9,7 @@ type SerpApiOrganicResult = {
   title?: string;
   link?: string;
   snippet?: string;
+  position?: number;
 };
 
 type WeeklyDetectedProblem = {
@@ -52,7 +53,6 @@ function cleanJsonResponse(content: string) {
 
 async function fetchWithTimeout(url: string, timeoutMs = 12000) {
   const controller = new AbortController();
-
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -114,7 +114,10 @@ async function collectWeeklySignals() {
   for (const result of allResults) {
     const key = result.link || result.title || "";
     if (!key) continue;
-    if (!unique.has(key)) unique.set(key, result);
+
+    if (!unique.has(key)) {
+      unique.set(key, result);
+    }
   }
 
   return Array.from(unique.values()).slice(0, 20);
@@ -157,6 +160,7 @@ Rules:
 - Score pain, revenue, urgency, and trend from 1 to 10.
 - affected_niches must be separated by " | ".
 - suggested_solutions must be separated by " | ".
+- Use source evidence from the provided signals.
 - Return ONLY valid JSON.
 
 JSON format:
@@ -197,9 +201,16 @@ JSON format:
 
   const content = completion.choices[0]?.message?.content;
 
-  if (!content) throw new Error("No AI response generated.");
+  if (!content) {
+    throw new Error("No AI response generated.");
+  }
 
-  return JSON.parse(cleanJsonResponse(content));
+  try {
+    return JSON.parse(cleanJsonResponse(content));
+  } catch {
+    console.error("Raw weekly AI response:", content);
+    throw new Error("AI response was not valid JSON.");
+  }
 }
 
 function normalizeProblems(rawProblems: WeeklyDetectedProblem[]) {
@@ -211,8 +222,7 @@ function normalizeProblems(rawProblems: WeeklyDetectedProblem[]) {
     affected_niches:
       problem.affected_niches || "Small businesses | Solo founders",
     suggested_solutions:
-      problem.suggested_solutions ||
-      "Workflow automation tool | AI assistant",
+      problem.suggested_solutions || "Workflow automation tool | AI assistant",
     pain_score: Number(problem.pain_score) || 7,
     revenue_score: Number(problem.revenue_score) || 7,
     urgency_score: Number(problem.urgency_score) || 7,
@@ -238,17 +248,46 @@ function calculateIntelligenceScore(problem: WeeklyDetectedProblem) {
   );
 }
 
+async function saveWeeklySources({
+  runId,
+  sources,
+}: {
+  runId: string;
+  sources: SerpApiOrganicResult[];
+}) {
+  if (sources.length === 0) return;
+
+  const rows = sources.map((source, index) => ({
+    run_id: runId,
+    source_title: source.title || "Untitled source",
+    source_url: source.link || null,
+    source_snippet: source.snippet || null,
+    source_type: "google_search",
+    source_rank: source.position || index + 1,
+  }));
+
+  const { error } = await supabaseAdmin.from("weekly_sources").insert(rows);
+
+  if (error) {
+    throw error;
+  }
+}
+
 async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
-  const { data: existingProblem } = await supabaseAdmin
+  const { data: existingProblem, error: fetchError } = await supabaseAdmin
     .from("problem_intelligence")
     .select("*")
     .eq("problem_title", problem.problem_title)
     .maybeSingle();
 
+  if (fetchError) {
+    throw fetchError;
+  }
+
   const intelligenceScore = calculateIntelligenceScore(problem);
 
   if (!existingProblem) {
-    await supabaseAdmin.from("problem_intelligence").insert([
+    const { error } = await supabaseAdmin.from("problem_intelligence").insert([
       {
         problem_title: problem.problem_title,
         prepared_count: 0,
@@ -260,31 +299,47 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
       },
     ]);
 
+    if (error) {
+      throw error;
+    }
+
     return;
   }
 
-  await supabaseAdmin
+  const updatedScore = Number(
+    (
+      (Number(existingProblem.intelligence_score || 0) + intelligenceScore) /
+      2
+    ).toFixed(1)
+  );
+
+  const { error } = await supabaseAdmin
     .from("problem_intelligence")
     .update({
       avg_pain_score: Number(problem.pain_score || 0),
       avg_revenue_score: Number(problem.revenue_score || 0),
       avg_urgency_score: Number(problem.urgency_score || 0),
-      intelligence_score: Number(
-        (
-          (Number(existingProblem.intelligence_score || 0) +
-            intelligenceScore) /
-          2
-        ).toFixed(1)
-      ),
+      intelligence_score: updatedScore,
       updated_at: new Date().toISOString(),
     })
     .eq("id", existingProblem.id);
+
+  if (error) {
+    throw error;
+  }
 }
 
 export async function POST() {
   try {
-    const sources = await collectWeeklySignals();
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
+    }
 
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
+    }
+
+    const sources = await collectWeeklySignals();
     const analysis = await analyzeWeeklySignals(sources);
     const problems = normalizeProblems(analysis.problems || []);
 
@@ -302,9 +357,16 @@ export async function POST() {
       .select()
       .single();
 
-    if (runError || !runData) throw runError;
+    if (runError || !runData) {
+      throw runError || new Error("Could not create weekly intelligence run.");
+    }
 
-    const rows = problems.map((problem) => ({
+    await saveWeeklySources({
+      runId: runData.id,
+      sources,
+    });
+
+    const problemRows = problems.map((problem) => ({
       run_id: runData.id,
       problem_title: problem.problem_title,
       problem_summary: problem.problem_summary,
@@ -321,10 +383,12 @@ export async function POST() {
     const { data: insertedProblems, error: problemsError } =
       await supabaseAdmin
         .from("weekly_detected_problems")
-        .insert(rows)
+        .insert(problemRows)
         .select();
 
-    if (problemsError) throw problemsError;
+    if (problemsError) {
+      throw problemsError;
+    }
 
     for (const problem of problems) {
       await updateProblemIntelligence(problem);
@@ -333,6 +397,7 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       run: runData,
+      sources_saved: sources.length,
       problems: insertedProblems || [],
     });
   } catch (error) {

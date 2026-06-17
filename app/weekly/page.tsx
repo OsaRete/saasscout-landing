@@ -6,38 +6,42 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 
-type WeeklyReport = {
+type WeeklyRun = {
   id: string;
-  user_id: string;
-  week_start: string;
-  week_end: string;
-  summary: string | null;
-  strongest_trend: string | null;
-  total_sources_analyzed: number | null;
-  average_trend_score: number | null;
-  average_pain_intensity: number | null;
   status: string;
-  is_global: boolean | null;
+  total_sources_analyzed: number | null;
+  summary: string | null;
   created_at: string;
 };
 
-type WeeklyNiche = {
+type WeeklyProblem = {
   id: string;
-  weekly_report_id: string;
-  user_id: string;
-  niche: string;
-  category: string | null;
+  run_id: string;
+  problem_title: string;
+  problem_summary: string | null;
+  affected_niches: string | null;
+  suggested_solutions: string | null;
+  pain_score: number | null;
+  revenue_score: number | null;
+  urgency_score: number | null;
   trend_score: number | null;
-  pain_intensity: number | null;
-  source_volume: number | null;
-  repeated_problems: string | null;
-  opportunity_angle: string | null;
-  movement: string | null;
-  is_global: boolean | null;
+  monetization_angle: string | null;
+  source_evidence: string | null;
   created_at: string;
 };
 
-function splitProblems(value: string | null) {
+type WeeklySource = {
+  id: string;
+  run_id: string;
+  source_title: string | null;
+  source_url: string | null;
+  source_snippet: string | null;
+  source_type: string | null;
+  source_rank: number | null;
+  created_at: string;
+};
+
+function splitByPipe(value: string | null) {
   return String(value || "")
     .split("|")
     .map((item) => item.trim())
@@ -56,13 +60,39 @@ function scoreWidth(score: number | null) {
   return `${Math.min(100, Math.max(0, Number(score || 0) * 10))}%`;
 }
 
-function sourceWidth(sourceVolume: number | null, maxSourceVolume: number) {
-  if (!maxSourceVolume) return "0%";
+function getProblemScore(problem: WeeklyProblem) {
+  const pain = Number(problem.pain_score || 0);
+  const revenue = Number(problem.revenue_score || 0);
+  const urgency = Number(problem.urgency_score || 0);
+  const trend = Number(problem.trend_score || 0);
 
-  return `${Math.min(
-    100,
-    Math.max(0, (Number(sourceVolume || 0) / maxSourceVolume) * 100)
-  )}%`;
+  return Number(
+    (pain * 0.3 + revenue * 0.3 + urgency * 0.2 + trend * 0.2).toFixed(1)
+  );
+}
+
+function getScoreLabel(score: number) {
+  if (score >= 8.5) return "Strong signal";
+  if (score >= 7) return "Promising";
+  if (score >= 5.5) return "Early signal";
+  return "Weak signal";
+}
+
+function buildSourcesEvidence(sources: WeeklySource[]) {
+  if (sources.length === 0) return "No external sources saved for this run.";
+
+  return sources
+    .slice(0, 12)
+    .map(
+      (source, index) => `
+External Source ${index + 1}
+Title: ${source.source_title || "Untitled source"}
+URL: ${source.source_url || "No URL"}
+Snippet: ${source.source_snippet || "No snippet"}
+Type: ${source.source_type || "unknown"}
+`
+    )
+    .join("\n");
 }
 
 export default function WeeklyPage() {
@@ -70,80 +100,141 @@ export default function WeeklyPage() {
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [message, setMessage] = useState("");
 
-  const [reports, setReports] = useState<WeeklyReport[]>([]);
-  const [niches, setNiches] = useState<WeeklyNiche[]>([]);
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [runs, setRuns] = useState<WeeklyRun[]>([]);
+  const [problems, setProblems] = useState<WeeklyProblem[]>([]);
+  const [sources, setSources] = useState<WeeklySource[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadWeeklyData() {
+      setLoadingData(true);
+  
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
+  
       if (!user) {
         router.push("/login");
         return;
       }
-
+  
       setLoadingAuth(false);
-
-      const { data: reportsData, error: reportsError } = await supabase
-        .from("weekly_reports")
+  
+      const { data: runsData, error: runsError } = await supabase
+        .from("weekly_intelligence_runs")
         .select("*")
-        .or(`user_id.eq.${user.id},is_global.eq.true`)
-        .order("week_start", { ascending: false });
-
-      if (reportsError) {
-        console.error(reportsError);
+        .order("created_at", { ascending: false });
+  
+      if (runsError) {
+        console.error(runsError);
+        setMessage("Could not load weekly intelligence runs.");
         setLoadingData(false);
         return;
       }
-
-      const reportIds = (reportsData || []).map((report) => report.id);
-
-      let nichesData: WeeklyNiche[] = [];
-
-      if (reportIds.length > 0) {
-        const { data, error } = await supabase
-          .from("weekly_niches")
+  
+      const runIds = (runsData || []).map((run) => run.id);
+  
+      let problemsData: WeeklyProblem[] = [];
+      let sourcesData: WeeklySource[] = [];
+  
+      if (runIds.length > 0) {
+        const { data: problemRows } = await supabase
+          .from("weekly_detected_problems")
           .select("*")
-          .in("weekly_report_id", reportIds);
-
-        if (error) {
-          console.error(error);
-        } else {
-          nichesData = data || [];
-        }
+          .in("run_id", runIds);
+  
+        const { data: sourceRows } = await supabase
+          .from("weekly_sources")
+          .select("*")
+          .in("run_id", runIds)
+          .order("source_rank", { ascending: true });
+  
+        problemsData = problemRows || [];
+        sourcesData = sourceRows || [];
       }
-
-      setReports(reportsData || []);
-      setNiches(nichesData);
-      setSelectedReportId(reportsData?.[0]?.id || null);
+  
+      setRuns(runsData || []);
+      setProblems(problemsData);
+      setSources(sourcesData);
+      setSelectedRunId(runsData?.[0]?.id || null);
       setLoadingData(false);
     }
-
-    loadWeeklyData();
+  
+    void loadWeeklyData();
   }, [router]);
 
-  const selectedReport = useMemo(() => {
-    return reports.find((report) => report.id === selectedReportId) || null;
-  }, [reports, selectedReportId]);
+  async function handleRunWeeklyIntelligence() {
+    try {
+      setGenerating(true);
+      setMessage("");
 
-  const selectedNiches = useMemo(() => {
-    if (!selectedReport) return [];
+      const response = await fetch("/api/weekly-intelligence", {
+        method: "POST",
+      });
 
-    return niches
-      .filter((item) => item.weekly_report_id === selectedReport.id)
-      .sort((a, b) => Number(b.trend_score || 0) - Number(a.trend_score || 0));
-  }, [niches, selectedReport]);
+      const rawText = await response.text();
 
-  const topNiche = selectedNiches[0] || null;
-  const topThreeNiches = selectedNiches.slice(0, 3);
-  const maxSourceVolume = Math.max(
-    ...selectedNiches.map((item) => Number(item.source_volume || 0)),
-    1
-  );
+      let result;
+
+      try {
+        result = JSON.parse(rawText);
+      } catch {
+        console.error("Raw API response:", rawText);
+        setMessage("The API returned an invalid response. Check terminal logs.");
+        return;
+      }
+
+      if (!response.ok) {
+        setMessage(result.error || "Could not run weekly intelligence.");
+        return;
+      }
+
+      setMessage("Weekly Intelligence generated successfully.");
+      window.location.reload();
+    } catch (error) {
+      console.error(error);
+      setMessage("Something went wrong running weekly intelligence.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const selectedRun = useMemo(() => {
+    return runs.find((run) => run.id === selectedRunId) || null;
+  }, [runs, selectedRunId]);
+
+  const selectedProblems = useMemo(() => {
+    if (!selectedRun) return [];
+
+    return problems
+      .filter((problem) => problem.run_id === selectedRun.id)
+      .sort((a, b) => getProblemScore(b) - getProblemScore(a));
+  }, [problems, selectedRun]);
+
+  const selectedSources = useMemo(() => {
+    if (!selectedRun) return [];
+
+    return sources
+      .filter((source) => source.run_id === selectedRun.id)
+      .sort((a, b) => Number(a.source_rank || 0) - Number(b.source_rank || 0));
+  }, [sources, selectedRun]);
+
+  const topProblem = selectedProblems[0] || null;
+
+  const averageProblemScore =
+    selectedProblems.length > 0
+      ? Number(
+          (
+            selectedProblems.reduce(
+              (sum, problem) => sum + getProblemScore(problem),
+              0
+            ) / selectedProblems.length
+          ).toFixed(1)
+        )
+      : 0;
 
   if (loadingAuth || loadingData) {
     return (
@@ -188,445 +279,338 @@ export default function WeeklyPage() {
           <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm uppercase tracking-widest text-violet-300">
-                Weekly Market Intelligence
+                Weekly Intelligence V2
               </p>
 
               <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
-                Trending SaaS opportunities this week.
+                Automatic market problem discovery.
               </h1>
 
               <p className="mt-5 max-w-3xl text-gray-400">
-                Track trending niches, repeated market problems, pain intensity,
-                source volume, and opportunity angles across multiple markets.
+                SaaSScout scans external signals, detects monetizable problems,
+                identifies affected niches, suggests SaaS solutions, and feeds
+                the data moat automatically.
               </p>
             </div>
 
-            <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">
-              <p className="text-xs uppercase tracking-widest text-violet-300">
-                Auto-updated
-              </p>
-              <p className="mt-1 text-sm text-gray-300">
-                Generated weekly from external market signals.
-              </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleRunWeeklyIntelligence}
+                disabled={generating}
+                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {generating ? "Generating..." : "Run Weekly Intelligence"}
+              </button>
+
+              <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">
+                <p className="text-xs uppercase tracking-widest text-violet-300">
+                  Auto-updated
+                </p>
+                <p className="mt-1 text-sm text-gray-300">
+                  Generated from external market signals.
+                </p>
+              </div>
             </div>
           </div>
+
+          {message && (
+            <div className="mt-6 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-200">
+              {message}
+            </div>
+          )}
         </section>
 
-        {reports.length === 0 ? (
+        {runs.length === 0 ? (
           <section className="mt-10 rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-            <h2 className="text-2xl font-bold">No weekly updates yet</h2>
+            <h2 className="text-2xl font-bold">No weekly intelligence yet</h2>
             <p className="mt-3 text-gray-400">
-              The first automatic weekly market intelligence report has not been
-              generated yet.
+              Run the first weekly intelligence analysis to detect market
+              problems automatically.
             </p>
           </section>
         ) : (
           <>
-            <div className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-5">
+            <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-5">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-gray-300">
-                    Weekly history
-                  </p>
+                  <h2 className="text-xl font-bold">Weekly runs</h2>
                   <p className="mt-1 text-sm text-gray-500">
-                    Compare recent weeks and track market movement over time.
+                    Compare previous automatic market intelligence reports.
                   </p>
                 </div>
 
                 <p className="text-sm text-gray-500">
-                  {reports.length} report{reports.length === 1 ? "" : "s"}
+                  {runs.length} run{runs.length === 1 ? "" : "s"}
                 </p>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-3">
-                {reports.map((report) => (
+                {runs.map((run) => (
                   <button
-                    key={report.id}
-                    onClick={() => setSelectedReportId(report.id)}
+                    key={run.id}
+                    onClick={() => setSelectedRunId(run.id)}
                     className={`rounded-xl border px-4 py-2 text-sm transition ${
-                      selectedReportId === report.id
+                      selectedRunId === run.id
                         ? "border-violet-500/40 bg-violet-500/20 text-white"
                         : "border-white/10 bg-white/[0.03] text-gray-400 hover:bg-white/[0.06]"
                     }`}
                   >
-                    {formatDate(report.week_start)} -{" "}
-                    {formatDate(report.week_end)}
-                    {report.is_global && (
-                      <span className="ml-2 text-xs text-violet-300">
-                        Global
-                      </span>
-                    )}
+                    {formatDate(run.created_at)} ·{" "}
+                    {run.total_sources_analyzed || 0} sources
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
 
-            {selectedReport && (
+            {selectedRun && (
               <>
                 <div className="mt-8 grid gap-5 md:grid-cols-4">
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Tracked niches</p>
+                    <p className="text-sm text-gray-400">Problems detected</p>
                     <h2 className="mt-3 text-4xl font-bold">
-                      {selectedNiches.length}
+                      {selectedProblems.length}
                     </h2>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Sources analyzed</p>
+                    <p className="text-sm text-gray-400">Sources saved</p>
                     <h2 className="mt-3 text-4xl font-bold">
-                      {selectedReport.total_sources_analyzed || 0}
+                      {selectedSources.length}
                     </h2>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Avg trend score</p>
+                    <p className="text-sm text-gray-400">Avg intelligence</p>
                     <h2 className="mt-3 text-4xl font-bold">
-                      {selectedReport.average_trend_score || 0}
+                      {averageProblemScore}
                     </h2>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Strongest trend</p>
+                    <p className="text-sm text-gray-400">Top problem</p>
                     <h2 className="mt-3 text-xl font-bold">
-                      {selectedReport.strongest_trend || "Unknown"}
+                      {topProblem?.problem_title || "Unknown"}
                     </h2>
                   </div>
                 </div>
 
-                {topNiche && (
-                  <section className="mt-8 rounded-3xl border border-violet-500/20 bg-gradient-to-br from-violet-500/10 to-cyan-500/10 p-7 shadow-2xl">
-                    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <p className="text-sm uppercase tracking-widest text-violet-300">
-                          Top Opportunity This Week
-                        </p>
-
-                        <h2 className="mt-3 text-3xl font-bold">
-                          {topNiche.niche}
-                        </h2>
-
-                        <p className="mt-4 max-w-3xl leading-relaxed text-gray-300">
-                          {topNiche.opportunity_angle ||
-                            "No opportunity angle available."}
-                        </p>
-
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-300">
-                            {topNiche.category || "Market segment"}
-                          </span>
-
-                          <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs text-green-200">
-                            {topNiche.movement || "Stable"}
-                          </span>
-
-                          <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
-                            Global intelligence
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid min-w-[260px] gap-3">
-                        <div className="rounded-2xl border border-violet-500/30 bg-black/20 p-4">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Trend</span>
-                            <span className="text-violet-200">
-                              {topNiche.trend_score || 0}/10
-                            </span>
-                          </div>
-                          <div className="mt-3 h-3 rounded-full bg-white/[0.06]">
-                            <div
-                              className="h-3 rounded-full bg-violet-500"
-                              style={{
-                                width: scoreWidth(topNiche.trend_score),
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-red-500/30 bg-black/20 p-4">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Pain</span>
-                            <span className="text-red-200">
-                              {topNiche.pain_intensity || 0}/10
-                            </span>
-                          </div>
-                          <div className="mt-3 h-3 rounded-full bg-white/[0.06]">
-                            <div
-                              className="h-3 rounded-full bg-red-500"
-                              style={{
-                                width: scoreWidth(topNiche.pain_intensity),
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        <Link
-                          href="/scan"
-                          className="rounded-2xl bg-violet-600 px-5 py-4 text-center text-sm font-semibold text-white hover:bg-violet-500"
-                        >
-                          Scan this niche
-                        </Link>
-                      </div>
-                    </div>
-                  </section>
-                )}
-
                 <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold">Weekly Summary</h2>
-                      <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
-                        {selectedReport.summary ||
-                          "No weekly summary available."}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-gray-300">
-                      {formatDate(selectedReport.week_start)} -{" "}
-                      {formatDate(selectedReport.week_end)}
-                    </div>
-                  </div>
+                  <h2 className="text-2xl font-bold">Weekly Summary</h2>
+                  <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
+                    {selectedRun.summary || "No weekly summary available."}
+                  </p>
                 </section>
 
-                <section className="mt-8 grid gap-6 lg:grid-cols-3">
-                  <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7 lg:col-span-2">
-                    <h2 className="text-2xl font-bold">
-                      Trend vs Pain Overview
-                    </h2>
+                <section className="mt-8 rounded-3xl border border-cyan-500/20 bg-cyan-500/10 p-7">
+                  <h2 className="text-2xl font-bold">External Sources</h2>
+                  <p className="mt-2 text-sm text-gray-400">
+                    These sources are now saved and passed into deeper scans.
+                  </p>
 
-                    <p className="mt-2 text-sm text-gray-500">
-                      Compare opportunity momentum against problem intensity.
-                    </p>
-
-                    <div className="mt-6 space-y-5">
-                      {selectedNiches.map((item) => (
-                        <div key={item.id}>
-                          <div className="mb-2 flex items-center justify-between text-sm">
-                            <span className="font-medium text-gray-300">
-                              {item.niche}
-                            </span>
-                            <span className="text-gray-500">
-                              Trend {item.trend_score || 0} · Pain{" "}
-                              {item.pain_intensity || 0}
-                            </span>
-                          </div>
-
-                          <div className="space-y-2">
-                            <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
-                              <div
-                                className="h-full rounded-full bg-violet-500"
-                                style={{
-                                  width: scoreWidth(item.trend_score),
-                                }}
-                              />
-                            </div>
-
-                            <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
-                              <div
-                                className="h-full rounded-full bg-red-500"
-                                style={{
-                                  width: scoreWidth(item.pain_intensity),
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-                    <h2 className="text-2xl font-bold">Source Volume</h2>
-
-                    <p className="mt-2 text-sm text-gray-500">
-                      Simple view of where market signal density is highest.
-                    </p>
-
-                    <div className="mt-6 space-y-4">
-                      {selectedNiches.slice(0, 7).map((item) => (
-                        <div key={item.id}>
-                          <div className="mb-2 flex justify-between text-sm">
-                            <span className="max-w-[180px] truncate text-gray-300">
-                              {item.niche}
-                            </span>
-                            <span className="text-cyan-300">
-                              {item.source_volume || 0}
-                            </span>
-                          </div>
-
-                          <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
-                            <div
-                              className="h-full rounded-full bg-cyan-500"
-                              style={{
-                                width: sourceWidth(
-                                  item.source_volume,
-                                  maxSourceVolume
-                                ),
-                              }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </section>
-
-                <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold">Top 3 Rising Niches</h2>
-                      <p className="mt-1 text-sm text-gray-500">
-                        Highest ranked markets based on trend, pain, and source
-                        signals.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-5 md:grid-cols-3">
-                    {topThreeNiches.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"
+                  <div className="mt-6 grid gap-4 md:grid-cols-2">
+                    {(selectedSources.length > 0
+                      ? selectedSources.slice(0, 8)
+                      : []
+                    ).map((source) => (
+                      <a
+                        key={source.id}
+                        href={source.source_url || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-2xl border border-white/10 bg-black/20 p-5 transition hover:bg-white/[0.05]"
                       >
-                        <p className="text-sm text-violet-300">
-                          #{index + 1}
+                        <p className="text-xs uppercase tracking-widest text-cyan-300">
+                          {source.source_type || "source"} · #
+                          {source.source_rank || "-"}
                         </p>
 
-                        <h3 className="mt-3 text-xl font-bold">{item.niche}</h3>
+                        <h3 className="mt-2 font-semibold text-white">
+                          {source.source_title || "Untitled source"}
+                        </h3>
 
-                        <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-gray-400">
-                          {item.opportunity_angle ||
-                            "No opportunity angle available."}
+                        <p className="mt-3 line-clamp-3 text-sm text-gray-400">
+                          {source.source_snippet || "No snippet available."}
                         </p>
-
-                        <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-                          <div className="rounded-xl bg-black/20 px-3 py-2">
-                            <p className="font-bold">
-                              {item.trend_score || 0}
-                            </p>
-                            <p className="text-xs text-gray-500">trend</p>
-                          </div>
-
-                          <div className="rounded-xl bg-black/20 px-3 py-2">
-                            <p className="font-bold">
-                              {item.pain_intensity || 0}
-                            </p>
-                            <p className="text-xs text-gray-500">pain</p>
-                          </div>
-
-                          <div className="rounded-xl bg-black/20 px-3 py-2">
-                            <p className="font-bold">
-                              {item.source_volume || 0}
-                            </p>
-                            <p className="text-xs text-gray-500">sources</p>
-                          </div>
-                        </div>
-                      </div>
+                      </a>
                     ))}
                   </div>
+
+                  {selectedSources.length === 0 && (
+                    <p className="mt-4 text-sm text-gray-500">
+                      No external sources were saved for this run.
+                    </p>
+                  )}
                 </section>
 
                 <section className="mt-8 grid gap-6">
-                  {selectedNiches.map((item, index) => {
-                    const problems = splitProblems(item.repeated_problems);
+                  {selectedProblems.map((problem, index) => {
+                    const niches = splitByPipe(problem.affected_niches);
+                    const solutions = splitByPipe(problem.suggested_solutions);
+                    const problemScore = getProblemScore(problem);
+
+                    const sourcesEvidence = buildSourcesEvidence(selectedSources);
+
+                    const scanEvidence = `${problem.problem_title}
+
+${problem.problem_summary || ""}
+
+Affected niches:
+${problem.affected_niches || ""}
+
+Suggested solutions:
+${problem.suggested_solutions || ""}
+
+Scores:
+Pain: ${problem.pain_score || 0}/10
+Revenue: ${problem.revenue_score || 0}/10
+Urgency: ${problem.urgency_score || 0}/10
+Trend: ${problem.trend_score || 0}/10
+Intelligence score: ${problemScore}/10
+
+Monetization angle:
+${problem.monetization_angle || ""}
+
+Source evidence:
+${problem.source_evidence || ""}
+
+External sources:
+${sourcesEvidence}`;
 
                     return (
                       <div
-                        key={item.id}
+                        key={problem.id}
                         className="rounded-3xl border border-white/10 bg-[#0B1020] p-7 shadow-2xl"
                       >
                         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                           <div>
                             <p className="text-sm text-violet-400">
-                              Trending niche #{index + 1}
+                              Detected problem #{index + 1}
                             </p>
 
                             <h3 className="mt-3 text-3xl font-bold">
-                              {item.niche}
+                              {problem.problem_title}
                             </h3>
 
-                            <p className="mt-4 max-w-3xl text-gray-400">
-                              {item.opportunity_angle ||
-                                "No opportunity angle available."}
+                            <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
+                              {problem.problem_summary ||
+                                "No problem summary available."}
                             </p>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-3 text-center">
-                            <div className="rounded-2xl border border-violet-500/30 bg-violet-500/10 px-4 py-3">
-                              <p className="text-2xl font-bold">
-                                {item.trend_score || 0}
-                              </p>
-                              <p className="text-xs text-gray-400">trend</p>
-                            </div>
+                          <div className="w-full rounded-3xl border border-violet-500/30 bg-violet-500/10 p-5 lg:max-w-xs">
+                            <p className="text-xs uppercase tracking-widest text-violet-200">
+                              Intelligence Score
+                            </p>
 
-                            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3">
-                              <p className="text-2xl font-bold">
-                                {item.pain_intensity || 0}
-                              </p>
-                              <p className="text-xs text-gray-400">pain</p>
-                            </div>
+                            <h4 className="mt-3 text-4xl font-bold">
+                              {problemScore}/10
+                            </h4>
 
-                            <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3">
-                              <p className="text-2xl font-bold">
-                                {item.source_volume || 0}
-                              </p>
-                              <p className="text-xs text-gray-400">sources</p>
-                            </div>
+                            <p className="mt-2 text-sm text-violet-100/80">
+                              {getScoreLabel(problemScore)}
+                            </p>
                           </div>
                         </div>
 
-                        <div className="mt-6 flex flex-wrap gap-3">
-                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-300">
-                            {item.category || "Market segment"}
-                          </span>
+                        <div className="mt-6 grid gap-4 md:grid-cols-4">
+                          {[
+                            { label: "Pain", value: problem.pain_score },
+                            { label: "Revenue", value: problem.revenue_score },
+                            { label: "Urgency", value: problem.urgency_score },
+                            { label: "Trend", value: problem.trend_score },
+                          ].map((score) => (
+                            <div key={score.label}>
+                              <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
+                                <span>{score.label}</span>
+                                <span>{score.value || 0}/10</span>
+                              </div>
 
-                          <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs text-green-200">
-                            {item.movement || "Stable"}
-                          </span>
-
-                          {item.is_global && (
-                            <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
-                              Global intelligence
-                            </span>
-                          )}
+                              <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                                <div
+                                  className="h-full rounded-full bg-violet-500"
+                                  style={{ width: scoreWidth(score.value) }}
+                                />
+                              </div>
+                            </div>
+                          ))}
                         </div>
 
-                        <div className="mt-6 grid gap-4 md:grid-cols-2">
+                        <div className="mt-6 grid gap-4 lg:grid-cols-3">
                           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                            <h4 className="font-semibold">Repeated Problems</h4>
+                            <h4 className="font-semibold">Affected Niches</h4>
 
                             <div className="mt-4 space-y-3">
-                              {(problems.length > 0
-                                ? problems
-                                : ["No repeated problems available."]
-                              ).map((problem) => (
+                              {(niches.length > 0
+                                ? niches
+                                : ["No affected niches available."]
+                              ).map((item) => (
                                 <p
-                                  key={problem}
+                                  key={item}
                                   className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
                                 >
-                                  {problem}
+                                  {item}
                                 </p>
                               ))}
                             </div>
                           </div>
 
                           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                            <h4 className="font-semibold">Suggested Action</h4>
+                            <h4 className="font-semibold">
+                              Monetizable Solutions
+                            </h4>
+
+                            <div className="mt-4 space-y-3">
+                              {(solutions.length > 0
+                                ? solutions
+                                : ["No suggested solution available."]
+                              ).map((item) => (
+                                <p
+                                  key={item}
+                                  className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
+                                >
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold">
+                              Monetization Angle
+                            </h4>
 
                             <p className="mt-4 text-sm leading-relaxed text-gray-300">
-                              Use this niche as a starting point for a focused
-                              SaaSScout scan. Validate repeated problems,
-                              compare external sources, and look for
-                              willingness-to-pay signals.
+                              {problem.monetization_angle ||
+                                "No monetization angle available."}
                             </p>
 
-                            <Link
-                              href="/scan"
-                              className="mt-5 inline-block rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500"
-                            >
-                              Scan this niche
-                            </Link>
+                            <div className="mt-5 rounded-2xl border border-violet-500/20 bg-violet-500/10 p-4">
+                              <p className="text-xs leading-relaxed text-violet-200/80">
+                                Send this problem into a deeper SaaSScout scan
+                                with saved external sources.
+                              </p>
+
+                              <Link
+                                href={`/scan?market=${encodeURIComponent(
+                                  niches[0] || problem.problem_title
+                                )}&evidence=${encodeURIComponent(
+                                  scanEvidence
+                                )}`}
+                                className="mt-4 flex w-full items-center justify-center rounded-xl bg-violet-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-violet-600/20 transition hover:bg-violet-500"
+                              >
+                                Prepare Deep Scan
+                              </Link>
+                            </div>
                           </div>
+                        </div>
+
+                        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                          <h4 className="font-semibold">Source Evidence</h4>
+
+                          <p className="mt-3 text-sm leading-relaxed text-gray-400">
+                            {problem.source_evidence ||
+                              "No source evidence available."}
+                          </p>
                         </div>
                       </div>
                     );
