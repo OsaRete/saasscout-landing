@@ -5,11 +5,35 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type WeeklySource = {
+  title: string;
+  url: string | null;
+  snippet: string | null;
+  source_type: "google_search" | "x";
+  source_rank: number;
+};
+
 type SerpApiOrganicResult = {
   title?: string;
   link?: string;
   snippet?: string;
   position?: number;
+};
+
+type XTweet = {
+  id: string;
+  text?: string;
+  lang?: string;
+  author_id?: string;
+  created_at?: string;
+  public_metrics?: {
+    retweet_count?: number;
+    reply_count?: number;
+    like_count?: number;
+    quote_count?: number;
+    bookmark_count?: number;
+    impression_count?: number;
+  };
 };
 
 type WeeklyDetectedProblem = {
@@ -43,8 +67,6 @@ const MARKET_SIGNAL_QUERIES = [
   "small business problems software should solve",
   "manual workflow complaints entrepreneurs",
   "reddit freelancers problems tools",
-  "reddit agencies workflow problems",
-  "reddit ecommerce store owners problems",
 ];
 
 function cleanJsonResponse(content: string) {
@@ -68,16 +90,13 @@ async function fetchWithTimeout(url: string, timeoutMs = 12000) {
 
 async function searchSerpApi(query: string) {
   const apiKey = process.env.SERPAPI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("SERPAPI_API_KEY is missing.");
-  }
+  if (!apiKey) throw new Error("SERPAPI_API_KEY is missing.");
 
   const params = new URLSearchParams({
     engine: "google",
     q: query,
     api_key: apiKey,
-    num: "4",
+    num: "3",
   });
 
   const response = await fetchWithTimeout(
@@ -94,36 +113,177 @@ async function searchSerpApi(query: string) {
   return (data.organic_results || []) as SerpApiOrganicResult[];
 }
 
+function getSignalScore(tweet: XTweet) {
+  const metrics = tweet.public_metrics;
+
+  return (
+    Number(metrics?.like_count || 0) * 1 +
+    Number(metrics?.reply_count || 0) * 2 +
+    Number(metrics?.bookmark_count || 0) * 2 +
+    Number(metrics?.quote_count || 0) * 2 +
+    Number(metrics?.impression_count || 0) * 0.01
+  );
+}
+
+function isUsefulTweet(tweet: XTweet) {
+  const text = String(tweet.text || "").trim();
+  const lowerText = text.toLowerCase();
+
+  if (!text) return false;
+  if (tweet.lang !== "en") return false;
+  if (text.startsWith("RT @")) return false;
+  if (text.length < 30) return false;
+
+  const blockedWords = [
+    "trump",
+    "maga",
+    "football",
+    "anime",
+    "drunk",
+    "resort",
+    "super junior",
+    "january 6",
+    "sportybet",
+    "betting",
+    "movie",
+    "episode",
+  ];
+
+  if (blockedWords.some((word) => lowerText.includes(word))) return false;
+
+  const businessSignals = [
+    "business",
+    "workflow",
+    "manual work",
+    "manual workflow",
+    "spreadsheet",
+    "google sheets",
+    "clients",
+    "operations",
+    "agency",
+    "freelance",
+    "founder",
+    "startup",
+    "customer",
+    "team",
+    "process",
+    "automate",
+    "automation",
+    "tools",
+    "wasting time",
+  ];
+
+  return businessSignals.some((word)=>lowerText.includes(word));
+}
+
+async function searchXSignals() {
+  if (!process.env.X_BEARER_TOKEN) {
+    throw new Error("X_BEARER_TOKEN is missing inside weekly-intelligence.");
+  }
+
+  const query =
+    '("too much manual work" OR "manual workflow" OR "still using spreadsheets" OR "google sheets" OR "wasting time") ("business" OR "clients" OR "workflow" OR "operations" OR "agency" OR "freelance" OR "founder" OR "startup") -is:retweet lang:en';
+
+  const params = new URLSearchParams({
+    query,
+    max_results: "20",
+    "tweet.fields": "created_at,public_metrics,author_id,lang",
+  });
+
+  const response = await fetch(
+    `https://api.x.com/2/tweets/search/recent?${params}`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.X_BEARER_TOKEN}`,
+      },
+      cache: "no-store",
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`X API error: ${JSON.stringify(data)}`);
+  }
+
+  const rawTweets = ((data?.data || []) as XTweet[]);
+
+  
+  
+  const filteredTweets = rawTweets
+    .filter(isUsefulTweet)
+    .map((tweet) => ({
+      tweet,
+      signal_score: getSignalScore(tweet),
+    }))
+    .sort((a, b) => b.signal_score - a.signal_score)
+    .slice(0, 8);
+  
+  
+  
+  return filteredTweets;
+}
+
 async function collectWeeklySignals() {
-  const settledResults = await Promise.allSettled(
+  const googleResults = await Promise.allSettled(
     MARKET_SIGNAL_QUERIES.map((query) => searchSerpApi(query))
   );
 
-  const allResults: SerpApiOrganicResult[] = [];
+  const sources: WeeklySource[] = [];
 
-  for (const result of settledResults) {
+  for (const result of googleResults) {
     if (result.status === "fulfilled") {
-      allResults.push(...result.value);
+      result.value.forEach((item) => {
+        sources.push({
+          title: item.title || "Untitled Google result",
+          url: item.link || null,
+          snippet: item.snippet || null,
+          source_type: "google_search",
+          source_rank: item.position || sources.length + 1,
+        });
+      });
     } else {
-      console.error("SerpApi query failed:", result.reason);
+      console.error("Google source failed:", result.reason);
     }
   }
 
-  const unique = new Map<string, SerpApiOrganicResult>();
 
-  for (const result of allResults) {
-    const key = result.link || result.title || "";
-    if (!key) continue;
 
-    if (!unique.has(key)) {
-      unique.set(key, result);
-    }
+  const xResults = await searchXSignals();
+  if(xResults.length===0){
+    console.warn("X returned 0 usable tweets. Continuing with Google sources only.");
+  }
+  ;
+
+  xResults.forEach((item, index) => {
+    sources.push({
+      title: `X Signal: ${item.tweet.text?.slice(0, 80) || "Untitled tweet"}`,
+      url: item.tweet.id ? `https://x.com/i/web/status/${item.tweet.id}` : null,
+      snippet: item.tweet.text || null,
+      source_type: "x",
+      source_rank: index + 1,
+    });
+  });
+
+  const unique = new Map<string, WeeklySource>();
+
+  for (const source of sources) {
+    const key = source.url || source.title;
+    if (!unique.has(key)) unique.set(key, source);
   }
 
-  return Array.from(unique.values()).slice(0, 20);
+  const googleSources = Array.from(unique.values()).filter(
+    (source) => source.source_type === "google_search"
+  );
+  
+  const xSources = Array.from(unique.values()).filter(
+    (source) => source.source_type === "x"
+  );
+  
+  return [...xSources.slice(0, 8), ...googleSources.slice(0, 10)];
 }
 
-async function analyzeWeeklySignals(sources: SerpApiOrganicResult[]) {
+async function analyzeWeeklySignals(sources: WeeklySource[]) {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is missing.");
   }
@@ -136,8 +296,9 @@ async function analyzeWeeklySignals(sources: SerpApiOrganicResult[]) {
     .map(
       (source, index) => `
 Source ${index + 1}
-Title: ${source.title || "Untitled"}
-URL: ${source.link || "No URL"}
+Type: ${source.source_type}
+Title: ${source.title}
+URL: ${source.url || "No URL"}
 Snippet: ${source.snippet || "No snippet"}
 `
     )
@@ -146,7 +307,7 @@ Snippet: ${source.snippet || "No snippet"}
   const prompt = `
 You are SaaSScout, an AI market intelligence analyst.
 
-Analyze these external market signals and detect monetizable SaaS problems.
+Analyze these external market signals from Google and X. Detect monetizable SaaS problems.
 
 Sources:
 ${sourceText}
@@ -155,6 +316,7 @@ Return 5 detected problems.
 
 Rules:
 - Focus on real problems, not generic niches.
+- Prefer repeated workflow pain, manual work, inefficient processes, fragmented tools, and spreadsheet-based work.
 - Identify affected niches.
 - Suggest SaaS solutions that could be monetized.
 - Score pain, revenue, urgency, and trend from 1 to 10.
@@ -186,24 +348,15 @@ JSON format:
   const completion = await openrouter.chat.completions.create({
     model: "openai/gpt-4.1-mini",
     messages: [
-      {
-        role: "system",
-        content: "Return valid JSON only.",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
+      { role: "system", content: "Return valid JSON only." },
+      { role: "user", content: prompt },
     ],
     temperature: 0.2,
     max_tokens: 2200,
   });
 
   const content = completion.choices[0]?.message?.content;
-
-  if (!content) {
-    throw new Error("No AI response generated.");
-  }
+  if (!content) throw new Error("No AI response generated.");
 
   try {
     return JSON.parse(cleanJsonResponse(content));
@@ -253,24 +406,21 @@ async function saveWeeklySources({
   sources,
 }: {
   runId: string;
-  sources: SerpApiOrganicResult[];
+  sources: WeeklySource[];
 }) {
   if (sources.length === 0) return;
 
   const rows = sources.map((source, index) => ({
     run_id: runId,
-    source_title: source.title || "Untitled source",
-    source_url: source.link || null,
-    source_snippet: source.snippet || null,
-    source_type: "google_search",
-    source_rank: source.position || index + 1,
+    source_title: source.title,
+    source_url: source.url,
+    source_snippet: source.snippet,
+    source_type: source.source_type,
+    source_rank: source.source_rank || index + 1,
   }));
 
   const { error } = await supabaseAdmin.from("weekly_sources").insert(rows);
-
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 }
 
 async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
@@ -280,9 +430,7 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
     .eq("problem_title", problem.problem_title)
     .maybeSingle();
 
-  if (fetchError) {
-    throw fetchError;
-  }
+  if (fetchError) throw fetchError;
 
   const intelligenceScore = calculateIntelligenceScore(problem);
 
@@ -299,10 +447,7 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
       },
     ]);
 
-    if (error) {
-      throw error;
-    }
-
+    if (error) throw error;
     return;
   }
 
@@ -324,9 +469,7 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
     })
     .eq("id", existingProblem.id);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 }
 
 export async function POST() {
@@ -351,7 +494,7 @@ export async function POST() {
           total_sources_analyzed: sources.length,
           summary:
             analysis.summary ||
-            "SaaSScout detected weekly market problems from external sources.",
+            "SaaSScout detected weekly market problems from Google and X signals.",
         },
       ])
       .select()
@@ -386,9 +529,7 @@ export async function POST() {
         .insert(problemRows)
         .select();
 
-    if (problemsError) {
-      throw problemsError;
-    }
+    if (problemsError) throw problemsError;
 
     for (const problem of problems) {
       await updateProblemIntelligence(problem);
@@ -399,6 +540,7 @@ export async function POST() {
       run: runData,
       sources_saved: sources.length,
       problems: insertedProblems || [],
+      
     });
   } catch (error) {
     console.error("Weekly intelligence error:", error);
