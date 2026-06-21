@@ -11,6 +11,19 @@ type WeeklySource = {
   snippet: string | null;
   source_type: "google_search" | "x";
   source_rank: number;
+  author_id?: string | null;
+  like_count?: number;
+  reply_count?: number;
+  quote_count?: number;
+  bookmark_count?: number;
+  impression_count?: number;
+  signal_score?: number;
+  category?: string | null;
+  buying_signal_score?: number;
+  frequency_score?: number;
+  opportunity_score?: number;
+  problem_cluster?: string | null;
+  source_quality_score?: number;
 };
 
 type SerpApiOrganicResult = {
@@ -27,7 +40,6 @@ type XTweet = {
   author_id?: string;
   created_at?: string;
   public_metrics?: {
-    retweet_count?: number;
     reply_count?: number;
     like_count?: number;
     quote_count?: number;
@@ -47,6 +59,14 @@ type WeeklyDetectedProblem = {
   trend_score: number;
   monetization_angle: string;
   source_evidence: string;
+};
+
+type ScoredProblem = WeeklyDetectedProblem & {
+  buying_signal_score: number;
+  frequency_score: number;
+  opportunity_score: number;
+  problem_cluster: string;
+  source_quality_score: number;
 };
 
 const openrouter = new OpenAI({
@@ -71,6 +91,120 @@ const MARKET_SIGNAL_QUERIES = [
 
 function cleanJsonResponse(content: string) {
   return content.replace(/```json/g, "").replace(/```/g, "").trim();
+}
+
+function clampScore(score: number) {
+  return Number(Math.min(10, Math.max(0, score)).toFixed(1));
+}
+
+function classifySourceCategory(text: string | null) {
+  const value = String(text || "").toLowerCase();
+
+  if (value.includes("client") || value.includes("lead") || value.includes("follow-up") || value.includes("sales")) return "Sales";
+  if (value.includes("content") || value.includes("social media") || value.includes("caption") || value.includes("marketing")) return "Marketing";
+  if (value.includes("google sheets") || value.includes("spreadsheet") || value.includes("operations") || value.includes("workflow") || value.includes("manual work")) return "Operations";
+  if (value.includes("agency") || value.includes("freelance") || value.includes("freelancer")) return "Agency/Freelancer";
+  if (value.includes("ecommerce") || value.includes("shopify") || value.includes("store owner")) return "Ecommerce";
+  if (value.includes("support") || value.includes("ticket") || value.includes("customer")) return "Customer Support";
+  if (value.includes("ai") || value.includes("automation") || value.includes("agent") || value.includes("n8n")) return "AI/Automation";
+
+  return "General";
+}
+
+function getProblemCluster(text: string | null) {
+  const value = String(text || "").toLowerCase();
+
+  if (value.includes("lead") || value.includes("follow-up") || value.includes("sales")) return "lead_management";
+  if (value.includes("spreadsheet") || value.includes("google sheets") || value.includes("manual workflow")) return "spreadsheet_workflows";
+  if (value.includes("content") || value.includes("caption") || value.includes("social media")) return "content_operations";
+  if (value.includes("support") || value.includes("ticket") || value.includes("customer")) return "customer_support";
+  if (value.includes("report") || value.includes("dashboard") || value.includes("analytics")) return "reporting_analytics";
+  if (value.includes("automation") || value.includes("agent") || value.includes("ai")) return "ai_automation";
+
+  return "general_workflow_pain";
+}
+
+function getBuyingSignalScore(text: string | null) {
+  const value = String(text || "").toLowerCase();
+  let score = 0;
+
+  const strongSignals = [
+    "would pay",
+    "i'd pay",
+    "happy to pay",
+    "looking for a tool",
+    "looking for software",
+    "need a tool",
+    "need software",
+    "is there an app",
+    "any recommendations",
+    "recommend a tool",
+  ];
+
+  const mediumSignals = [
+    "i need",
+    "we need",
+    "wish there was",
+    "someone should build",
+    "how do you manage",
+    "what do you use",
+    "anyone know",
+  ];
+
+  strongSignals.forEach((signal) => {
+    if (value.includes(signal)) score += 4;
+  });
+
+  mediumSignals.forEach((signal) => {
+    if (value.includes(signal)) score += 2;
+  });
+
+  return clampScore(score);
+}
+
+function getSourceQualityScore(source: WeeklySource) {
+  const engagement = Number(source.signal_score || 0);
+  const hasSnippet = source.snippet ? 1.5 : 0;
+  const hasUrl = source.url ? 1 : 0;
+  const isX = source.source_type === "x" ? 1 : 0;
+  const buying = Number(source.buying_signal_score || 0) * 0.4;
+
+  return clampScore(engagement * 0.25 + hasSnippet + hasUrl + isX + buying);
+}
+
+function getFrequencyScore(cluster: string, sources: WeeklySource[]) {
+  const matches = sources.filter((source) => source.problem_cluster === cluster).length;
+  return clampScore(matches * 2);
+}
+
+function getOpportunityScore({
+  pain,
+  revenue,
+  urgency,
+  trend,
+  buying,
+  frequency,
+  sourceQuality,
+}: {
+  pain: number;
+  revenue: number;
+  urgency: number;
+  trend: number;
+  buying: number;
+  frequency: number;
+  sourceQuality: number;
+}) {
+  return Number(
+    (
+      pain * 0.25 +
+      revenue * 0.2 +
+      urgency * 0.15 +
+      trend * 0.15 +
+      buying * 0.1 +
+      frequency * 0.1 +
+      sourceQuality * 0.05
+    ).toFixed(1)
+  );
 }
 
 async function fetchWithTimeout(url: string, timeoutMs = 12000) {
@@ -99,11 +233,7 @@ async function searchSerpApi(query: string) {
     num: "3",
   });
 
-  const response = await fetchWithTimeout(
-    `https://serpapi.com/search.json?${params}`,
-    12000
-  );
-
+  const response = await fetchWithTimeout(`https://serpapi.com/search.json?${params}`, 12000);
   const data = await response.json();
 
   if (!response.ok) {
@@ -173,7 +303,7 @@ function isUsefulTweet(tweet: XTweet) {
     "wasting time",
   ];
 
-  return businessSignals.some((word)=>lowerText.includes(word));
+  return businessSignals.some((word) => lowerText.includes(word));
 }
 
 async function searchXSignals() {
@@ -190,15 +320,12 @@ async function searchXSignals() {
     "tweet.fields": "created_at,public_metrics,author_id,lang",
   });
 
-  const response = await fetch(
-    `https://api.x.com/2/tweets/search/recent?${params}`,
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.X_BEARER_TOKEN}`,
-      },
-      cache: "no-store",
-    }
-  );
+  const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params}`, {
+    headers: {
+      Authorization: `Bearer ${process.env.X_BEARER_TOKEN}`,
+    },
+    cache: "no-store",
+  });
 
   const data = await response.json();
 
@@ -206,11 +333,7 @@ async function searchXSignals() {
     throw new Error(`X API error: ${JSON.stringify(data)}`);
   }
 
-  const rawTweets = ((data?.data || []) as XTweet[]);
-
-  
-  
-  const filteredTweets = rawTweets
+  return ((data?.data || []) as XTweet[])
     .filter(isUsefulTweet)
     .map((tweet) => ({
       tweet,
@@ -218,10 +341,45 @@ async function searchXSignals() {
     }))
     .sort((a, b) => b.signal_score - a.signal_score)
     .slice(0, 8);
-  
-  
-  
-  return filteredTweets;
+}
+
+function enrichSources(sources: WeeklySource[]) {
+  const firstPass = sources.map((source) => {
+    const text = `${source.title || ""} ${source.snippet || ""}`;
+    const buyingSignalScore = getBuyingSignalScore(text);
+    const problemCluster = getProblemCluster(text);
+
+    return {
+      ...source,
+      buying_signal_score: buyingSignalScore,
+      problem_cluster: problemCluster,
+    };
+  });
+
+  return firstPass.map((source) => {
+    const frequencyScore = getFrequencyScore(source.problem_cluster || "general_workflow_pain", firstPass);
+    const sourceQualityScore = getSourceQualityScore({
+      ...source,
+      frequency_score: frequencyScore,
+    });
+
+    const opportunityScore = getOpportunityScore({
+      pain: 7,
+      revenue: 7,
+      urgency: 7,
+      trend: 7,
+      buying: Number(source.buying_signal_score || 0),
+      frequency: frequencyScore,
+      sourceQuality: sourceQualityScore,
+    });
+
+    return {
+      ...source,
+      frequency_score: frequencyScore,
+      source_quality_score: sourceQualityScore,
+      opportunity_score: opportunityScore,
+    };
+  });
 }
 
 async function collectWeeklySignals() {
@@ -234,12 +392,15 @@ async function collectWeeklySignals() {
   for (const result of googleResults) {
     if (result.status === "fulfilled") {
       result.value.forEach((item) => {
+        const sourceText = `${item.title || ""} ${item.snippet || ""}`;
+
         sources.push({
           title: item.title || "Untitled Google result",
           url: item.link || null,
           snippet: item.snippet || null,
           source_type: "google_search",
           source_rank: item.position || sources.length + 1,
+          category: classifySourceCategory(sourceText),
         });
       });
     } else {
@@ -247,21 +408,29 @@ async function collectWeeklySignals() {
     }
   }
 
-
-
   const xResults = await searchXSignals();
-  if(xResults.length===0){
+
+  if (xResults.length === 0) {
     console.warn("X returned 0 usable tweets. Continuing with Google sources only.");
   }
-  ;
 
   xResults.forEach((item, index) => {
+    const tweetText = item.tweet.text || "";
+
     sources.push({
-      title: `X Signal: ${item.tweet.text?.slice(0, 80) || "Untitled tweet"}`,
+      title: `X Signal: ${tweetText.slice(0, 80) || "Untitled tweet"}`,
       url: item.tweet.id ? `https://x.com/i/web/status/${item.tweet.id}` : null,
-      snippet: item.tweet.text || null,
+      snippet: tweetText || null,
       source_type: "x",
       source_rank: index + 1,
+      author_id: item.tweet.author_id || null,
+      like_count: item.tweet.public_metrics?.like_count || 0,
+      reply_count: item.tweet.public_metrics?.reply_count || 0,
+      quote_count: item.tweet.public_metrics?.quote_count || 0,
+      bookmark_count: item.tweet.public_metrics?.bookmark_count || 0,
+      impression_count: item.tweet.public_metrics?.impression_count || 0,
+      signal_score: Number(item.signal_score.toFixed(2)),
+      category: classifySourceCategory(tweetText),
     });
   });
 
@@ -275,12 +444,12 @@ async function collectWeeklySignals() {
   const googleSources = Array.from(unique.values()).filter(
     (source) => source.source_type === "google_search"
   );
-  
+
   const xSources = Array.from(unique.values()).filter(
     (source) => source.source_type === "x"
   );
-  
-  return [...xSources.slice(0, 8), ...googleSources.slice(0, 10)];
+
+  return enrichSources([...xSources.slice(0, 8), ...googleSources.slice(0, 10)]);
 }
 
 async function analyzeWeeklySignals(sources: WeeklySource[]) {
@@ -297,6 +466,12 @@ async function analyzeWeeklySignals(sources: WeeklySource[]) {
       (source, index) => `
 Source ${index + 1}
 Type: ${source.source_type}
+Category: ${source.category || "General"}
+Cluster: ${source.problem_cluster || "general_workflow_pain"}
+Buying signal score: ${source.buying_signal_score || 0}/10
+Frequency score: ${source.frequency_score || 0}/10
+Source quality score: ${source.source_quality_score || 0}/10
+Opportunity score: ${source.opportunity_score || 0}/10
 Title: ${source.title}
 URL: ${source.url || "No URL"}
 Snippet: ${source.snippet || "No snippet"}
@@ -316,10 +491,11 @@ Return 5 detected problems.
 
 Rules:
 - Focus on real problems, not generic niches.
-- Prefer repeated workflow pain, manual work, inefficient processes, fragmented tools, and spreadsheet-based work.
+- Prefer repeated workflow pain, manual work, inefficient processes, fragmented tools, spreadsheet-based work, and buying intent.
 - Identify affected niches.
 - Suggest SaaS solutions that could be monetized.
 - Score pain, revenue, urgency, and trend from 1 to 10.
+- Use the provided buying signal score, frequency score, source quality score, and opportunity score when judging monetization potential.
 - affected_niches must be separated by " | ".
 - suggested_solutions must be separated by " | ".
 - Use source evidence from the provided signals.
@@ -366,39 +542,67 @@ JSON format:
   }
 }
 
-function normalizeProblems(rawProblems: WeeklyDetectedProblem[]) {
-  return rawProblems.slice(0, 5).map((problem) => ({
-    problem_title: problem.problem_title || "Untitled problem",
-    problem_summary:
-      problem.problem_summary ||
-      "A market problem was detected from external signals.",
-    affected_niches:
-      problem.affected_niches || "Small businesses | Solo founders",
-    suggested_solutions:
-      problem.suggested_solutions || "Workflow automation tool | AI assistant",
-    pain_score: Number(problem.pain_score) || 7,
-    revenue_score: Number(problem.revenue_score) || 7,
-    urgency_score: Number(problem.urgency_score) || 7,
-    trend_score: Number(problem.trend_score) || 7,
-    monetization_angle:
-      problem.monetization_angle ||
-      "Monthly subscription for solving a recurring workflow problem.",
-    source_evidence:
-      problem.source_evidence ||
-      "External sources show repeated workflow friction.",
-  }));
+function normalizeProblems(rawProblems: WeeklyDetectedProblem[], sources: WeeklySource[]): ScoredProblem[] {
+  return rawProblems.slice(0, 5).map((problem) => {
+    const text = `${problem.problem_title} ${problem.problem_summary} ${problem.source_evidence}`;
+    const problemCluster = getProblemCluster(text);
+    const buyingSignalScore = getBuyingSignalScore(text);
+    const frequencyScore = getFrequencyScore(problemCluster, sources);
+    const sourceQualityScore =
+      sources.length > 0
+        ? Number(
+            (
+              sources.reduce(
+                (sum, source) => sum + Number(source.source_quality_score || 0),
+                0
+              ) / sources.length
+            ).toFixed(1)
+          )
+        : 0;
+
+    const pain = Number(problem.pain_score) || 7;
+    const revenue = Number(problem.revenue_score) || 7;
+    const urgency = Number(problem.urgency_score) || 7;
+    const trend = Number(problem.trend_score) || 7;
+
+    return {
+      problem_title: problem.problem_title || "Untitled problem",
+      problem_summary:
+        problem.problem_summary ||
+        "A market problem was detected from external signals.",
+      affected_niches:
+        problem.affected_niches || "Small businesses | Solo founders",
+      suggested_solutions:
+        problem.suggested_solutions || "Workflow automation tool | AI assistant",
+      pain_score: pain,
+      revenue_score: revenue,
+      urgency_score: urgency,
+      trend_score: trend,
+      monetization_angle:
+        problem.monetization_angle ||
+        "Monthly subscription for solving a recurring workflow problem.",
+      source_evidence:
+        problem.source_evidence ||
+        "External sources show repeated workflow friction.",
+      buying_signal_score: buyingSignalScore,
+      frequency_score: frequencyScore,
+      source_quality_score: sourceQualityScore,
+      problem_cluster: problemCluster,
+      opportunity_score: getOpportunityScore({
+        pain,
+        revenue,
+        urgency,
+        trend,
+        buying: buyingSignalScore,
+        frequency: frequencyScore,
+        sourceQuality: sourceQualityScore,
+      }),
+    };
+  });
 }
 
-function calculateIntelligenceScore(problem: WeeklyDetectedProblem) {
-  return Number(
-    (
-      (Number(problem.pain_score || 0) * 0.3 +
-        Number(problem.revenue_score || 0) * 0.3 +
-        Number(problem.urgency_score || 0) * 0.2 +
-        Number(problem.trend_score || 0) * 0.2) *
-      10
-    ).toFixed(1)
-  );
+function calculateIntelligenceScore(problem: ScoredProblem) {
+  return Number((Number(problem.opportunity_score || 0) * 10).toFixed(1));
 }
 
 async function saveWeeklySources({
@@ -417,13 +621,26 @@ async function saveWeeklySources({
     source_snippet: source.snippet,
     source_type: source.source_type,
     source_rank: source.source_rank || index + 1,
+    author_id: source.author_id || null,
+    like_count: source.like_count || 0,
+    reply_count: source.reply_count || 0,
+    quote_count: source.quote_count || 0,
+    bookmark_count: source.bookmark_count || 0,
+    impression_count: source.impression_count || 0,
+    signal_score: source.signal_score || 0,
+    category: source.category || "General",
+    buying_signal_score: source.buying_signal_score || 0,
+    frequency_score: source.frequency_score || 0,
+    opportunity_score: source.opportunity_score || 0,
+    problem_cluster: source.problem_cluster || "general_workflow_pain",
+    source_quality_score: source.source_quality_score || 0,
   }));
 
   const { error } = await supabaseAdmin.from("weekly_sources").insert(rows);
   if (error) throw error;
 }
 
-async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
+async function updateProblemIntelligence(problem: ScoredProblem) {
   const { data: existingProblem, error: fetchError } = await supabaseAdmin
     .from("problem_intelligence")
     .select("*")
@@ -443,7 +660,12 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
         avg_pain_score: Number(problem.pain_score || 0),
         avg_revenue_score: Number(problem.revenue_score || 0),
         avg_urgency_score: Number(problem.urgency_score || 0),
+        avg_buying_signal_score: Number(problem.buying_signal_score || 0),
+        avg_frequency_score: Number(problem.frequency_score || 0),
+        avg_source_quality_score: Number(problem.source_quality_score || 0),
+        avg_opportunity_score: Number(problem.opportunity_score || 0),
         intelligence_score: intelligenceScore,
+        last_seen_at: new Date().toISOString(),
       },
     ]);
 
@@ -451,9 +673,10 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
     return;
   }
 
-  const updatedScore = Number(
+  const updatedOpportunityScore = Number(
     (
-      (Number(existingProblem.intelligence_score || 0) + intelligenceScore) /
+      (Number(existingProblem.avg_opportunity_score || 0) +
+        Number(problem.opportunity_score || 0)) /
       2
     ).toFixed(1)
   );
@@ -464,8 +687,13 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
       avg_pain_score: Number(problem.pain_score || 0),
       avg_revenue_score: Number(problem.revenue_score || 0),
       avg_urgency_score: Number(problem.urgency_score || 0),
-      intelligence_score: updatedScore,
+      avg_buying_signal_score: Number(problem.buying_signal_score || 0),
+      avg_frequency_score: Number(problem.frequency_score || 0),
+      avg_source_quality_score: Number(problem.source_quality_score || 0),
+      avg_opportunity_score: updatedOpportunityScore,
+      intelligence_score: Number((updatedOpportunityScore * 10).toFixed(1)),
       updated_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
     })
     .eq("id", existingProblem.id);
 
@@ -484,7 +712,7 @@ export async function POST() {
 
     const sources = await collectWeeklySignals();
     const analysis = await analyzeWeeklySignals(sources);
-    const problems = normalizeProblems(analysis.problems || []);
+    const problems = normalizeProblems(analysis.problems || [], sources);
 
     const { data: runData, error: runError } = await supabaseAdmin
       .from("weekly_intelligence_runs")
@@ -521,6 +749,11 @@ export async function POST() {
       trend_score: problem.trend_score,
       monetization_angle: problem.monetization_angle,
       source_evidence: problem.source_evidence,
+      buying_signal_score: problem.buying_signal_score,
+      frequency_score: problem.frequency_score,
+      opportunity_score: problem.opportunity_score,
+      problem_cluster: problem.problem_cluster,
+      source_quality_score: problem.source_quality_score,
     }));
 
     const { data: insertedProblems, error: problemsError } =
@@ -540,7 +773,6 @@ export async function POST() {
       run: runData,
       sources_saved: sources.length,
       problems: insertedProblems || [],
-      
     });
   } catch (error) {
     console.error("Weekly intelligence error:", error);
