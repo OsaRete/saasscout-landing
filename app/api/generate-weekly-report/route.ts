@@ -285,8 +285,17 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
     .eq("id", existingProblem.id);
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
+    const authHeader = req.headers.get("authorization");
+
+    if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const sources = await collectWeeklySignals();
 
     const analysis = await analyzeWeeklySignals(sources);

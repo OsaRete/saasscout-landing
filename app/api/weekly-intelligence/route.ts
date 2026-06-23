@@ -704,8 +704,17 @@ async function updateProblemIntelligence(problem: ScoredProblem) {
   if (error) throw error;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
+    const authHeader = req.headers.get("authorization");
+
+    if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
       throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
     }
