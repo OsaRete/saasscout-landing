@@ -1,13 +1,15 @@
 import OpenAI from "openai";
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
 function cleanJsonResponse(content: string) {
   return content
@@ -88,7 +90,7 @@ JSON format:
 }
 `;
 
-    const completion = await openrouter.chat.completions.create({
+    const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
       messages: [
         {

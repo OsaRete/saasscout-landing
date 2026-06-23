@@ -1,14 +1,16 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": "https://trysaasscout.com",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": "https://trysaasscout.com",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -138,7 +140,7 @@ JSON format:
 }
 `;
 
-    const completion = await openrouter.chat.completions.create({
+    const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
       messages: [
         {
