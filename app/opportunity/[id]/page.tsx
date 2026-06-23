@@ -155,13 +155,23 @@ export default function OpportunityPage() {
         setSaveMessage("Idea already saved.");
       }
 
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setSaveMessage("Your session expired. Please log in again.");
+        setLoadingOpportunity(false);
+        return;
+      }
+
       const intelligenceResponse = await fetch("/api/opportunity-intelligence", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          userId: user.id,
           opportunityId,
           problemTitle: data.problem_summary || data.title,
         }),

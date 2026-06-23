@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -237,17 +238,11 @@ function calculateFounderFit({
 
 export async function POST(req: Request) {
   try {
+    const user = await requireUser(req);
     const body = await req.json();
 
-    const userId = body?.userId;
+    const userId = user.id;
     const problemId = body?.problemId;
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "userId is required." },
-        { status: 400 }
-      );
-    }
 
     if (!problemId) {
       return NextResponse.json(
@@ -288,6 +283,7 @@ export async function POST(req: Request) {
       .from("discovered_problems")
       .select("*")
       .eq("id", problemId)
+      .eq("user_id", userId)
       .maybeSingle();
 
     if (problemError) {
@@ -336,6 +332,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Founder match error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error ? error.message : "Could not calculate match.";

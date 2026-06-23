@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,14 +27,15 @@ function getRecommendation(founderFit: number, intelligence: number) {
 
 export async function POST(req: Request) {
   try {
+    const user = await requireUser(req);
     const body = await req.json();
 
-    const userId = body?.userId;
+    const userId = user.id;
     const opportunityId = body?.opportunityId;
 
-    if (!userId || !opportunityId) {
+    if (!opportunityId) {
       return NextResponse.json(
-        { success: false, error: "userId and opportunityId are required." },
+        { success: false, error: "opportunityId is required." },
         { status: 400 }
       );
     }
@@ -128,6 +130,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Opportunity intelligence error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     return NextResponse.json(
       {

@@ -3,6 +3,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -573,15 +574,8 @@ async function updateProblemIntelligence(problem: DiscoveredProblem) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const userId = String(body.userId || "").trim();
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "User ID is required." },
-        { status: 400 }
-      );
-    }
+    const user = await requireUser(req);
+    const userId = user.id;
 
     const { data: profile, error: profileError } = await getSupabaseAdminClient()
       .from("user_profiles")
@@ -671,6 +665,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Discover opportunities error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     return NextResponse.json(
       {
