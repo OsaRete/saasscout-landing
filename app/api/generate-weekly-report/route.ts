@@ -24,19 +24,23 @@ type WeeklyDetectedProblem = {
   source_evidence: string;
 };
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": "https://trysaasscout.com",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": "https://trysaasscout.com",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 const MARKET_SIGNAL_QUERIES = [
   "small business problems software should solve",
@@ -179,7 +183,7 @@ JSON format:
 }
 `;
 
-  const completion = await openrouter.chat.completions.create({
+  const completion = await getOpenRouterClient().chat.completions.create({
     model: "openai/gpt-4.1-mini",
     messages: [
       {
@@ -239,7 +243,7 @@ function calculateIntelligenceScore(problem: WeeklyDetectedProblem) {
 }
 
 async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
-  const { data: existingProblem } = await supabaseAdmin
+  const { data: existingProblem } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .select("*")
     .eq("problem_title", problem.problem_title)
@@ -248,7 +252,7 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
   const intelligenceScore = calculateIntelligenceScore(problem);
 
   if (!existingProblem) {
-    await supabaseAdmin.from("problem_intelligence").insert([
+    await getSupabaseAdminClient().from("problem_intelligence").insert([
       {
         problem_title: problem.problem_title,
         prepared_count: 0,
@@ -263,7 +267,7 @@ async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
     return;
   }
 
-  await supabaseAdmin
+  await getSupabaseAdminClient()
     .from("problem_intelligence")
     .update({
       avg_pain_score: Number(problem.pain_score || 0),
@@ -288,7 +292,7 @@ export async function POST() {
     const analysis = await analyzeWeeklySignals(sources);
     const problems = normalizeProblems(analysis.problems || []);
 
-    const { data: runData, error: runError } = await supabaseAdmin
+    const { data: runData, error: runError } = await getSupabaseAdminClient()
       .from("weekly_intelligence_runs")
       .insert([
         {
@@ -319,7 +323,7 @@ export async function POST() {
     }));
 
     const { data: insertedProblems, error: problemsError } =
-      await supabaseAdmin
+      await getSupabaseAdminClient()
         .from("weekly_detected_problems")
         .insert(rows)
         .select();
