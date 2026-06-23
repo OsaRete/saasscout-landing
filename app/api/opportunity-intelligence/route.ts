@@ -1,13 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 function getConfidenceLabel(score: number) {
   if (score >= 85) return "Very High";
@@ -24,19 +27,20 @@ function getRecommendation(founderFit: number, intelligence: number) {
 
 export async function POST(req: Request) {
   try {
+    const user = await requireUser(req);
     const body = await req.json();
 
-    const userId = body?.userId;
+    const userId = user.id;
     const opportunityId = body?.opportunityId;
 
-    if (!userId || !opportunityId) {
+    if (!opportunityId) {
       return NextResponse.json(
-        { success: false, error: "userId and opportunityId are required." },
+        { success: false, error: "opportunityId is required." },
         { status: 400 }
       );
     }
 
-    const { data: opportunity, error: opportunityError } = await supabaseAdmin
+    const { data: opportunity, error: opportunityError } = await getSupabaseAdminClient()
       .from("opportunities")
       .select(
         "id, user_id, source_problem_title, source_problem_id, source_discovery_id, title, problem_summary"
@@ -63,7 +67,7 @@ export async function POST(req: Request) {
     const sourceProblemId = opportunity.source_problem_id || body?.problemId;
 
     const { data: intelligence, error: intelligenceError } =
-      await supabaseAdmin
+      await getSupabaseAdminClient()
         .from("problem_intelligence")
         .select("*")
         .eq("problem_title", sourceProblemTitle)
@@ -75,7 +79,7 @@ export async function POST(req: Request) {
 
     if (sourceProblemId) {
       const { data: founderMatch, error: founderMatchError } =
-        await supabaseAdmin
+        await getSupabaseAdminClient()
           .from("founder_problem_matches")
           .select("*")
           .eq("user_id", userId)
@@ -97,7 +101,7 @@ export async function POST(req: Request) {
       intelligenceScore
     );
 
-    const { data: savedIntelligence, error } = await supabaseAdmin
+    const { data: savedIntelligence, error } = await getSupabaseAdminClient()
       .from("opportunity_intelligence")
       .upsert(
         {
@@ -126,6 +130,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Opportunity intelligence error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     return NextResponse.json(
       {

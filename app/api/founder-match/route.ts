@@ -1,13 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 type FounderProfile = {
   user_id: string;
@@ -235,17 +238,11 @@ function calculateFounderFit({
 
 export async function POST(req: Request) {
   try {
+    const user = await requireUser(req);
     const body = await req.json();
 
-    const userId = body?.userId;
+    const userId = user.id;
     const problemId = body?.problemId;
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "userId is required." },
-        { status: 400 }
-      );
-    }
 
     if (!problemId) {
       return NextResponse.json(
@@ -262,7 +259,7 @@ export async function POST(req: Request) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
     }
 
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await getSupabaseAdminClient()
       .from("founder_profiles")
       .select("*")
       .eq("user_id", userId)
@@ -282,10 +279,11 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: problem, error: problemError } = await supabaseAdmin
+    const { data: problem, error: problemError } = await getSupabaseAdminClient()
       .from("discovered_problems")
       .select("*")
       .eq("id", problemId)
+      .eq("user_id", userId)
       .maybeSingle();
 
     if (problemError) {
@@ -304,7 +302,7 @@ export async function POST(req: Request) {
       problem,
     });
 
-    const { data: savedMatch, error: matchError } = await supabaseAdmin
+    const { data: savedMatch, error: matchError } = await getSupabaseAdminClient()
       .from("founder_problem_matches")
       .upsert(
         {
@@ -334,6 +332,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Founder match error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error ? error.message : "Could not calculate match.";
