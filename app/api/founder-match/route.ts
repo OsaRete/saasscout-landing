@@ -4,10 +4,12 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 type FounderProfile = {
   user_id: string;
@@ -262,7 +264,7 @@ export async function POST(req: Request) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
     }
 
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await getSupabaseAdminClient()
       .from("founder_profiles")
       .select("*")
       .eq("user_id", userId)
@@ -282,7 +284,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: problem, error: problemError } = await supabaseAdmin
+    const { data: problem, error: problemError } = await getSupabaseAdminClient()
       .from("discovered_problems")
       .select("*")
       .eq("id", problemId)
@@ -304,7 +306,7 @@ export async function POST(req: Request) {
       problem,
     });
 
-    const { data: savedMatch, error: matchError } = await supabaseAdmin
+    const { data: savedMatch, error: matchError } = await getSupabaseAdminClient()
       .from("founder_problem_matches")
       .upsert(
         {

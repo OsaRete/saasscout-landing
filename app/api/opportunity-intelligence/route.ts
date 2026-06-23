@@ -4,10 +4,12 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 function getConfidenceLabel(score: number) {
   if (score >= 85) return "Very High";
@@ -36,7 +38,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: opportunity, error: opportunityError } = await supabaseAdmin
+    const { data: opportunity, error: opportunityError } = await getSupabaseAdminClient()
       .from("opportunities")
       .select(
         "id, user_id, source_problem_title, source_problem_id, source_discovery_id, title, problem_summary"
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
     const sourceProblemId = opportunity.source_problem_id || body?.problemId;
 
     const { data: intelligence, error: intelligenceError } =
-      await supabaseAdmin
+      await getSupabaseAdminClient()
         .from("problem_intelligence")
         .select("*")
         .eq("problem_title", sourceProblemTitle)
@@ -75,7 +77,7 @@ export async function POST(req: Request) {
 
     if (sourceProblemId) {
       const { data: founderMatch, error: founderMatchError } =
-        await supabaseAdmin
+        await getSupabaseAdminClient()
           .from("founder_problem_matches")
           .select("*")
           .eq("user_id", userId)
@@ -97,7 +99,7 @@ export async function POST(req: Request) {
       intelligenceScore
     );
 
-    const { data: savedIntelligence, error } = await supabaseAdmin
+    const { data: savedIntelligence, error } = await getSupabaseAdminClient()
       .from("opportunity_intelligence")
       .upsert(
         {
