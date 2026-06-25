@@ -69,19 +69,23 @@ type ScoredProblem = WeeklyDetectedProblem & {
   source_quality_score: number;
 };
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": "https://trysaasscout.com",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": "https://trysaasscout.com",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 const MARKET_SIGNAL_QUERIES = [
   "small business problems software should solve",
@@ -521,7 +525,7 @@ JSON format:
 }
 `;
 
-  const completion = await openrouter.chat.completions.create({
+  const completion = await getOpenRouterClient().chat.completions.create({
     model: "openai/gpt-4.1-mini",
     messages: [
       { role: "system", content: "Return valid JSON only." },
@@ -636,12 +640,12 @@ async function saveWeeklySources({
     source_quality_score: source.source_quality_score || 0,
   }));
 
-  const { error } = await supabaseAdmin.from("weekly_sources").insert(rows);
+  const { error } = await getSupabaseAdminClient().from("weekly_sources").insert(rows);
   if (error) throw error;
 }
 
 async function updateProblemIntelligence(problem: ScoredProblem) {
-  const { data: existingProblem, error: fetchError } = await supabaseAdmin
+  const { data: existingProblem, error: fetchError } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .select("*")
     .eq("problem_title", problem.problem_title)
@@ -652,7 +656,7 @@ async function updateProblemIntelligence(problem: ScoredProblem) {
   const intelligenceScore = calculateIntelligenceScore(problem);
 
   if (!existingProblem) {
-    const { error } = await supabaseAdmin.from("problem_intelligence").insert([
+    const { error } = await getSupabaseAdminClient().from("problem_intelligence").insert([
       {
         problem_title: problem.problem_title,
         prepared_count: 0,
@@ -681,7 +685,7 @@ async function updateProblemIntelligence(problem: ScoredProblem) {
     ).toFixed(1)
   );
 
-  const { error } = await supabaseAdmin
+  const { error } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .update({
       avg_pain_score: Number(problem.pain_score || 0),
@@ -700,8 +704,17 @@ async function updateProblemIntelligence(problem: ScoredProblem) {
   if (error) throw error;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
+    const authHeader = req.headers.get("authorization");
+
+    if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
       throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
     }
@@ -714,7 +727,7 @@ export async function POST() {
     const analysis = await analyzeWeeklySignals(sources);
     const problems = normalizeProblems(analysis.problems || [], sources);
 
-    const { data: runData, error: runError } = await supabaseAdmin
+    const { data: runData, error: runError } = await getSupabaseAdminClient()
       .from("weekly_intelligence_runs")
       .insert([
         {
@@ -757,7 +770,7 @@ export async function POST() {
     }));
 
     const { data: insertedProblems, error: problemsError } =
-      await supabaseAdmin
+      await getSupabaseAdminClient()
         .from("weekly_detected_problems")
         .insert(problemRows)
         .select();

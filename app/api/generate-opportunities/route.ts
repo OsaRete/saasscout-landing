@@ -1,14 +1,17 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": "https://trysaasscout.com",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": "https://trysaasscout.com",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +67,8 @@ function normalizeOpportunities(rawOpportunities: RawOpportunity[]) {
 
 export async function POST(req: Request) {
   try {
+    await requireUser(req);
+
     if (!process.env.OPENROUTER_API_KEY) {
       throw new Error("OPENROUTER_API_KEY is missing.");
     }
@@ -138,7 +143,7 @@ JSON format:
 }
 `;
 
-    const completion = await openrouter.chat.completions.create({
+    const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
       messages: [
         {
@@ -178,6 +183,13 @@ JSON format:
     });
   } catch (error) {
     console.error("Generate opportunities error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error
