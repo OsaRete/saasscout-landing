@@ -107,6 +107,13 @@ function getSignalScore(tweet: XTweet) {
 
 export async function GET(req: NextRequest) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json(
+        { success: false, error: "Not found." },
+        { status: 404 }
+      );
+    }
+
     if (!process.env.X_BEARER_TOKEN) {
       return NextResponse.json(
         { success: false, error: "X_BEARER_TOKEN is missing." },
@@ -145,8 +152,7 @@ export async function GET(req: NextRequest) {
         {
           success: false,
           status: response.status,
-          error: data?.detail || data?.title || "X API request failed.",
-          data,
+          error: "X API request failed.",
         },
         { status: response.status }
       );
