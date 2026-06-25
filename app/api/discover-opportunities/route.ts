@@ -3,6 +3,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,19 +58,23 @@ type DiscoveredProblem = {
   source_evidence: string;
 };
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": "https://trysaasscout.com",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": "https://trysaasscout.com",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 const DISCOVERY_QUERIES = [
   `"too much manual work" business`,
@@ -306,19 +311,19 @@ async function collectExternalSources(sourcesLimit: number) {
 }
 
 async function collectDataMoatSources() {
-  const { data: intelligence } = await supabaseAdmin
+  const { data: intelligence } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .select("*")
     .order("intelligence_score", { ascending: false })
     .limit(15);
 
-  const { data: weeklyProblems } = await supabaseAdmin
+  const { data: weeklyProblems } = await getSupabaseAdminClient()
     .from("weekly_detected_problems")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(15);
 
-  const { data: weeklySources } = await supabaseAdmin
+  const { data: weeklySources } = await getSupabaseAdminClient()
     .from("weekly_sources")
     .select("*")
     .order("created_at", { ascending: false })
@@ -455,7 +460,7 @@ JSON format:
 }
 `;
 
-  const completion = await openrouter.chat.completions.create({
+  const completion = await getOpenRouterClient().chat.completions.create({
     model: "openai/gpt-4.1-mini",
     messages: [
       {
@@ -514,7 +519,7 @@ function normalizeProblems(rawProblems: DiscoveredProblem[]) {
 }
 
 async function updateProblemIntelligence(problem: DiscoveredProblem) {
-  const { data: existingProblem, error: fetchError } = await supabaseAdmin
+  const { data: existingProblem, error: fetchError } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .select("*")
     .eq("problem_title", problem.problem_title)
@@ -525,7 +530,7 @@ async function updateProblemIntelligence(problem: DiscoveredProblem) {
   const intelligenceScore = Number(problem.opportunity_score || 70);
 
   if (!existingProblem) {
-    const { error } = await supabaseAdmin.from("problem_intelligence").insert([
+    const { error } = await getSupabaseAdminClient().from("problem_intelligence").insert([
       {
         problem_title: problem.problem_title,
         prepared_count: 0,
@@ -549,7 +554,7 @@ async function updateProblemIntelligence(problem: DiscoveredProblem) {
     ((Number(existingProblem.intelligence_score || 0) + intelligenceScore) / 2).toFixed(1)
   );
 
-  const { error } = await supabaseAdmin
+  const { error } = await getSupabaseAdminClient()
     .from("problem_intelligence")
     .update({
       avg_pain_score: problem.pain_score,
@@ -569,17 +574,10 @@ async function updateProblemIntelligence(problem: DiscoveredProblem) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const userId = String(body.userId || "").trim();
+    const user = await requireUser(req);
+    const userId = user.id;
 
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "User ID is required." },
-        { status: 400 }
-      );
-    }
-
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await getSupabaseAdminClient()
       .from("user_profiles")
       .select("*")
       .eq("user_id", userId)
@@ -606,7 +604,7 @@ export async function POST(req: Request) {
 
     const problems = normalizeProblems(analysis.problems || []);
 
-    const { data: discoveryData, error: discoveryError } = await supabaseAdmin
+    const { data: discoveryData, error: discoveryError } = await getSupabaseAdminClient()
       .from("opportunity_discoveries")
       .insert([
         {
@@ -647,7 +645,7 @@ export async function POST(req: Request) {
       source_evidence: problem.source_evidence,
     }));
 
-    const { data: insertedProblems, error: problemsError } = await supabaseAdmin
+    const { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
       .from("discovered_problems")
       .insert(problemsToInsert)
       .select();
@@ -667,6 +665,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Discover opportunities error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     return NextResponse.json(
       {

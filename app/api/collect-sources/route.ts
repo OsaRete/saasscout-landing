@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 type SerpApiOrganicResult = {
   title?: string;
@@ -150,6 +151,8 @@ async function searchSerpApi(query: string) {
 
 export async function POST(req: Request) {
   try {
+    await requireUser(req);
+
     const body = await req.json();
 
     const market = String(body.market || "").trim();
@@ -220,6 +223,13 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Collect sources error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error ? error.message : "Could not collect sources.";

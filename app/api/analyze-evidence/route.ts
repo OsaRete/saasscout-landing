@@ -1,13 +1,16 @@
 import OpenAI from "openai";
+import { AuthError, requireUser } from "../_utils/auth";
 
-const openrouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-    "X-Title": "SaaSScout",
-  },
-});
+function getOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
+      "X-Title": "SaaSScout",
+    },
+  });
+}
 
 function cleanJsonResponse(content: string) {
   return content
@@ -23,6 +26,8 @@ function safeString(value: unknown, fallback = "") {
 
 export async function POST(request: Request) {
   try {
+    await requireUser(request);
+
     if (!process.env.OPENROUTER_API_KEY) {
       return Response.json(
         { error: "OpenRouter API key is missing." },
@@ -88,7 +93,7 @@ JSON format:
 }
 `;
 
-    const completion = await openrouter.chat.completions.create({
+    const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
       messages: [
         {
@@ -145,6 +150,13 @@ JSON format:
     });
   } catch (error) {
     console.error("Analyze evidence error:", error);
+
+    if (error instanceof AuthError) {
+      return Response.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error ? error.message : "Failed to analyze evidence.";
