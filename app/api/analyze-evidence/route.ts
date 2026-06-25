@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { AuthError, requireUser } from "../_utils/auth";
 
 function getOpenRouterClient() {
   return new OpenAI({
@@ -25,6 +26,8 @@ function safeString(value: unknown, fallback = "") {
 
 export async function POST(request: Request) {
   try {
+    await requireUser(request);
+
     if (!process.env.OPENROUTER_API_KEY) {
       return Response.json(
         { error: "OpenRouter API key is missing." },
@@ -147,6 +150,13 @@ JSON format:
     });
   } catch (error) {
     console.error("Analyze evidence error:", error);
+
+    if (error instanceof AuthError) {
+      return Response.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error ? error.message : "Failed to analyze evidence.";

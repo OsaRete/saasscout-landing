@@ -228,16 +228,19 @@ if (profileData) {
     audience,
     region,
     evidence,
+    accessToken,
   }: {
     market: string;
     audience: string;
     region: string;
     evidence: string;
+    accessToken: string;
   }) {
     const response = await fetch("/api/analyze-evidence", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         market,
@@ -260,15 +263,18 @@ if (profileData) {
     market,
     audience,
     region,
+    accessToken,
   }: {
     market: string;
     audience: string;
     region: string;
+    accessToken: string;
   }) {
     const response = await fetch("/api/collect-sources", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         market,
@@ -409,6 +415,19 @@ if (profileData) {
     setMessage("");
   
     try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setMessage("Your session expired. Please log in again.");
+        setLoading(false);
+        setLoadingStep("idle");
+        return;
+      }
+
+      const accessToken = session.access_token;
+
       if (!isAdmin) {
         if (!userProfile) {
           setMessage("Could not load your plan. Please refresh and try again.");
@@ -465,6 +484,7 @@ if (profileData) {
             market: cleanMarket,
             audience: cleanAudience,
             region: cleanRegion,
+            accessToken,
           });
   
           const externalEvidence =
@@ -507,6 +527,7 @@ if (profileData) {
             audience: cleanAudience,
             region: cleanRegion,
             evidence: cleanEvidence,
+            accessToken,
           });
   
           finalMarket = cleanMarket || evidenceAnalysis.inferred_market || "";
@@ -606,6 +627,7 @@ if (profileData) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           market: finalMarket,

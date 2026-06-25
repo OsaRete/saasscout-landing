@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 function getOpenRouterClient() {
   return new OpenAI({
@@ -66,6 +67,8 @@ function normalizeOpportunities(rawOpportunities: RawOpportunity[]) {
 
 export async function POST(req: Request) {
   try {
+    await requireUser(req);
+
     if (!process.env.OPENROUTER_API_KEY) {
       throw new Error("OPENROUTER_API_KEY is missing.");
     }
@@ -180,6 +183,13 @@ JSON format:
     });
   } catch (error) {
     console.error("Generate opportunities error:", error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
 
     const message =
       error instanceof Error
