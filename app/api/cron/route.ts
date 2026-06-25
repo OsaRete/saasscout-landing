@@ -6,8 +6,16 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   try {
     const authHeader = req.headers.get("authorization");
+    const cronSecret = process.env.CRON_SECRET;
 
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    if (!cronSecret) {
+      return NextResponse.json(
+        { success: false, error: "Cron is not configured." },
+        { status: 500 }
+      );
+    }
+
+    if (authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json(
         { success: false, error: "Unauthorized" },
         { status: 401 }
@@ -21,7 +29,7 @@ export async function GET(req: Request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.CRON_SECRET}`,
+        Authorization: `Bearer ${cronSecret}`,
       },
       body: JSON.stringify({
         saveToDatabase: true,
