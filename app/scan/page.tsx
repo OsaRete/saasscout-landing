@@ -189,7 +189,7 @@ if (profileData) {
     setMessage("");
   }
 
-  async function extractFileText(file: File) {
+  async function extractFileText(file: File, accessToken: string) {
     if (file.name.toLowerCase().endsWith(".txt")) {
       return await file.text();
     }
@@ -199,6 +199,9 @@ if (profileData) {
 
     const response = await fetch("/api/extract-file-text", {
       method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: formData,
     });
 
@@ -458,7 +461,7 @@ if (profileData) {
         try {
           setLoadingStep("extracting");
   
-          const fileText = await extractFileText(evidenceFile);
+          const fileText = await extractFileText(evidenceFile, accessToken);
   
           if (fileText.trim()) {
             cleanEvidence = `${cleanEvidence}\n\nUploaded file content:\n${fileText}`;
