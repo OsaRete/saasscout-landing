@@ -1,0 +1,56 @@
+import { generateKnowledgeId } from "../../knowledge/fingerprint";
+import { rankFeedbackSignals as rankSignals } from "./ranking";
+import { averageFeedbackScore, calculateCompositeFeedbackScore, feedbackStrengthFromScore, normalizeFeedbackScore } from "./scoring";
+import type { AbandonmentFeedback, FeedbackEvent, FeedbackLearningInput, FeedbackLearningResult, FeedbackScore, FeedbackSignal, FeedbackOutcomeType, PivotFeedback, RecommendationFeedback, RevenueFeedback, ValidationFeedback } from "./types";
+import { validateFeedbackLearningInput, validateFeedbackLearningResult } from "./validation";
+
+function iso(value: string | Date | undefined) { if (value instanceof Date) return value.toISOString(); if (typeof value === "string" && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString(); return new Date().toISOString(); }
+function numberMeta(event: FeedbackEvent, key: string) { const value = event.metadata?.[key]; return typeof value === "number" ? value : 0; }
+function booleanMeta(event: FeedbackEvent, key: string) { return event.metadata?.[key] === true; }
+
+/** Converts real user behavior and market outcomes into deterministic SaaSScout-owned learning signals. */
+export class FeedbackEngine {
+  /** Collects reusable feedback signals without changing routes, prompts, storage, UI, or production behavior. */
+  collectFeedbackSignals(input: FeedbackLearningInput): FeedbackSignal[] { return input.events.map((event) => this.createSignal(event)); }
+
+  /** Classifies an event outcome so future learning loops can distinguish validation, revenue, pivots, abandonment, and recommendations. */
+  classifyFeedbackOutcome(event: FeedbackEvent): FeedbackOutcomeType { return event.outcome.type === "unknown" ? (event.source === "revenue" ? "revenue_generated" : event.source === "validation" ? "validated" : event.source === "pivot" ? "pivoted" : event.source === "abandonment" ? "abandoned" : event.source === "recommendation" ? "recommendation_accepted" : "neutral") : event.outcome.type; }
+
+  /** Evaluates feedback strength from explicit event strength, confidence, and concrete outcome evidence. */
+  evaluateFeedbackStrength(event: FeedbackEvent) { return normalizeFeedbackScore(event.strengthScore ?? ((event.confidenceScore || 5) * 0.4 + this.outcomeMagnitude(event) * 0.6)); }
+
+  /** Scores customer validation evidence such as interviews, signups, waitlists, preorders, and negative responses. */
+  evaluateValidationSignal(feedback: ValidationFeedback) { return normalizeFeedbackScore(Math.min(10, (feedback.interviewsCompleted || 0) * 0.4 + (feedback.signups || 0) * 0.25 + (feedback.waitlistJoins || 0) * 0.15 + (feedback.paidPreorders || 0) * 1.8 + (feedback.targetReached ? 2 : 0) - (feedback.negativeResponses || 0) * 0.25)); }
+
+  /** Scores revenue outcomes so real payment behavior can become stronger evidence than stated interest. */
+  evaluateRevenueSignal(feedback: RevenueFeedback) { return normalizeFeedbackScore(Math.min(10, Math.log10(Math.max(1, feedback.revenueUsd)) * 2 + feedback.payingCustomers * 0.8 + Math.log10(Math.max(1, feedback.recurringRevenueUsd || 0)) * 1.5 - (feedback.churnedCustomers || 0) * 0.7 - (feedback.refundCount || 0) * 0.8)); }
+
+  /** Scores pivots by preserving useful learning while identifying when an opportunity changed materially. */
+  evaluatePivotSignal(feedback: PivotFeedback) { const changeCount = [feedback.changedMarket, feedback.changedAudience, feedback.changedProblem, feedback.changedSolution].filter(Boolean).length; return normalizeFeedbackScore(changeCount * 1.7 + (feedback.retainedEvidenceRatio == null ? 2 : feedback.retainedEvidenceRatio * 4)); }
+
+  /** Scores abandonment outcomes so failures become reusable intelligence instead of disappearing from the system. */
+  evaluateAbandonmentSignal(feedback: AbandonmentFeedback) { const reasonWeight = feedback.reason === "no_demand" ? 4 : feedback.reason === "too_expensive" ? 3 : feedback.reason === "too_complex" ? 2.5 : feedback.reason === "competition" ? 2 : feedback.reason === "founder_constraint" ? 1.5 : 1; return normalizeFeedbackScore(reasonWeight + (feedback.attemptsCompleted || 0) * 0.6 + (feedback.explicitNoDemandSignals || 0) * 1.2); }
+
+  /** Scores recommendation quality from acceptance, action, saves, dismissals, conversions, and explicit ratings. */
+  evaluateRecommendationQuality(feedback: RecommendationFeedback) { return normalizeFeedbackScore((feedback.accepted ? 2 : 0) + (feedback.actedOn ? 2 : 0) + (feedback.saved ? 1 : 0) + (feedback.conversion ? 3 : 0) + normalizeFeedbackScore(feedback.rating, 0) * 0.4 - (feedback.dismissed ? 2 : 0)); }
+
+  /** Calculates the composite feedback score future decision layers can use to learn from outcomes. */
+  calculateFeedbackScore(signal: FeedbackSignal): FeedbackScore { return calculateCompositeFeedbackScore({ validationScore: signal.validationScore, revenueScore: signal.revenueScore, pivotScore: signal.pivotScore, abandonmentScore: signal.abandonmentScore, recommendationQualityScore: signal.recommendationQualityScore, strengthScore: signal.strengthScore, learningImpactScore: signal.learningImpactScore }); }
+
+  /** Calculates how much an event should influence future knowledge, confidence, deduplication, and recommendations. */
+  calculateLearningImpact(signal: Pick<FeedbackSignal, "context" | "validationScore" | "revenueScore" | "pivotScore" | "abandonmentScore" | "recommendationQualityScore" | "strengthScore">) { const relationshipBreadth = [signal.context.evidenceFingerprints, signal.context.knowledgeProblemIds, signal.context.painCandidateIds, signal.context.patternCandidateIds, signal.context.trendCandidateIds, signal.context.opportunityCandidateIds, signal.context.monetizationCandidateIds, signal.context.founderFitCandidateIds, signal.context.confidenceCandidateIds].reduce((sum, values) => sum + Math.min(2, values.length * 0.3), 0); return normalizeFeedbackScore(averageFeedbackScore([signal.validationScore, signal.revenueScore, signal.pivotScore, signal.abandonmentScore, signal.recommendationQualityScore, signal.strengthScore]) * 0.75 + relationshipBreadth * 0.25); }
+
+  /** Applies deterministic ranking so future orchestrators prioritize high-impact learning signals. */
+  rankFeedbackSignals(signals: FeedbackSignal[]) { return rankSignals(signals); }
+
+  /** Produces the full typed Feedback Learning Result for future orchestrators without integrating into production yet. */
+  produceFeedbackLearningResult(input: FeedbackLearningInput): FeedbackLearningResult { const validation = validateFeedbackLearningInput(input); const learnedAt = iso(input.learnedAt); const signals = validation.valid ? this.collectFeedbackSignals(input) : []; const rankedSignals = this.rankFeedbackSignals(signals); const scores = rankedSignals.map((signal) => this.calculateFeedbackScore(signal)); const result: FeedbackLearningResult = { runId: input.runId || `feedback-${learnedAt}`, learnedAt, signals, rankedSignals, scores, warnings: validation.errors, summary: { eventCount: input.events.length, signalCount: signals.length, positiveSignals: signals.filter((signal) => signal.direction === "positive").length, negativeSignals: signals.filter((signal) => signal.direction === "negative").length, highestLearningImpact: rankedSignals[0]?.learningImpactScore || 0, averageLearningImpact: averageFeedbackScore(signals.map((signal) => signal.learningImpactScore)), affectedEvidenceCount: new Set(signals.flatMap((signal) => signal.context.evidenceFingerprints)).size, affectedOpportunityCount: new Set(signals.flatMap((signal) => signal.context.opportunityCandidateIds)).size, affectedConfidenceCount: new Set(signals.flatMap((signal) => signal.context.confidenceCandidateIds)).size } }; const resultValidation = validateFeedbackLearningResult(result); if (!resultValidation.valid) throw new Error(`Invalid feedback learning result: ${resultValidation.errors.join(" ")}`); return result; }
+
+  /** Runs the complete deterministic Feedback Engine pipeline for future Continuous Learning Layer adoption. */
+  run(input: FeedbackLearningInput) { return this.produceFeedbackLearningResult(input); }
+
+  private createSignal(event: FeedbackEvent): FeedbackSignal { const outcomeType = this.classifyFeedbackOutcome(event); const validationScore = this.evaluateValidationSignal({ interviewsCompleted: numberMeta(event, "interviewsCompleted"), signups: numberMeta(event, "signups"), waitlistJoins: numberMeta(event, "waitlistJoins"), paidPreorders: numberMeta(event, "paidPreorders"), negativeResponses: numberMeta(event, "negativeResponses"), targetReached: booleanMeta(event, "targetReached") }); const revenueScore = this.evaluateRevenueSignal({ revenueUsd: event.outcome.revenueUsd || numberMeta(event, "revenueUsd"), payingCustomers: numberMeta(event, "payingCustomers"), recurringRevenueUsd: numberMeta(event, "recurringRevenueUsd"), churnedCustomers: numberMeta(event, "churnedCustomers"), refundCount: numberMeta(event, "refundCount") }); const pivotScore = this.evaluatePivotSignal({ changedMarket: booleanMeta(event, "changedMarket"), changedAudience: booleanMeta(event, "changedAudience"), changedProblem: booleanMeta(event, "changedProblem"), changedSolution: booleanMeta(event, "changedSolution"), retainedEvidenceRatio: numberMeta(event, "retainedEvidenceRatio") || undefined }); const abandonmentScore = this.evaluateAbandonmentSignal({ reason: typeof event.metadata?.reason === "string" ? event.metadata.reason as AbandonmentFeedback["reason"] : "unknown", attemptsCompleted: numberMeta(event, "attemptsCompleted"), explicitNoDemandSignals: numberMeta(event, "explicitNoDemandSignals") }); const recommendationQualityScore = this.evaluateRecommendationQuality({ accepted: outcomeType === "recommendation_accepted" || booleanMeta(event, "accepted"), actedOn: booleanMeta(event, "actedOn"), saved: booleanMeta(event, "saved"), dismissed: outcomeType === "recommendation_rejected" || booleanMeta(event, "dismissed"), conversion: booleanMeta(event, "conversion"), rating: numberMeta(event, "rating") || null }); const strengthScore = this.evaluateFeedbackStrength(event); const base = { context: event.context, validationScore, revenueScore, pivotScore, abandonmentScore, recommendationQualityScore, strengthScore }; const learningImpactScore = this.calculateLearningImpact(base); return { id: generateKnowledgeId("fs", event.id, outcomeType), eventId: event.id, source: event.source, outcomeType, event, ...base, learningImpactScore, strength: feedbackStrengthFromScore(strengthScore), direction: this.direction(outcomeType) }; }
+
+  private outcomeMagnitude(event: FeedbackEvent) { return event.outcome.type === "revenue_generated" ? this.evaluateRevenueSignal({ revenueUsd: event.outcome.revenueUsd || 0, payingCustomers: numberMeta(event, "payingCustomers") }) : event.outcome.type === "abandoned" || event.outcome.type === "invalidated" ? 7 : event.outcome.type === "validated" ? 7 : 4; }
+  private direction(type: FeedbackOutcomeType): FeedbackSignal["direction"] { if (["validated", "revenue_generated", "recommendation_accepted"].includes(type)) return "positive"; if (["invalidated", "abandoned", "recommendation_rejected"].includes(type)) return "negative"; if (type === "pivoted") return "mixed"; return "neutral"; }
+}
