@@ -19,6 +19,7 @@ import { MonetizationEngine } from "../engines/monetization";
 import { FounderIntelligenceEngine } from "../engines/founder";
 import { ConfidenceEngine } from "../engines/confidence";
 import { FeedbackEngine } from "../engines/feedback";
+import { ProblemIntelligenceSynthesisEngine } from "./problem-synthesis";
 import { advanceDiscoveryStage, appendDiscoveryWarning, createInitialDiscoveryState } from "./state";
 import type {
   DiscoveryDecisionContext,
@@ -70,6 +71,7 @@ const defaultModularStages: DiscoveryPipelineStage[] = [
   "founder_intelligence",
   "confidence_evaluation",
   "feedback_learning",
+  "problem_intelligence_synthesis",
   "semantic_problem_deduplication",
 ];
 
@@ -349,6 +351,12 @@ export class DiscoveryOrchestrator {
       addDiagnostic("feedback_learning", [], feedbackEvents.length > 0 ? ["feedbackEvents"] : [], feedbackEvents.length === 0 ? ["Feedback Learning ran as an empty placeholder because no feedback events were provided."] : []);
       outputs.feedbackLearning = new FeedbackEngine().run({ ...baseInput, events: feedbackEvents, painCandidates: outputs.painDetection?.candidates || [], patternCandidates: outputs.patternDetection?.candidates || [], trendCandidates: outputs.trendDetection?.candidates || [], opportunityCandidates: outputs.opportunityDetection?.candidates || [], monetizationCandidates: outputs.monetizationEvaluation?.candidates || [], founderFits: outputs.founderIntelligence?.opportunityFits || [], confidenceCandidates: outputs.confidenceEvaluation?.candidates || [], learnedAt: detectedAt });
       markCompleted("feedback_learning");
+    }
+
+    if (include("problem_intelligence_synthesis")) {
+      addDiagnostic("problem_intelligence_synthesis", [], ["evidence", "knowledge", "engineCandidates"]);
+      outputs.problemIntelligenceSynthesis = new ProblemIntelligenceSynthesisEngine().run({ evidence, knowledgeUpdates, knownProblems, relationships, painDetection: outputs.painDetection, patternDetection: outputs.patternDetection, trendDetection: outputs.trendDetection, opportunityDetection: outputs.opportunityDetection, monetizationEvaluation: outputs.monetizationEvaluation, confidenceEvaluation: outputs.confidenceEvaluation, feedbackLearning: outputs.feedbackLearning, runId, synthesizedAt: detectedAt });
+      markCompleted("problem_intelligence_synthesis");
     }
 
     if (include("semantic_problem_deduplication")) {
