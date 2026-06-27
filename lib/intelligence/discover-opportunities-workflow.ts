@@ -13,6 +13,7 @@ import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
 import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
+import { buildDiscoveryPersistencePlan } from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
 
 type Source = DiscoverySource;
@@ -69,6 +70,11 @@ function runDiscoveryOrchestratorDiagnostics({
         legacyProblems,
         orchestratorResult: result,
       })
+    );
+
+    console.info(
+      "Discovery orchestrator persistence plan diagnostics:",
+      buildDiscoveryPersistencePlan(result).diagnostics
     );
   } catch (error) {
     console.warn("Discovery orchestrator diagnostics failed:", {
