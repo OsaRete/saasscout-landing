@@ -21,3 +21,5 @@ export type {
   KnowledgeSource,
   KnowledgeUpdateInput,
 } from "./types";
+
+export * from "./deduplication";
