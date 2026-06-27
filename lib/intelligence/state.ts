@@ -39,6 +39,7 @@ export function createInitialDiscoveryState(input: DiscoveryInput): DiscoveryPip
     confidenceScore: null,
     decisionContext: null,
     result: null,
+    modularPipeline: null,
     warnings: [],
     completedStages: ["initialized"],
   };
