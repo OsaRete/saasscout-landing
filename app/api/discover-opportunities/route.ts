@@ -14,11 +14,54 @@ import {
   type DiscoverySource,
 } from "@/lib/knowledge/discovery-data-moat-sources";
 import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
+import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
+import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
+import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Source = DiscoverySource;
+
+function isDiscoveryOrchestratorDiagnosticsEnabled() {
+  return process.env.DISCOVERY_ORCHESTRATOR_DIAGNOSTICS === "1";
+}
+
+function runDiscoveryOrchestratorDiagnostics({
+  externalSources,
+  moatSources,
+}: {
+  externalSources: Source[];
+  moatSources: Source[];
+}) {
+  if (!isDiscoveryOrchestratorDiagnosticsEnabled()) return;
+
+  try {
+    const input = adaptDiscoverySourcesToInput({
+      externalSources,
+      moatSources,
+      context: {
+        integration: "discover-opportunities",
+        mode: "diagnostic_dry_run",
+      },
+      requestedAt: new Date(),
+    });
+
+    const result = new DiscoveryOrchestrator().runModularPipeline(input, {
+      enabled: true,
+      dryRun: true,
+    });
+
+    console.info(
+      "Discovery orchestrator diagnostics:",
+      buildDiscoveryOrchestratorDiagnosticMetrics(result)
+    );
+  } catch (error) {
+    console.warn("Discovery orchestrator diagnostics failed:", {
+      message: error instanceof Error ? error.message : "Unknown diagnostic error.",
+    });
+  }
+}
 
 function getOpenRouterClient() {
   return new OpenAI({
@@ -182,6 +225,8 @@ export async function POST(req: Request) {
 
     const externalSources = await collectExternalSources(sourcesLimit);
     const moatSources = await collectDataMoatSources();
+
+    runDiscoveryOrchestratorDiagnostics({ externalSources, moatSources });
 
     const analysis = await analyzeSignals({
       externalSources,
