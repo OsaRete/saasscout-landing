@@ -7,12 +7,12 @@ import { AuthError, requireUser } from "../_utils/auth";
 import {
   cleanJsonResponse,
   normalizeProblems,
-  type DiscoveredProblem,
 } from "@/lib/intelligence/discovery-response-normalization";
 import {
   collectDataMoatSources,
   type DiscoverySource,
 } from "@/lib/knowledge/discovery-data-moat-sources";
+import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -402,59 +402,6 @@ JSON format:
   }
 }
 
-async function updateProblemIntelligence(problem: DiscoveredProblem) {
-  const { data: existingProblem, error: fetchError } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .select("*")
-    .eq("problem_title", problem.problem_title)
-    .maybeSingle();
-
-  if (fetchError) throw fetchError;
-
-  const intelligenceScore = Number(problem.opportunity_score || 70);
-
-  if (!existingProblem) {
-    const { error } = await getSupabaseAdminClient().from("problem_intelligence").insert([
-      {
-        problem_title: problem.problem_title,
-        prepared_count: 0,
-        converted_count: 0,
-        avg_pain_score: problem.pain_score,
-        avg_revenue_score: problem.revenue_score,
-        avg_urgency_score: problem.urgency_score,
-        avg_buying_signal_score: problem.buying_signal_score,
-        avg_frequency_score: problem.frequency_score,
-        avg_source_quality_score: problem.source_quality_score,
-        avg_opportunity_score: problem.opportunity_score,
-        intelligence_score: intelligenceScore,
-      },
-    ]);
-
-    if (error) throw error;
-    return;
-  }
-
-  const updatedScore = Number(
-    ((Number(existingProblem.intelligence_score || 0) + intelligenceScore) / 2).toFixed(1)
-  );
-
-  const { error } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .update({
-      avg_pain_score: problem.pain_score,
-      avg_revenue_score: problem.revenue_score,
-      avg_urgency_score: problem.urgency_score,
-      avg_buying_signal_score: problem.buying_signal_score,
-      avg_frequency_score: problem.frequency_score,
-      avg_source_quality_score: problem.source_quality_score,
-      avg_opportunity_score: problem.opportunity_score,
-      intelligence_score: updatedScore,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", existingProblem.id);
-
-  if (error) throw error;
-}
 
 export async function POST(req: Request) {
   try {
