@@ -16,7 +16,13 @@ export type {
   DiscoveryDecisionContext,
   DiscoveryInput,
   DiscoveryMetrics,
+  DiscoveryModularPipelineOptions,
+  DiscoveryModularPipelineOutputs,
+  DiscoveryModularPipelineResult,
   DiscoveryPipelineState,
+  DiscoveryPipelineStage,
+  DiscoveryPipelineStageDiagnostic,
+  DiscoveryStageStatus,
   DiscoveryResult,
   DiscoveryStage,
 } from "./types";
