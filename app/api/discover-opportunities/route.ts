@@ -17,6 +17,7 @@ import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
 import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
+import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,9 +31,11 @@ function isDiscoveryOrchestratorDiagnosticsEnabled() {
 function runDiscoveryOrchestratorDiagnostics({
   externalSources,
   moatSources,
+  legacyProblems,
 }: {
   externalSources: Source[];
   moatSources: Source[];
+  legacyProblems: ReturnType<typeof normalizeProblems>;
 }) {
   if (!isDiscoveryOrchestratorDiagnosticsEnabled()) return;
 
@@ -55,6 +58,14 @@ function runDiscoveryOrchestratorDiagnostics({
     console.info(
       "Discovery orchestrator diagnostics:",
       buildDiscoveryOrchestratorDiagnosticMetrics(result)
+    );
+
+    console.info(
+      "Discovery orchestrator shadow comparison:",
+      buildDiscoveryShadowComparisonMetrics({
+        legacyProblems,
+        orchestratorResult: result,
+      })
     );
   } catch (error) {
     console.warn("Discovery orchestrator diagnostics failed:", {
@@ -226,14 +237,18 @@ export async function POST(req: Request) {
     const externalSources = await collectExternalSources(sourcesLimit);
     const moatSources = await collectDataMoatSources();
 
-    runDiscoveryOrchestratorDiagnostics({ externalSources, moatSources });
-
     const analysis = await analyzeSignals({
       externalSources,
       moatSources,
     });
 
     const problems = normalizeProblems(analysis.problems || []);
+
+    runDiscoveryOrchestratorDiagnostics({
+      externalSources,
+      moatSources,
+      legacyProblems: problems,
+    });
 
     const { data: discoveryData, error: discoveryError } = await getSupabaseAdminClient()
       .from("opportunity_discoveries")
