@@ -19,6 +19,7 @@ import {
   type PlannedDiscoveredProblem,
 } from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
+import { evaluateDiscoveryPersistenceQuality } from "@/lib/intelligence/discovery-persistence-quality-gates";
 
 type Source = DiscoverySource;
 
@@ -131,15 +132,20 @@ function buildOrchestratorAssistedDiscoveredProblemRows({
     const plan = buildDiscoveryPersistencePlan(orchestratorResult, { discoveryId, userId });
     const validation = validateDiscoveryPersistencePlanRows(plan.rows);
     const hasInvalidRows = validation.some((result) => !result.valid);
+    const quality = evaluateDiscoveryPersistenceQuality(plan.rows, {
+      fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row,
+    });
+    const selected = plan.rows.length > 0 && !hasInvalidRows && quality.allRowsPass;
 
     console.info("Discovery orchestrator assisted persistence metrics:", {
       ...getSafePersistencePlanMetrics(plan),
-      selected: plan.rows.length > 0 && !hasInvalidRows,
+      selected,
     });
+    console.info("Discovery orchestrator assisted persistence quality gates:", quality.safeDiagnostics);
 
-    if (plan.rows.length === 0 || hasInvalidRows) return null;
+    if (!selected) return null;
 
-    return plan.rows;
+    return quality.acceptedRows;
   } catch (error) {
     console.warn("Discovery orchestrator assisted persistence failed; falling back to legacy problems:", {
       message: error instanceof Error ? error.message : "Unknown assisted persistence error.",
