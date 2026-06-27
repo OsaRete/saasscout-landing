@@ -70,3 +70,93 @@ test("validateDiscoveryAdapterSources removes sources without title, snippet, or
   assert.equal(sources.length, 1);
   assert.equal(sources[0].title, "Useful signal");
 });
+
+test("extracts richer deterministic evidence signals while preserving metadata", () => {
+  const input = adaptDiscoverySourcesToInput({
+    externalSources: [
+      {
+        title: "Manual spreadsheet workflow blocks agency billing",
+        url: "https://example.com/billing-workflow",
+        snippet:
+          "Agency teams lose revenue because they manually copy billing approvals into spreadsheets every Friday while paying for multiple tools.",
+        raw_text:
+          "Agency teams lose revenue because they manually copy billing approvals into spreadsheets every Friday while paying for multiple tools.",
+        source_type: "google_search",
+        source_rank: 2,
+        signal_score: 44,
+        category: "Operations",
+      },
+    ],
+    region: "US",
+  });
+
+  const evidence = input.sources?.[0];
+
+  assert.equal(evidence?.detectedProblemTitle, "Manual spreadsheet workflow blocks agency billing");
+  assert.equal(
+    evidence?.extractedClaim,
+    "Agency teams lose revenue because they manually copy billing approvals into spreadsheets every Friday while paying for multiple tools."
+  );
+  assert.ok((evidence?.painIntensity || 0) > 5);
+  assert.ok((evidence?.frequencySignal || 0) > 5);
+  assert.ok((evidence?.buyingIntentSignal || 0) > 5);
+  assert.ok((evidence?.sourceQualityScore || 0) > 5);
+  assert.equal(evidence?.confidenceScore, evidence?.sourceQualityScore);
+  assert.equal(evidence?.provenance?.raw?.source_rank, 2);
+  assert.equal(evidence?.provenance?.raw?.region, "US");
+});
+
+test("rejects generic one-word source titles and derives a useful workflow problem title", () => {
+  const input = adaptDiscoverySourcesToInput({
+    externalSources: [
+      {
+        title: "manual",
+        url: null,
+        snippet:
+          "Operations teams constantly re-enter customer approvals from email into spreadsheets, creating a recurring workflow bottleneck.",
+        source_type: "x",
+        source_rank: 1,
+        signal_score: 8,
+      },
+    ],
+  });
+
+  assert.equal(
+    input.sources?.[0].detectedProblemTitle,
+    "Operations teams constantly re-enter customer approvals from email…"
+  );
+  assert.notEqual(input.sources?.[0].detectedProblemTitle, "manual");
+});
+
+test("keeps public legacy behavior unchanged when assisted persistence remains disabled", () => {
+  const previous = process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE;
+  delete process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE;
+
+  try {
+    const input = adaptDiscoverySourcesToInput({
+      externalSources: [
+        {
+          title: "Manual client reporting is slow",
+          url: "https://example.com/reporting",
+          snippet: "Agencies still copy client updates into spreadsheets every Friday.",
+          source_type: "google_search",
+          source_rank: 1,
+        },
+      ],
+    });
+
+    assert.equal(process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE, undefined);
+    assert.deepEqual(Object.keys(input.context || {}), [
+      "market",
+      "audience",
+      "region",
+      "externalSourceCount",
+      "dataMoatSourceCount",
+      "validExternalSourceCount",
+      "validDataMoatSourceCount",
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE;
+    else process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE = previous;
+  }
+});
