@@ -14,6 +14,7 @@ import type { MonetizationDetectionResult } from "../engines/monetization";
 import type { FounderIntelligenceResult, FounderProfile } from "../engines/founder";
 import type { ConfidenceDetectionResult } from "../engines/confidence";
 import type { FeedbackEvent, FeedbackLearningResult } from "../engines/feedback";
+import type { ProblemSynthesisResult } from "./problem-synthesis";
 
 export type DiscoveryStage =
   | "initialized"
@@ -36,6 +37,7 @@ export type DiscoveryPipelineStage =
   | "founder_intelligence"
   | "confidence_evaluation"
   | "feedback_learning"
+  | "problem_intelligence_synthesis"
   | "semantic_problem_deduplication";
 
 export type DiscoveryStageStatus = "ready" | "skipped" | "completed";
@@ -102,6 +104,7 @@ export type DiscoveryModularPipelineOutputs = {
   founderIntelligence?: FounderIntelligenceResult;
   confidenceEvaluation?: ConfidenceDetectionResult;
   feedbackLearning?: FeedbackLearningResult;
+  problemIntelligenceSynthesis?: ProblemSynthesisResult;
   semanticProblemDeduplication?: ProblemDeduplicationResult;
 };
 
