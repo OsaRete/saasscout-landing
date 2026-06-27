@@ -1,4 +1,12 @@
 import type { EvidenceInput, EvidenceSourceType } from "../evidence";
+import {
+  deriveDetectedProblemTitle,
+  estimateBuyingIntentSignal,
+  estimateFrequencySignal,
+  estimatePainIntensity,
+  estimateSourceQualityScore,
+  extractConciseEvidenceClaim,
+} from "../evidence/extraction.ts";
 import type { FounderProfile } from "../engines/founder";
 import type { DiscoverySource } from "../knowledge/discovery-data-moat-sources";
 import type { DiscoveryInput } from "./types";
@@ -49,6 +57,28 @@ function normalizeSourceToEvidenceInput(
   context: Pick<DiscoverySourceAdapterInput, "market" | "audience" | "region">
 ): EvidenceInput {
   const sourceType: EvidenceSourceType = sourceGroup === "data_moat" ? "data_moat" : "external_source";
+  const combinedText = [source.title, source.snippet, source.raw_text].map(stringValue).filter(Boolean).join(" ");
+  const extractedClaim = extractConciseEvidenceClaim({
+    title: source.title,
+    snippet: source.snippet,
+    rawText: source.raw_text,
+  });
+  const detectedProblemTitle = deriveDetectedProblemTitle({
+    title: source.title,
+    snippet: source.snippet,
+    rawText: source.raw_text,
+  });
+  const painIntensity = estimatePainIntensity(combinedText);
+  const frequencySignal = estimateFrequencySignal(combinedText);
+  const buyingIntentSignal = estimateBuyingIntentSignal(combinedText);
+  const sourceQualityScore = estimateSourceQualityScore({
+    title: source.title,
+    snippet: source.snippet,
+    rawText: source.raw_text,
+    sourceUrl: source.url,
+    sourceType,
+    signalScore: source.signal_score,
+  });
 
   return {
     sourceType,
@@ -56,6 +86,13 @@ function normalizeSourceToEvidenceInput(
     sourceUrl: trimOrNull(source.url),
     capturedText:
       stringValue(source.raw_text) || stringValue(source.snippet) || stringValue(source.title),
+    extractedClaim,
+    detectedProblemTitle,
+    painIntensity,
+    frequencySignal,
+    buyingIntentSignal,
+    confidenceScore: sourceQualityScore,
+    sourceQualityScore,
     market: trimOrNull(context.market),
     audience: trimOrNull(context.audience),
     nicheCategory: trimOrNull(source.category) || source.source_type,

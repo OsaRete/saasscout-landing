@@ -16,3 +16,13 @@ export {
   normalizeWeeklyIntelligenceSourceToEvidence,
 } from "./normalize";
 export { assertValidEvidence, validateEvidence } from "./validation";
+
+export {
+  deriveDetectedProblemTitle,
+  estimateBuyingIntentSignal,
+  estimateFrequencySignal,
+  estimatePainIntensity,
+  estimateSourceQualityScore,
+  extractConciseEvidenceClaim,
+  isGenericProblemTitle,
+} from "./extraction";

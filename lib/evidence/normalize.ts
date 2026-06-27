@@ -1,5 +1,13 @@
-import { generateEvidenceFingerprint } from "./fingerprint";
-import type { Evidence, EvidenceInput, EvidenceSourceType } from "./types";
+import { generateEvidenceFingerprint } from "./fingerprint.ts";
+import {
+  deriveDetectedProblemTitle,
+  estimateBuyingIntentSignal,
+  estimateFrequencySignal,
+  estimatePainIntensity,
+  estimateSourceQualityScore,
+  extractConciseEvidenceClaim,
+} from "./extraction.ts";
+import type { Evidence, EvidenceInput, EvidenceSourceType } from "./types.ts";
 
 function trimOrNull(value: unknown) {
   if (typeof value !== "string") return null;
@@ -16,6 +24,11 @@ function normalizeScore(value: unknown) {
   const score = Number(value);
   if (!Number.isFinite(score)) return null;
   return Math.min(10, Math.max(0, Number(score.toFixed(1))));
+}
+
+function limitText(value: string | null, maxLength: number) {
+  if (!value) return null;
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1).trim()}…`;
 }
 
 function normalizeCapturedAt(value: string | Date | null | undefined) {
@@ -35,11 +48,11 @@ export function createEvidence(input: EvidenceInput): Evidence {
     sourceName: trimOrNull(input.sourceName),
     sourceUrl: trimOrNull(input.sourceUrl),
     capturedText,
-    extractedClaim: trimOrNull(input.extractedClaim),
+    extractedClaim: limitText(trimOrNull(input.extractedClaim), 220),
     market: trimOrNull(input.market),
     audience: trimOrNull(input.audience),
     nicheCategory: trimOrNull(input.nicheCategory),
-    detectedProblemTitle: trimOrNull(input.detectedProblemTitle),
+    detectedProblemTitle: limitText(trimOrNull(input.detectedProblemTitle), 120),
     painIntensity: normalizeScore(input.painIntensity),
     frequencySignal: normalizeScore(input.frequencySignal),
     buyingIntentSignal: normalizeScore(input.buyingIntentSignal),
@@ -59,22 +72,39 @@ export function normalizeExternalSourceToEvidence(
   source: Record<string, unknown>,
   context: EvidenceInput = {}
 ) {
+  const title = stringValue(source.title) || stringValue(source.source_title);
+  const snippet = stringValue(source.snippet) || stringValue(source.source_snippet);
+  const rawText = stringValue(source.raw_text);
+  const combinedText = [title, snippet, rawText].filter(Boolean).join(" ");
+  const sourceType = (context.sourceType || "external_source") as EvidenceSourceType;
+
   return createEvidence({
-    sourceType: (context.sourceType || "external_source") as EvidenceSourceType,
+    sourceType,
     sourceName: trimOrNull(source.source_name) || trimOrNull(source.sourceName),
     sourceUrl: trimOrNull(source.url) || trimOrNull(source.source_url),
-    capturedText:
-      stringValue(source.raw_text) ||
-      stringValue(source.snippet) ||
-      stringValue(source.source_snippet) ||
-      stringValue(source.title) ||
-      stringValue(source.source_title),
-    extractedClaim: trimOrNull(source.extracted_claim),
+    capturedText: rawText || snippet || title,
+    extractedClaim:
+      trimOrNull(source.extracted_claim) ||
+      extractConciseEvidenceClaim({ title, snippet, rawText }),
+    detectedProblemTitle:
+      trimOrNull(source.detected_problem_title) ||
+      deriveDetectedProblemTitle({ title, snippet, rawText }),
     nicheCategory: trimOrNull(source.category) || trimOrNull(source.source_type),
+    painIntensity: normalizeScore(source.pain_intensity) ?? estimatePainIntensity(combinedText),
     sourceQualityScore:
-      normalizeScore(source.source_quality_score) ?? normalizeScore(source.source_score),
-    buyingIntentSignal: normalizeScore(source.buying_signal_score),
-    frequencySignal: normalizeScore(source.frequency_score),
+      normalizeScore(source.source_quality_score) ??
+      normalizeScore(source.source_score) ??
+      estimateSourceQualityScore({
+        title,
+        snippet,
+        rawText,
+        sourceUrl: source.url || source.source_url,
+        sourceType,
+        signalScore: source.signal_score,
+      }),
+    buyingIntentSignal:
+      normalizeScore(source.buying_signal_score) ?? estimateBuyingIntentSignal(combinedText),
+    frequencySignal: normalizeScore(source.frequency_score) ?? estimateFrequencySignal(combinedText),
     ...context,
     provenance: {
       sourceTable: context.provenance?.sourceTable,
