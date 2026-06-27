@@ -1,3 +1,9 @@
+export {
+  adaptDiscoverySourcesToInput,
+  validateDiscoveryAdapterSources,
+  type DiscoveryAdapterSource,
+  type DiscoverySourceAdapterInput,
+} from "./discovery-source-adapter";
 export { DiscoveryOrchestrator } from "./orchestrator";
 export {
   advanceDiscoveryStage,
