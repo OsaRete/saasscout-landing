@@ -36,6 +36,26 @@ export type PlannedDiscoveredProblem = {
 
 export type PlannedProblemFieldSource = Partial<Record<keyof PlannedDiscoveredProblem, string>>;
 
+type ScoreField =
+  | "pain_score"
+  | "revenue_score"
+  | "urgency_score"
+  | "trend_score"
+  | "buying_signal_score"
+  | "frequency_score"
+  | "source_quality_score"
+  | "opportunity_score";
+
+type ScoreMappingDiagnostic = {
+  source: "engine" | "fallback";
+  inputScale: "0-10";
+  persistedScale: "1-10" | "1-100";
+  rawValue: number | null;
+  persistedValue: number;
+};
+
+type ScoreMappingDiagnostics = Partial<Record<ScoreField, ScoreMappingDiagnostic>>;
+
 export type PersistencePlanDiagnostics = {
   dry_run: true;
   planned_row_count: number;
@@ -52,6 +72,7 @@ export type PersistencePlanDiagnostics = {
   };
   fallback_fields_by_row: Array<{ rowIndex: number; fields: Array<keyof PlannedDiscoveredProblem> }>;
   field_sources_by_row: Array<{ rowIndex: number; sources: PlannedProblemFieldSource }>;
+  score_mappings_by_row: Array<{ rowIndex: number; mappings: ScoreMappingDiagnostics }>;
   warnings: PersistencePlanWarning[];
 };
 
@@ -97,16 +118,32 @@ const PLAN_FIELDS = [
   "source_evidence",
 ] as const satisfies ReadonlyArray<keyof PlannedDiscoveredProblem>;
 
-function oneToTen(value: unknown, fallback = 7) {
+export function clampPersistedOneToTen(value: unknown, fallback = 7) {
   const score = Number(value);
   if (!Number.isFinite(score)) return fallback;
   return Math.min(10, Math.max(1, score));
 }
 
-function toOpportunityScore(value: unknown, fallback = 70) {
+export function clampPersistedOpportunityScore(value: unknown, fallback = 70) {
   const score = Number(value);
   if (!Number.isFinite(score)) return fallback;
   return Math.min(100, Math.max(1, Math.round(score)));
+}
+
+export function engineScoreToPersistedOneToTen(value: unknown, fallback = 7) {
+  return clampPersistedOneToTen(value, fallback);
+}
+
+export function engineScoreToPersistedOpportunityScore(value: unknown, fallback = 70) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return fallback;
+  return clampPersistedOpportunityScore(score * 10, fallback);
+}
+
+export function safeAverageScore(values: unknown[], fallback = 7) {
+  const numbers = values.map(Number).filter(Number.isFinite);
+  if (numbers.length === 0) return fallback;
+  return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
 }
 
 function text(value: unknown, fallback: string) {
@@ -116,16 +153,6 @@ function text(value: unknown, fallback: string) {
 function joinUnique(values: Array<string | null | undefined>, fallback: string) {
   const items = [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
   return items.length > 0 ? items.join(" | ") : fallback;
-}
-
-function average(values: unknown[], fallback = 7) {
-  const numbers = values.map(Number).filter(Number.isFinite);
-  if (numbers.length === 0) return fallback;
-  return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
-}
-
-function score100To10(value: unknown, fallback = 7) {
-  return oneToTen(Math.round(Number(value) / 10), fallback);
 }
 
 function hasId(candidate: { id: string }, ids: string[]) {
@@ -223,6 +250,33 @@ export function buildDiscoveryPersistencePlan(
     const relatedConfidence = confidence.find((candidate) => candidate.context.opportunityCandidateIds.some((id) => opportunity?.id === id)) || findByNormalizedTitle(confidence, seed.normalizedTitle);
     const relatedGroup = groups.find((group) => group.candidates.some((candidate) => candidate.opportunityCandidateIds.includes(opportunity?.id || "") || candidate.painCandidateIds.some((id) => painIds.includes(id))));
     const sources: PlannedProblemFieldSource = {};
+    const scoreMappings: ScoreMappingDiagnostics = {};
+    const mapEngineScore = (field: Exclude<ScoreField, "opportunity_score">, value: unknown, fallback = 7) => {
+      const raw = Number(value);
+      const hasEngineValue = Number.isFinite(raw);
+      const persistedValue = engineScoreToPersistedOneToTen(value, fallback);
+      scoreMappings[field] = {
+        source: hasEngineValue ? "engine" : "fallback",
+        inputScale: "0-10",
+        persistedScale: "1-10",
+        rawValue: hasEngineValue ? raw : null,
+        persistedValue,
+      };
+      return persistedValue;
+    };
+    const mapEngineOpportunityScore = (value: unknown, fallback = 70) => {
+      const raw = Number(value);
+      const hasEngineValue = Number.isFinite(raw);
+      const persistedValue = engineScoreToPersistedOpportunityScore(value, fallback);
+      scoreMappings.opportunity_score = {
+        source: hasEngineValue ? "engine" : "fallback",
+        inputScale: "0-10",
+        persistedScale: "1-100",
+        rawValue: hasEngineValue ? raw : null,
+        persistedValue,
+      };
+      return persistedValue;
+    };
     const fallbackFields: Array<keyof PlannedDiscoveredProblem> = [];
     const useFallback = (field: keyof PlannedDiscoveredProblem, source: string) => {
       fallbackFields.push(field);
@@ -236,6 +290,13 @@ export function buildDiscoveryPersistencePlan(
       ...relatedPain.flatMap(collectEvidenceClaims),
       ...(relatedMonetization ? collectEvidenceClaims(relatedMonetization) : []),
     ];
+    const painRawScore = relatedPain.length > 0 ? safeAverageScore(relatedPain.map((candidate) => candidate.score.totalScore)) : seed.score?.totalScore;
+    const trendRawScore = relatedTrend.length > 0 ? safeAverageScore(relatedTrend.map((candidate) => candidate.score.totalScore)) : undefined;
+    const frequencyRawScore = relatedPain.length > 0 || relatedPattern.length > 0
+      ? safeAverageScore([...relatedPain.map((candidate) => candidate.score.frequencyScore), ...relatedPattern.map((candidate) => candidate.score.frequencyScore)])
+      : undefined;
+    const sourceQualityRawScores = [relatedConfidence?.score.evidenceQualityScore, opportunity?.score.evidenceScore, ...relatedPain.map((candidate) => candidate.score.evidenceScore)].filter((score) => Number.isFinite(Number(score)));
+    const sourceQualityRawScore = sourceQualityRawScores.length > 0 ? safeAverageScore(sourceQualityRawScores) : undefined;
     const row: PlannedDiscoveredProblem = {
       discovery_id: discoveryId || DISCOVERY_ID_PLACEHOLDER,
       user_id: userId || USER_ID_PLACEHOLDER,
@@ -243,14 +304,14 @@ export function buildDiscoveryPersistencePlan(
       problem_summary: text(opportunity?.marketContext.primaryProblem || relatedGroup?.canonical.title, `${title} appears in orchestrator dry-run signals and needs validation before persistence.`),
       affected_niches: joinUnique([opportunity?.context.nicheCategory, opportunity?.context.audience, opportunity?.context.market, ...relatedPain.map((candidate) => candidate.context.nicheCategory), ...relatedPattern.flatMap((candidate) => candidate.context.niches)], DEFAULT_NICHES),
       suggested_solutions: joinUnique([...(opportunity?.marketContext.underservedSignals || []), ...(opportunity?.marketContext.existingSolutionSignals || [])], DEFAULT_SOLUTIONS),
-      pain_score: oneToTen(average(relatedPain.map((candidate) => candidate.score.totalScore), seed.score?.totalScore) / 10),
-      revenue_score: score100To10(relatedMonetization?.score.totalScore, 7),
-      urgency_score: score100To10(opportunity?.score.problemUrgencyScore ?? seed.score?.totalScore, 7),
-      trend_score: score100To10(average(relatedTrend.map((candidate) => candidate.score.totalScore), 70), 7),
-      buying_signal_score: score100To10(relatedMonetization?.score.willingnessToPayScore ?? opportunity?.score.marketPullScore, 7),
-      frequency_score: oneToTen(average([...relatedPain.map((candidate) => candidate.score.frequencyScore), ...relatedPattern.map((candidate) => candidate.score.frequencyScore)], 7), 7),
-      source_quality_score: oneToTen(average([relatedConfidence?.score.evidenceQualityScore, opportunity?.score.evidenceScore, ...relatedPain.map((candidate) => candidate.score.evidenceScore)], 7), 7),
-      opportunity_score: toOpportunityScore(opportunity?.score.totalScore ?? seed.score?.totalScore, 70),
+      pain_score: mapEngineScore("pain_score", painRawScore, 7),
+      revenue_score: mapEngineScore("revenue_score", relatedMonetization?.score.totalScore, 7),
+      urgency_score: mapEngineScore("urgency_score", opportunity?.score.problemUrgencyScore ?? seed.score?.totalScore, 7),
+      trend_score: mapEngineScore("trend_score", trendRawScore, 7),
+      buying_signal_score: mapEngineScore("buying_signal_score", relatedMonetization?.score.willingnessToPayScore ?? opportunity?.score.marketPullScore, 7),
+      frequency_score: mapEngineScore("frequency_score", frequencyRawScore, 7),
+      source_quality_score: mapEngineScore("source_quality_score", sourceQualityRawScore, 7),
+      opportunity_score: mapEngineOpportunityScore(opportunity?.score.totalScore ?? seed.score?.totalScore, 70),
       problem_cluster: text(opportunity?.context.primaryTheme || relatedPattern[0]?.title || relatedGroup?.canonical.title, "General Workflow"),
       build_difficulty: buildDifficulty(opportunity),
       source_evidence: evidenceClaims.length > 0 ? evidenceClaims.join(" | ") : DEFAULT_EVIDENCE,
@@ -261,14 +322,14 @@ export function buildDiscoveryPersistencePlan(
     sources.problem_summary = opportunity?.marketContext.primaryProblem ? "orchestrator:opportunity.marketContext.primaryProblem" : relatedGroup?.canonical.title ? "orchestrator:deduplication.canonical.title" : "fallback:summary";
     sources.affected_niches = row.affected_niches === DEFAULT_NICHES ? "fallback:affected_niches" : "orchestrator:candidate.context";
     sources.suggested_solutions = row.suggested_solutions === DEFAULT_SOLUTIONS ? "fallback:suggested_solutions" : "orchestrator:opportunity.marketContext.solution_signals";
-    sources.pain_score = relatedPain.length > 0 ? "orchestrator:pain.score.totalScore" : "fallback:pain_score";
-    sources.revenue_score = relatedMonetization ? "orchestrator:monetization.score.totalScore" : "fallback:revenue_score";
-    sources.urgency_score = opportunity ? "orchestrator:opportunity.score.problemUrgencyScore" : "fallback:urgency_score";
-    sources.trend_score = relatedTrend.length > 0 ? "orchestrator:trend.score.totalScore" : "fallback:trend_score";
-    sources.buying_signal_score = relatedMonetization ? "orchestrator:monetization.score.willingnessToPayScore" : opportunity ? "orchestrator:opportunity.score.marketPullScore" : "fallback:buying_signal_score";
-    sources.frequency_score = relatedPain.length > 0 || relatedPattern.length > 0 ? "orchestrator:pain_pattern.frequencyScore" : "fallback:frequency_score";
-    sources.source_quality_score = relatedConfidence || opportunity || relatedPain.length > 0 ? "orchestrator:confidence_or_evidence_score" : "fallback:source_quality_score";
-    sources.opportunity_score = opportunity ? "orchestrator:opportunity.score.totalScore" : "fallback:opportunity_score";
+    sources.pain_score = scoreMappings.pain_score?.source === "engine" ? "orchestrator:engine.0-10:pain_score" : "fallback:pain_score";
+    sources.revenue_score = scoreMappings.revenue_score?.source === "engine" ? "orchestrator:engine.0-10:monetization.score.totalScore" : "fallback:revenue_score";
+    sources.urgency_score = scoreMappings.urgency_score?.source === "engine" ? "orchestrator:engine.0-10:opportunity.score.problemUrgencyScore" : "fallback:urgency_score";
+    sources.trend_score = scoreMappings.trend_score?.source === "engine" ? "orchestrator:engine.0-10:trend.score.totalScore" : "fallback:trend_score";
+    sources.buying_signal_score = scoreMappings.buying_signal_score?.source === "engine" ? "orchestrator:engine.0-10:buying_signal_score" : "fallback:buying_signal_score";
+    sources.frequency_score = scoreMappings.frequency_score?.source === "engine" ? "orchestrator:engine.0-10:pain_pattern.frequencyScore" : "fallback:frequency_score";
+    sources.source_quality_score = scoreMappings.source_quality_score?.source === "engine" ? "orchestrator:engine.0-10:confidence_or_evidence_score" : "fallback:source_quality_score";
+    sources.opportunity_score = scoreMappings.opportunity_score?.source === "engine" ? "orchestrator:engine.0-10:opportunity.score.totalScore" : "fallback:opportunity_score";
     sources.problem_cluster = row.problem_cluster === "General Workflow" ? "fallback:problem_cluster" : "orchestrator:theme_or_deduplication";
     sources.build_difficulty = opportunity ? "orchestrator:opportunity.score.buildSimplicityScore" : "fallback:build_difficulty";
     sources.source_evidence = evidenceClaims.length > 0 ? "orchestrator:candidate.evidence" : "fallback:source_evidence";
@@ -277,7 +338,7 @@ export function buildDiscoveryPersistencePlan(
       if (source.startsWith("fallback:")) fallbackFields.push(field);
     }
 
-    return { row, sources, fallbackFields: [...new Set(fallbackFields)] };
+    return { row, sources, scoreMappings, fallbackFields: [...new Set(fallbackFields)] };
   });
 
   const plannedRows = rows.map(({ row }) => row);
@@ -306,6 +367,7 @@ export function buildDiscoveryPersistencePlan(
       },
       fallback_fields_by_row: rows.map(({ fallbackFields }, rowIndex) => ({ rowIndex, fields: fallbackFields })),
       field_sources_by_row: rows.map(({ sources }, rowIndex) => ({ rowIndex, sources })),
+      score_mappings_by_row: rows.map(({ scoreMappings }, rowIndex) => ({ rowIndex, mappings: scoreMappings })),
       warnings,
     },
   };

@@ -5,6 +5,11 @@ import {
   buildDiscoveryPersistencePlan,
   isPlannedDiscoveredProblem,
   validateDiscoveryPersistencePlanRows,
+  engineScoreToPersistedOneToTen,
+  engineScoreToPersistedOpportunityScore,
+  safeAverageScore,
+  clampPersistedOneToTen,
+  clampPersistedOpportunityScore,
 } from "../lib/intelligence/discovery-orchestrator-persistence-plan.ts";
 import type { DiscoveryModularPipelineResult } from "../lib/intelligence/types.ts";
 
@@ -28,7 +33,7 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
                 sourceUrl: "https://example.com/reporting",
               },
             ],
-            score: { totalScore: 82, frequencyScore: 8, evidenceScore: 9 },
+            score: { totalScore: 8.2, frequencyScore: 8, evidenceScore: 9 },
           },
         ],
       },
@@ -49,7 +54,7 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
             id: "trend-1",
             title: "Rising reporting automation demand",
             normalizedTitle: "rising reporting automation demand",
-            score: { totalScore: 76 },
+            score: { totalScore: 7.6 },
           },
         ],
       },
@@ -81,11 +86,11 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
               },
             ],
             score: {
-              totalScore: 84,
-              problemUrgencyScore: 80,
-              marketPullScore: 78,
+              totalScore: 8.4,
+              problemUrgencyScore: 8,
+              marketPullScore: 7.8,
               buildSimplicityScore: 8,
-              evidenceScore: 86,
+              evidenceScore: 8.6,
             },
           },
         ],
@@ -98,7 +103,7 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
             normalizedTitle: "automated client reporting for agencies",
             context: { opportunityCandidateIds: ["opp-1"] },
             evidence: [],
-            score: { totalScore: 79, willingnessToPayScore: 81 },
+            score: { totalScore: 7.9, willingnessToPayScore: 8.1 },
           },
         ],
       },
@@ -109,7 +114,7 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
             title: "Automated client reporting for agencies",
             normalizedTitle: "automated client reporting for agencies",
             context: { opportunityCandidateIds: ["opp-1"] },
-            score: { evidenceQualityScore: 88 },
+            score: { evidenceQualityScore: 8.8 },
           },
         ],
       },
@@ -159,11 +164,24 @@ test("buildDiscoveryPersistencePlan maps orchestrator dry-run candidates to disc
   assert.equal(plan.rows[0].discovery_id, "discovery-1");
   assert.equal(plan.rows[0].user_id, "user-1");
   assert.equal(plan.rows[0].problem_title, "Automated client reporting for agencies");
+  assert.equal(plan.rows[0].pain_score, 8.2);
+  assert.equal(plan.rows[0].revenue_score, 7.9);
+  assert.equal(plan.rows[0].urgency_score, 8);
+  assert.equal(plan.rows[0].trend_score, 7.6);
+  assert.equal(plan.rows[0].buying_signal_score, 8.1);
+  assert.ok(Math.abs(plan.rows[0].source_quality_score - 8.8) < 0.0001);
   assert.equal(plan.rows[0].opportunity_score, 84);
   assert.equal(plan.rows[0].build_difficulty, "Easy");
   assert.equal(isPlannedDiscoveredProblem(plan.rows[0]), true);
   assert.equal(plan.diagnostics.source_candidate_counts.opportunity, 1);
-  assert.equal(plan.diagnostics.field_sources_by_row[0].sources.opportunity_score, "orchestrator:opportunity.score.totalScore");
+  assert.equal(plan.diagnostics.field_sources_by_row[0].sources.opportunity_score, "orchestrator:engine.0-10:opportunity.score.totalScore");
+  assert.deepEqual(plan.diagnostics.score_mappings_by_row[0].mappings.opportunity_score, {
+    source: "engine",
+    inputScale: "0-10",
+    persistedScale: "1-100",
+    rawValue: 8.4,
+    persistedValue: 84,
+  });
 });
 
 test("buildDiscoveryPersistencePlan keeps safe placeholders and diagnostics when outputs are incomplete", () => {
@@ -188,4 +206,57 @@ test("validateDiscoveryPersistencePlanRows rejects rows outside the discovered_p
   assert.equal(validation.valid, false);
   assert.equal(validation.errors.some((error) => error.field === "pain_score"), true);
   assert.equal(validation.errors.some((error) => error.field === "build_difficulty"), true);
+});
+
+test("score conversion helpers preserve 0-10 engine scores and scale opportunity scores", () => {
+  assert.equal(engineScoreToPersistedOneToTen(8.5), 8.5);
+  assert.equal(engineScoreToPersistedOpportunityScore(7.2), 72);
+  assert.equal(safeAverageScore([6, 8, undefined]), 7);
+});
+
+test("score conversion helpers use safe defaults and clamp invalid values", () => {
+  assert.equal(engineScoreToPersistedOneToTen(undefined), 7);
+  assert.equal(engineScoreToPersistedOpportunityScore(undefined), 70);
+  assert.equal(clampPersistedOneToTen(-4), 1);
+  assert.equal(clampPersistedOneToTen(14), 10);
+  assert.equal(clampPersistedOpportunityScore(-40), 1);
+  assert.equal(clampPersistedOpportunityScore(140), 100);
+});
+
+test("buildDiscoveryPersistencePlan does not collapse valid 0-10 engine scores to minimum persisted scores", () => {
+  const plan = buildDiscoveryPersistencePlan(createResult(), {
+    discoveryId: "discovery-1",
+    userId: "user-1",
+  });
+
+  assert.ok(plan.rows[0].pain_score > 1);
+  assert.ok(plan.rows[0].revenue_score > 1);
+  assert.ok(plan.rows[0].urgency_score > 1);
+  assert.ok(plan.rows[0].opportunity_score > 10);
+});
+
+test("buildDiscoveryPersistencePlan records score mapping fallbacks for missing score inputs", () => {
+  const plan = buildDiscoveryPersistencePlan(createResult({
+    outputs: {
+      painDetection: { candidates: [] },
+      opportunityDetection: {
+        candidates: [
+          {
+            id: "opp-missing-scores",
+            title: "Scheduling gaps for field teams",
+            normalizedTitle: "scheduling gaps for field teams",
+            context: {},
+            marketContext: {},
+            evidence: [],
+            score: {},
+          },
+        ],
+      },
+    },
+  } as unknown as Partial<DiscoveryModularPipelineResult>));
+
+  assert.equal(plan.rows[0].pain_score, 7);
+  assert.equal(plan.rows[0].opportunity_score, 70);
+  assert.equal(plan.diagnostics.score_mappings_by_row[0].mappings.pain_score?.source, "fallback");
+  assert.equal(plan.diagnostics.score_mappings_by_row[0].mappings.opportunity_score?.source, "fallback");
 });
