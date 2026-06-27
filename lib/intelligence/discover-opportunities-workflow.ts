@@ -13,7 +13,11 @@ import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
 import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
-import { buildDiscoveryPersistencePlan } from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
+import {
+  buildDiscoveryPersistencePlan,
+  validateDiscoveryPersistencePlanRows,
+  type PlannedDiscoveredProblem,
+} from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
 
 type Source = DiscoverySource;
@@ -32,6 +36,118 @@ function isDiscoveryOrchestratorDiagnosticsEnabled() {
   return process.env.DISCOVERY_ORCHESTRATOR_DIAGNOSTICS === "1";
 }
 
+function isDiscoveryOrchestratorAssistedPersistenceEnabled() {
+  return process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE === "1";
+}
+
+
+function buildLegacyDiscoveredProblemRows({
+  problems,
+  discoveryId,
+  userId,
+}: {
+  problems: ReturnType<typeof normalizeProblems>;
+  discoveryId: string;
+  userId: string;
+}) {
+  return problems.map((problem) => ({
+    discovery_id: discoveryId,
+    user_id: userId,
+    problem_title: problem.problem_title,
+    problem_summary: problem.problem_summary,
+    affected_niches: problem.affected_niches,
+    suggested_solutions: problem.suggested_solutions,
+    pain_score: problem.pain_score,
+    revenue_score: problem.revenue_score,
+    urgency_score: problem.urgency_score,
+    trend_score: problem.trend_score,
+    buying_signal_score: problem.buying_signal_score,
+    frequency_score: problem.frequency_score,
+    source_quality_score: problem.source_quality_score,
+    opportunity_score: problem.opportunity_score,
+    problem_cluster: problem.problem_cluster,
+    build_difficulty: problem.build_difficulty,
+    source_evidence: problem.source_evidence,
+  }));
+}
+
+function runDiscoveryOrchestratorDryRun({
+  externalSources,
+  moatSources,
+  mode,
+}: {
+  externalSources: Source[];
+  moatSources: Source[];
+  mode: string;
+}) {
+  const input = adaptDiscoverySourcesToInput({
+    externalSources,
+    moatSources,
+    context: {
+      integration: "discover-opportunities",
+      mode,
+    },
+    requestedAt: new Date(),
+  });
+
+  return new DiscoveryOrchestrator().runModularPipeline(input, {
+    enabled: true,
+    dryRun: true,
+  });
+}
+
+function getSafePersistencePlanMetrics(plan: ReturnType<typeof buildDiscoveryPersistencePlan>) {
+  return {
+    planned_row_count: plan.diagnostics.planned_row_count,
+    valid_row_count: plan.diagnostics.valid_row_count,
+    invalid_row_count: plan.diagnostics.invalid_row_count,
+    warning_count: plan.diagnostics.warnings.length,
+    source_candidate_counts: plan.diagnostics.source_candidate_counts,
+  };
+}
+
+function buildOrchestratorAssistedDiscoveredProblemRows({
+  externalSources,
+  moatSources,
+  discoveryId,
+  userId,
+}: {
+  externalSources: Source[];
+  moatSources: Source[];
+  discoveryId: string;
+  userId: string;
+}): PlannedDiscoveredProblem[] | null {
+  if (!isDiscoveryOrchestratorAssistedPersistenceEnabled()) return null;
+
+  try {
+    // First controlled step toward replacing legacy prompt-derived persistence with
+    // orchestrator-assisted intelligence: the orchestrator remains dry-run only,
+    // and its discovered_problems-compatible plan is used only behind an explicit flag.
+    const orchestratorResult = runDiscoveryOrchestratorDryRun({
+      externalSources,
+      moatSources,
+      mode: "assisted_persistence_dry_run",
+    });
+    const plan = buildDiscoveryPersistencePlan(orchestratorResult, { discoveryId, userId });
+    const validation = validateDiscoveryPersistencePlanRows(plan.rows);
+    const hasInvalidRows = validation.some((result) => !result.valid);
+
+    console.info("Discovery orchestrator assisted persistence metrics:", {
+      ...getSafePersistencePlanMetrics(plan),
+      selected: plan.rows.length > 0 && !hasInvalidRows,
+    });
+
+    if (plan.rows.length === 0 || hasInvalidRows) return null;
+
+    return plan.rows;
+  } catch (error) {
+    console.warn("Discovery orchestrator assisted persistence failed; falling back to legacy problems:", {
+      message: error instanceof Error ? error.message : "Unknown assisted persistence error.",
+    });
+    return null;
+  }
+}
+
 function runDiscoveryOrchestratorDiagnostics({
   externalSources,
   moatSources,
@@ -44,19 +160,10 @@ function runDiscoveryOrchestratorDiagnostics({
   if (!isDiscoveryOrchestratorDiagnosticsEnabled()) return;
 
   try {
-    const input = adaptDiscoverySourcesToInput({
+    const result = runDiscoveryOrchestratorDryRun({
       externalSources,
       moatSources,
-      context: {
-        integration: "discover-opportunities",
-        mode: "diagnostic_dry_run",
-      },
-      requestedAt: new Date(),
-    });
-
-    const result = new DiscoveryOrchestrator().runModularPipeline(input, {
-      enabled: true,
-      dryRun: true,
+      mode: "diagnostic_dry_run",
     });
 
     console.info(
@@ -271,34 +378,40 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     throw discoveryError || new Error("Could not save discovery.");
   }
 
-  const problemsToInsert = problems.map((problem) => ({
-    discovery_id: discoveryData.id,
-    user_id: userId,
-    problem_title: problem.problem_title,
-    problem_summary: problem.problem_summary,
-    affected_niches: problem.affected_niches,
-    suggested_solutions: problem.suggested_solutions,
-    pain_score: problem.pain_score,
-    revenue_score: problem.revenue_score,
-    urgency_score: problem.urgency_score,
-    trend_score: problem.trend_score,
-    buying_signal_score: problem.buying_signal_score,
-    frequency_score: problem.frequency_score,
-    source_quality_score: problem.source_quality_score,
-    opportunity_score: problem.opportunity_score,
-    problem_cluster: problem.problem_cluster,
-    build_difficulty: problem.build_difficulty,
-    source_evidence: problem.source_evidence,
-  }));
+  const legacyProblemsToInsert = buildLegacyDiscoveredProblemRows({
+    problems,
+    discoveryId: discoveryData.id,
+    userId,
+  });
+  const orchestratorProblemsToInsert = buildOrchestratorAssistedDiscoveredProblemRows({
+    externalSources,
+    moatSources,
+    discoveryId: discoveryData.id,
+    userId,
+  });
+  let problemsToInsert = orchestratorProblemsToInsert || legacyProblemsToInsert;
 
-  const { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
+  let { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
     .from("discovered_problems")
     .insert(problemsToInsert)
     .select();
 
+  if (problemsError && orchestratorProblemsToInsert) {
+    console.warn("Discovery orchestrator assisted persistence insert failed; retrying legacy problems:", {
+      message: problemsError instanceof Error ? problemsError.message : "Unknown discovered_problems insert error.",
+    });
+    problemsToInsert = legacyProblemsToInsert;
+    const legacyInsert = await getSupabaseAdminClient()
+      .from("discovered_problems")
+      .insert(problemsToInsert)
+      .select();
+    insertedProblems = legacyInsert.data;
+    problemsError = legacyInsert.error;
+  }
+
   if (problemsError) throw problemsError;
 
-  for (const problem of problems) {
+  for (const problem of problemsToInsert) {
     await updateProblemIntelligence(problem);
   }
 
