@@ -9,19 +9,15 @@ import {
   normalizeProblems,
   type DiscoveredProblem,
 } from "@/lib/intelligence/discovery-response-normalization";
+import {
+  collectDataMoatSources,
+  type DiscoverySource,
+} from "@/lib/knowledge/discovery-data-moat-sources";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Source = {
-  title: string;
-  url: string | null;
-  snippet: string | null;
-  source_type: "google_search" | "x" | "data_moat";
-  source_rank: number;
-  signal_score?: number;
-  category?: string | null;
-};
+type Source = DiscoverySource;
 
 type XTweet = {
   id: string;
@@ -287,65 +283,6 @@ async function collectExternalSources(sourcesLimit: number) {
   return Array.from(unique.values()).slice(0, sourcesLimit);
 }
 
-async function collectDataMoatSources() {
-  const { data: intelligence } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .select("*")
-    .order("intelligence_score", { ascending: false })
-    .limit(15);
-
-  const { data: weeklyProblems } = await getSupabaseAdminClient()
-    .from("weekly_detected_problems")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(15);
-
-  const { data: weeklySources } = await getSupabaseAdminClient()
-    .from("weekly_sources")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  const moatSources: Source[] = [];
-
-  for (const item of intelligence || []) {
-    moatSources.push({
-      title: `Data Moat Problem: ${item.problem_title}`,
-      url: null,
-      snippet: `Known problem. Intelligence score: ${item.intelligence_score}. Prepared: ${item.prepared_count}. Converted: ${item.converted_count}.`,
-      source_type: "data_moat",
-      source_rank: moatSources.length + 1,
-      signal_score: Number(item.intelligence_score || 0),
-      category: "Data Moat",
-    });
-  }
-
-  for (const item of weeklyProblems || []) {
-    moatSources.push({
-      title: `Weekly Problem: ${item.problem_title}`,
-      url: null,
-      snippet: `${item.problem_summary || ""} Evidence: ${item.source_evidence || ""}`,
-      source_type: "data_moat",
-      source_rank: moatSources.length + 1,
-      signal_score: Number(item.trend_score || 0) * 10,
-      category: "Weekly Intelligence",
-    });
-  }
-
-  for (const item of weeklySources || []) {
-    moatSources.push({
-      title: item.source_title || "Weekly Source",
-      url: item.source_url || null,
-      snippet: item.source_snippet || null,
-      source_type: "data_moat",
-      source_rank: moatSources.length + 1,
-      signal_score: Number(item.signal_score || 0),
-      category: item.category || "Weekly Source",
-    });
-  }
-
-  return moatSources.slice(0, 30);
-}
 
 async function analyzeSignals({
   externalSources,
