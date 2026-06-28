@@ -3,3 +3,6 @@ export { DEFAULT_PROBLEM_EVOLUTION_OPTIONS, aggregateEvidenceCount, aggregateSou
 export type { ProblemEvolutionAssessment, ProblemEvolutionClassifierInput, ProblemEvolutionClassifierOptions, ProblemEvolutionLifecycleState, ProblemEvolutionObservation, ProblemEvolutionReason, ProblemEvolutionScores } from "./types.ts";
 
 export { discoveredProblemRowToEvolutionObservation, problemIntelligenceRowToEvolutionObservation, weeklyDetectedProblemRowToEvolutionObservation, weeklySourceRowToEvolutionObservation, type EvolutionSourceTable, type RowLike } from "./adapters/index.ts";
+
+export { assessProblemEvolution, getProblemEvolutionObservations, getRecentProblemEvolutionAssessments } from "./repository.ts";
+export type { KnowledgeEvolutionSupabaseClient, ProblemEvolutionAssessmentResult, ProblemEvolutionObservationsResult, ProblemEvolutionRepositoryDiagnostics, ProblemEvolutionRepositoryOptions, ProblemEvolutionSourceDiagnostic, RecentProblemEvolutionAssessmentsResult } from "./repository.ts";
