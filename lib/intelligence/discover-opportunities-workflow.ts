@@ -22,6 +22,10 @@ import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discov
 import { evaluateDiscoveryPersistenceQuality } from "@/lib/intelligence/discovery-persistence-quality-gates";
 import { buildDiscoveryQualityComparison } from "@/lib/intelligence/quality-comparison";
 import { decideDiscoveryPipeline } from "@/lib/intelligence/decision";
+import {
+  buildSafeAssistedPersistenceDecisionDiagnostics,
+  selectDecisionGatedAssistedPersistenceRows,
+} from "@/lib/intelligence/discovery-assisted-persistence-decision";
 
 type Source = DiscoverySource;
 
@@ -112,11 +116,13 @@ function getSafePersistencePlanMetrics(plan: ReturnType<typeof buildDiscoveryPer
 function buildOrchestratorAssistedDiscoveredProblemRows({
   externalSources,
   moatSources,
+  legacyProblems,
   discoveryId,
   userId,
 }: {
   externalSources: Source[];
   moatSources: Source[];
+  legacyProblems: ReturnType<typeof normalizeProblems>;
   discoveryId: string;
   userId: string;
 }): PlannedDiscoveredProblem[] | null {
@@ -133,21 +139,38 @@ function buildOrchestratorAssistedDiscoveredProblemRows({
     });
     const plan = buildDiscoveryPersistencePlan(orchestratorResult, { discoveryId, userId });
     const validation = validateDiscoveryPersistencePlanRows(plan.rows);
-    const hasInvalidRows = validation.some((result) => !result.valid);
-    const quality = evaluateDiscoveryPersistenceQuality(plan.rows, {
+    const qualityGateResult = evaluateDiscoveryPersistenceQuality(plan.rows, {
       fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row,
     });
-    const selected = plan.rows.length > 0 && !hasInvalidRows && quality.allRowsPass;
-
-    console.info("Discovery orchestrator assisted persistence metrics:", {
-      ...getSafePersistencePlanMetrics(plan),
-      selected,
+    const qualityComparison = buildDiscoveryQualityComparison({
+      legacyProblems,
+      orchestratorResult,
     });
-    console.info("Discovery orchestrator assisted persistence quality gates:", quality.safeDiagnostics);
+    const orchestratorDiagnostics = buildDiscoveryOrchestratorDiagnosticMetrics(orchestratorResult);
+    const decisionResult = decideDiscoveryPipeline({
+      legacyProblems,
+      persistencePlan: plan,
+      qualityGateResult,
+      qualityComparison,
+      orchestratorDiagnostics,
+    });
+    const selectedRows = selectDecisionGatedAssistedPersistenceRows({
+      plannedRows: plan.rows,
+      validation,
+      qualityGateResult,
+      decisionResult,
+    });
 
-    if (!selected) return null;
+    console.info("Discovery orchestrator assisted persistence decision:", buildSafeAssistedPersistenceDecisionDiagnostics({
+      decisionResult,
+      qualityGatePassed: qualityGateResult.allRowsPass,
+      plannedRowCount: plan.diagnostics.planned_row_count,
+      fallbackUsed: selectedRows === null,
+    }));
 
-    return quality.acceptedRows;
+    console.info("Discovery orchestrator assisted persistence metrics:", getSafePersistencePlanMetrics(plan));
+
+    return selectedRows;
   } catch (error) {
     console.warn("Discovery orchestrator assisted persistence failed; falling back to legacy problems:", {
       message: error instanceof Error ? error.message : "Unknown assisted persistence error.",
@@ -422,6 +445,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   const orchestratorProblemsToInsert = buildOrchestratorAssistedDiscoveredProblemRows({
     externalSources,
     moatSources,
+    legacyProblems: problems,
     discoveryId: discoveryData.id,
     userId,
   });
