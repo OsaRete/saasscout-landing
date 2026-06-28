@@ -15,6 +15,7 @@ export type ProblemEvolutionReason =
   | "historical_comparison_available";
 
 export type ProblemEvolutionObservation = {
+  problem_title?: string | null;
   observedAt?: string | Date | null;
   pain_score?: number | null;
   revenue_score?: number | null;
@@ -25,9 +26,23 @@ export type ProblemEvolutionObservation = {
   source_quality_score?: number | null;
   opportunity_score?: number | null;
   intelligence_score?: number | null;
+  prepared_count?: number | null;
+  converted_count?: number | null;
   source_count?: number | null;
   evidence_count?: number | null;
   source_types?: string[] | null;
+  first_seen_at?: string | Date | null;
+  last_seen_at?: string | Date | null;
+  problem_cluster?: string | null;
+  source_evidence?: string | null;
+  provenance?: {
+    source_table: string;
+    row_id?: string | null;
+    discovery_id?: string | null;
+    user_id?: string | null;
+    source_url?: string | null;
+    source_rank?: number | null;
+  };
 };
 
 export type ProblemEvolutionClassifierInput = {
