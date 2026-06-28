@@ -21,6 +21,7 @@ import {
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
 import { evaluateDiscoveryPersistenceQuality } from "@/lib/intelligence/discovery-persistence-quality-gates";
 import { buildDiscoveryQualityComparison } from "@/lib/intelligence/quality-comparison";
+import { decideDiscoveryPipeline } from "@/lib/intelligence/decision";
 
 type Source = DiscoverySource;
 
@@ -173,29 +174,49 @@ function runDiscoveryOrchestratorDiagnostics({
       mode: "diagnostic_dry_run",
     });
 
+    const orchestratorDiagnostics = buildDiscoveryOrchestratorDiagnosticMetrics(result);
+
     console.info(
       "Discovery orchestrator diagnostics:",
-      buildDiscoveryOrchestratorDiagnosticMetrics(result)
+      orchestratorDiagnostics
     );
+    const shadowComparisonMetrics = buildDiscoveryShadowComparisonMetrics({
+      legacyProblems,
+      orchestratorResult: result,
+    });
+    const persistencePlan = buildDiscoveryPersistencePlan(result);
+    const qualityGateResult = evaluateDiscoveryPersistenceQuality(persistencePlan.rows, {
+      fallbackFieldsByRow: persistencePlan.diagnostics.fallback_fields_by_row,
+    });
+    const qualityComparison = buildDiscoveryQualityComparison({
+      legacyProblems,
+      orchestratorResult: result,
+    });
 
     console.info(
       "Discovery orchestrator shadow comparison:",
-      buildDiscoveryShadowComparisonMetrics({
-        legacyProblems,
-        orchestratorResult: result,
-      })
+      shadowComparisonMetrics
     );
 
     console.info(
       "Discovery orchestrator persistence plan diagnostics:",
-      buildDiscoveryPersistencePlan(result).diagnostics
+      persistencePlan.diagnostics
     );
 
     console.info(
       "Discovery quality comparison diagnostics:",
-      buildDiscoveryQualityComparison({
+      qualityComparison
+    );
+
+    console.info(
+      "Discovery decision diagnostics:",
+      decideDiscoveryPipeline({
         legacyProblems,
-        orchestratorResult: result,
+        persistencePlan,
+        qualityGateResult,
+        qualityComparison,
+        orchestratorDiagnostics,
+        shadowComparisonMetrics,
       })
     );
   } catch (error) {
