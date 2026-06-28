@@ -1,0 +1,206 @@
+import type { DiscoveredProblem } from "../discovery-response-normalization.ts";
+import {
+  buildDiscoveryPersistencePlan,
+  type PlannedDiscoveredProblem,
+} from "../discovery-orchestrator-persistence-plan.ts";
+import { evaluateDiscoveryPersistenceQuality } from "../discovery-persistence-quality-gates.ts";
+import type { DiscoveryModularPipelineResult } from "../types.ts";
+import type {
+  DiscoveryQualityComparison,
+  LegacyQualityMetrics,
+  ModularQualityMetrics,
+  QualityCategory,
+  QualityCategoryScore,
+  QualityComparisonWinner,
+} from "./types.ts";
+
+export type { DiscoveryQualityComparison, LegacyQualityMetrics, ModularQualityMetrics, QualityCategoryScore, QualityComparisonDiagnostics } from "./types.ts";
+
+const CATEGORIES: QualityCategory[] = [
+  "title_specificity",
+  "summary_quality",
+  "evidence_quality",
+  "evidence_compactness",
+  "score_consistency",
+  "opportunity_completeness",
+  "market_coverage",
+  "fallback_usage",
+  "synthesis_completeness",
+  "quality_gate_results",
+];
+
+const SCORE_FIELDS = [
+  "pain_score",
+  "revenue_score",
+  "urgency_score",
+  "trend_score",
+  "buying_signal_score",
+  "frequency_score",
+  "source_quality_score",
+] as const;
+
+type ComparableProblem = Pick<PlannedDiscoveredProblem, "problem_title" | "problem_summary" | "affected_niches" | "suggested_solutions" | "source_evidence" | "opportunity_score" | (typeof SCORE_FIELDS)[number]>;
+
+function clampScore(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, Math.round(value * 100) / 100));
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return 0;
+  return clampScore(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function words(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+}
+
+function titleSpecificity(row: ComparableProblem) {
+  const tokens = words(row.problem_title || "");
+  const unique = new Set(tokens);
+  const lengthScore = Math.min(1, tokens.length / 5);
+  const uniquenessScore = tokens.length === 0 ? 0 : unique.size / tokens.length;
+  const genericPenalty = tokens.length <= 2 ? 0.65 : 1;
+  return clampScore(((lengthScore * 0.65 + uniquenessScore * 0.35) * 100) * genericPenalty);
+}
+
+function summaryQuality(row: ComparableProblem) {
+  const summaryTokens = words(row.problem_summary || "");
+  const titleTokens = new Set(words(row.problem_title || ""));
+  const overlap = summaryTokens.filter((token) => titleTokens.has(token)).length / Math.max(1, summaryTokens.length);
+  return clampScore(Math.min(1, summaryTokens.length / 22) * 80 + (1 - Math.min(0.5, overlap)) * 20);
+}
+
+function evidenceQuality(row: ComparableProblem) {
+  const evidenceTokens = words(row.source_evidence || "");
+  const sourceHint = /https?:\/\/|reddit|x\.com|hacker news|github|review|source/i.test(row.source_evidence || "") ? 20 : 0;
+  return clampScore(Math.min(1, evidenceTokens.length / 28) * 80 + sourceHint);
+}
+
+function evidenceCompactness(row: ComparableProblem) {
+  const length = (row.source_evidence || "").length;
+  if (length === 0) return 0;
+  if (length <= 900) return 100;
+  return clampScore(100 - ((length - 900) / 900) * 100);
+}
+
+function scoreConsistency(row: ComparableProblem) {
+  const primary = SCORE_FIELDS.map((field) => Number(row[field])).filter(Number.isFinite);
+  if (primary.length === 0 || !Number.isFinite(row.opportunity_score)) return 0;
+  const averagePrimary = average(primary.map((score) => score * 10));
+  return clampScore(100 - Math.abs(averagePrimary - Number(row.opportunity_score)));
+}
+
+function completeness(row: ComparableProblem) {
+  const populated = [row.problem_title, row.problem_summary, row.affected_niches, row.suggested_solutions, row.source_evidence]
+    .filter((value) => typeof value === "string" && value.trim()).length;
+  const validScores = [...SCORE_FIELDS, "opportunity_score" as const].filter((field) => Number.isFinite(row[field])).length;
+  return clampScore(((populated / 5) * 0.55 + (validScores / 8) * 0.45) * 100);
+}
+
+function marketCoverage(rows: ComparableProblem[]) {
+  const niches = new Set(rows.flatMap((row) => row.affected_niches.split("|").map((item) => item.trim().toLowerCase()).filter(Boolean)));
+  return clampScore(Math.min(1, niches.size / 5) * 100);
+}
+
+function metricsForRows(rows: ComparableProblem[], synthesisCompletenessScore: number, fallbackUsageScore: number, qualityGateScore: number): LegacyQualityMetrics {
+  return {
+    problemCount: rows.length,
+    averageTitleSpecificity: average(rows.map(titleSpecificity)),
+    averageSummaryQuality: average(rows.map(summaryQuality)),
+    averageEvidenceQuality: average(rows.map(evidenceQuality)),
+    averageEvidenceCompactness: average(rows.map(evidenceCompactness)),
+    averageScoreConsistency: average(rows.map(scoreConsistency)),
+    averageOpportunityCompleteness: average(rows.map(completeness)),
+    marketCoverageScore: marketCoverage(rows),
+    fallbackUsageScore,
+    synthesisCompletenessScore,
+    qualityGateScore,
+  };
+}
+
+function pick(metrics: LegacyQualityMetrics, category: QualityCategory) {
+  if (category === "title_specificity") return metrics.averageTitleSpecificity;
+  if (category === "summary_quality") return metrics.averageSummaryQuality;
+  if (category === "evidence_quality") return metrics.averageEvidenceQuality;
+  if (category === "evidence_compactness") return metrics.averageEvidenceCompactness;
+  if (category === "score_consistency") return metrics.averageScoreConsistency;
+  if (category === "opportunity_completeness") return metrics.averageOpportunityCompleteness;
+  if (category === "market_coverage") return metrics.marketCoverageScore;
+  if (category === "fallback_usage") return metrics.fallbackUsageScore;
+  if (category === "synthesis_completeness") return metrics.synthesisCompletenessScore;
+  return metrics.qualityGateScore;
+}
+
+function winner(legacyScore: number, modularScore: number): QualityComparisonWinner {
+  if (legacyScore === 0 && modularScore === 0) return "insufficient_data";
+  if (Math.abs(legacyScore - modularScore) < 0.01) return "tie";
+  return modularScore > legacyScore ? "modular" : "legacy";
+}
+
+function buildCategories(legacyMetrics: LegacyQualityMetrics, modularMetrics: ModularQualityMetrics): QualityCategoryScore[] {
+  return CATEGORIES.map((category) => {
+    const legacyScore = pick(legacyMetrics, category);
+    const modularScore = pick(modularMetrics, category);
+    return {
+      category,
+      legacyScore,
+      modularScore,
+      winner: winner(legacyScore, modularScore),
+      diagnostics: [`${category} legacy=${legacyScore} modular=${modularScore}`],
+    };
+  });
+}
+
+export function buildDiscoveryQualityComparison({
+  legacyProblems,
+  orchestratorResult,
+}: {
+  legacyProblems: DiscoveredProblem[];
+  orchestratorResult: DiscoveryModularPipelineResult;
+}): DiscoveryQualityComparison {
+  const plan = buildDiscoveryPersistencePlan(orchestratorResult);
+  const quality = evaluateDiscoveryPersistenceQuality(plan.rows, { fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row });
+  const synthesisCandidateCount = orchestratorResult.outputs.problemIntelligenceSynthesis?.candidates.length || 0;
+  const modularCandidateCount = orchestratorResult.outputs.opportunityDetection?.candidates.length || plan.rows.length;
+  const legacyMetrics = metricsForRows(legacyProblems, legacyProblems.length > 0 ? 100 : 0, 100, legacyProblems.length > 0 ? 100 : 0);
+  const fallbackFieldCount = plan.diagnostics.fallback_fields_by_row.reduce((sum, row) => sum + row.fields.length, 0);
+  const modularFallbackScore = plan.rows.length === 0 ? 0 : clampScore(100 - (fallbackFieldCount / Math.max(1, plan.rows.length * 5)) * 100);
+  const modularSynthesisScore = modularCandidateCount === 0 ? 0 : clampScore((synthesisCandidateCount / Math.max(1, modularCandidateCount)) * 100);
+  const modularQualityGateScore = plan.rows.length === 0 ? 0 : clampScore((quality.summary.accepted_row_count / plan.rows.length) * 100 - quality.summary.issue_count * 5);
+  const baseModularMetrics = metricsForRows(plan.rows, modularSynthesisScore, modularFallbackScore, modularQualityGateScore);
+  const modularMetrics: ModularQualityMetrics = {
+    ...baseModularMetrics,
+    plannedRowCount: plan.rows.length,
+    synthesisCandidateCount,
+    qualityGateAcceptedRows: quality.summary.accepted_row_count,
+    qualityGateRejectedRows: quality.summary.rejected_row_count,
+    fallbackFieldCount,
+    orchestratorWarningCount: orchestratorResult.warnings.length,
+  };
+  const categories = buildCategories(legacyMetrics, modularMetrics);
+  const overallLegacyScore = average(categories.map((category) => category.legacyScore));
+  const overallModularScore = average(categories.map((category) => category.modularScore));
+
+  return {
+    categories,
+    legacyMetrics,
+    modularMetrics,
+    overallLegacyScore,
+    overallModularScore,
+    overallWinner: winner(overallLegacyScore, overallModularScore),
+    diagnostics: {
+      categoryCount: categories.length,
+      legacyProblemCount: legacyProblems.length,
+      modularCandidateCount,
+      modularPlannedRowCount: plan.rows.length,
+      modularSynthesisCandidateCount: synthesisCandidateCount,
+      fallbackFieldCount,
+      qualityGateIssueCount: quality.summary.issue_count,
+      notes: [
+        "Quality comparison is diagnostic-only and has no production persistence side effects.",
+        "Scores are deterministic heuristics intended to measure migration parity before replacing the legacy pipeline.",
+      ],
+    },
+  };
+}

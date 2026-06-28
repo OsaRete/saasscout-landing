@@ -20,6 +20,7 @@ import {
 } from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
 import { evaluateDiscoveryPersistenceQuality } from "@/lib/intelligence/discovery-persistence-quality-gates";
+import { buildDiscoveryQualityComparison } from "@/lib/intelligence/quality-comparison";
 
 type Source = DiscoverySource;
 
@@ -188,6 +189,14 @@ function runDiscoveryOrchestratorDiagnostics({
     console.info(
       "Discovery orchestrator persistence plan diagnostics:",
       buildDiscoveryPersistencePlan(result).diagnostics
+    );
+
+    console.info(
+      "Discovery quality comparison diagnostics:",
+      buildDiscoveryQualityComparison({
+        legacyProblems,
+        orchestratorResult: result,
+      })
     );
   } catch (error) {
     console.warn("Discovery orchestrator diagnostics failed:", {
