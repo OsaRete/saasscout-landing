@@ -11,6 +11,7 @@ import {
   clampPersistedOneToTen,
   clampPersistedOpportunityScore,
 } from "../lib/intelligence/discovery-orchestrator-persistence-plan.ts";
+import { evaluateDiscoveryPersistenceQuality } from "../lib/intelligence/discovery-persistence-quality-gates.ts";
 import type { DiscoveryModularPipelineResult } from "../lib/intelligence/types.ts";
 
 function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
@@ -259,4 +260,118 @@ test("buildDiscoveryPersistencePlan records score mapping fallbacks for missing 
   assert.equal(plan.rows[0].opportunity_score, 70);
   assert.equal(plan.diagnostics.score_mappings_by_row[0].mappings.pain_score?.source, "fallback");
   assert.equal(plan.diagnostics.score_mappings_by_row[0].mappings.opportunity_score?.source, "fallback");
+});
+
+test("buildDiscoveryPersistencePlan prefers problem synthesis candidates when available", () => {
+  const plan = buildDiscoveryPersistencePlan(createResult({
+    outputs: {
+      ...createResult().outputs,
+      problemIntelligenceSynthesis: {
+        runId: "planner-run",
+        synthesizedAt: "2026-06-27T00:00:00.000Z",
+        candidates: [
+          {
+            id: "synthesis-1",
+            synthesizedProblemTitle: "Synthesized reporting operations bottleneck",
+            synthesizedSummary: "Small agencies repeatedly lose delivery time because client reporting evidence is scattered across disconnected systems.",
+            affectedMarkets: ["Agency services"],
+            affectedAudiences: ["Small agencies"],
+            suggestedSolutions: ["Automated evidence-backed report assembly"],
+            conciseEvidenceSummary: "Agencies still copy weekly updates into spreadsheets. Repeated reporting friction appears in live sources.",
+            canonicalProblemCluster: "Client reporting automation",
+            scoreBreakdown: {
+              painScore: 8.3,
+              urgencyScore: 7.4,
+              frequencyScore: 6.9,
+              trendScore: 7.1,
+              opportunityScore: 8.6,
+              revenueScore: 7.7,
+              buyingSignalScore: 7.8,
+              sourceQualityScore: 8.9,
+              confidenceScore: 8.2,
+              totalScore: 7.99,
+            },
+            supportingEvidenceReferences: ["evidence-1 — Google Search — https://example.com/reporting"],
+            confidence: 8.2,
+            narrative: { title: "Synthesized reporting operations bottleneck", summary: "summary", primaryTheme: "Client reporting automation", rationale: [] },
+            evidenceSummary: { evidenceCount: 2, sourceCount: 1, sourceNames: ["Google Search"], markets: ["Agency services"], audiences: ["Small agencies"], claims: [], references: [], summary: "summary" },
+            diagnostics: { synthesizedTitle: "Synthesized reporting operations bottleneck", synthesizedSummary: "summary", evidenceCount: 2, evidenceReferences: [], confidence: 8.2, synthesisCompleteness: 1, engineCandidateCounts: { pain: 1, pattern: 1, trend: 1, opportunity: 1, monetization: 1, confidence: 1, feedback: 0 }, warnings: [] },
+          },
+        ],
+        diagnostics: [],
+        warnings: [],
+        summary: { evidenceCount: 2, candidateCount: 1, averageConfidence: 8.2, averageCompleteness: 1 },
+      },
+    },
+  } as unknown as Partial<DiscoveryModularPipelineResult>), { discoveryId: "discovery-1", userId: "user-1" });
+
+  assert.equal(plan.rows[0].problem_title, "Synthesized reporting operations bottleneck");
+  assert.equal(plan.rows[0].problem_summary, "Small agencies repeatedly lose delivery time because client reporting evidence is scattered across disconnected systems.");
+  assert.equal(plan.rows[0].source_evidence, "Agencies still copy weekly updates into spreadsheets. Repeated reporting friction appears in live sources.");
+  assert.equal(plan.rows[0].pain_score, 8.3);
+  assert.equal(plan.rows[0].revenue_score, 7.7);
+  assert.equal(plan.rows[0].urgency_score, 7.4);
+  assert.equal(plan.rows[0].trend_score, 7.1);
+  assert.equal(plan.rows[0].buying_signal_score, 7.8);
+  assert.equal(plan.rows[0].frequency_score, 6.9);
+  assert.equal(plan.rows[0].source_quality_score, 8.9);
+  assert.equal(plan.rows[0].opportunity_score, 86);
+  assert.equal(plan.diagnostics.source_candidate_counts.problem_synthesis, 1);
+  assert.equal(plan.diagnostics.row_sources[0].source, "mixed_fallback");
+  assert.equal(plan.diagnostics.field_sources_by_row[0].sources.problem_title, "orchestrator:problem_synthesis.synthesizedProblemTitle");
+  assert.deepEqual(plan.diagnostics.score_mappings_by_row[0].mappings.opportunity_score, {
+    source: "engine",
+    inputScale: "0-10",
+    persistedScale: "1-100",
+    rawValue: 8.6,
+    persistedValue: 86,
+  });
+});
+
+test("buildDiscoveryPersistencePlan falls back to seed candidates when synthesis is missing", () => {
+  const plan = buildDiscoveryPersistencePlan(createResult(), { discoveryId: "discovery-1", userId: "user-1" });
+
+  assert.equal(plan.rows[0].problem_title, "Automated client reporting for agencies");
+  assert.equal(plan.diagnostics.row_sources[0].source, "seed_fallback");
+});
+
+
+test("quality gates still reject weak synthesis-planned rows", () => {
+  const plan = buildDiscoveryPersistencePlan(createResult({
+    outputs: {
+      problemIntelligenceSynthesis: {
+        runId: "planner-run",
+        synthesizedAt: "2026-06-27T00:00:00.000Z",
+        candidates: [
+          {
+            id: "weak-synthesis",
+            synthesizedProblemTitle: "Billing",
+            synthesizedSummary: "Billing.",
+            affectedMarkets: [],
+            affectedAudiences: [],
+            suggestedSolutions: [],
+            conciseEvidenceSummary: "",
+            canonicalProblemCluster: "",
+            scoreBreakdown: { painScore: 1, urgencyScore: 1, frequencyScore: 1, trendScore: 1, opportunityScore: 1, revenueScore: 1, buyingSignalScore: 1, sourceQualityScore: 1, confidenceScore: 1, totalScore: 1 },
+            supportingEvidenceReferences: [],
+            confidence: 1,
+            narrative: { title: "Billing", summary: "Billing.", primaryTheme: "", rationale: [] },
+            evidenceSummary: { evidenceCount: 0, sourceCount: 0, sourceNames: [], markets: [], audiences: [], claims: [], references: [], summary: "" },
+            diagnostics: { synthesizedTitle: "Billing", synthesizedSummary: "Billing.", evidenceCount: 0, evidenceReferences: [], confidence: 1, synthesisCompleteness: 0, engineCandidateCounts: { pain: 0, pattern: 0, trend: 0, opportunity: 0, monetization: 0, confidence: 0, feedback: 0 }, warnings: [] },
+          },
+        ],
+        diagnostics: [],
+        warnings: [],
+        summary: { evidenceCount: 0, candidateCount: 1, averageConfidence: 1, averageCompleteness: 0 },
+      },
+    },
+  } as unknown as Partial<DiscoveryModularPipelineResult>));
+  const quality = evaluateDiscoveryPersistenceQuality(plan.rows, {
+    fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row,
+  });
+
+  assert.equal(quality.allRowsPass, false);
+  assert.equal(quality.rejectedRows.length, 1);
+  assert.equal(quality.issues.some((issue) => issue.code === "title_too_short"), true);
+  assert.equal(quality.issues.some((issue) => issue.code === "opportunity_score_too_low"), true);
 });
