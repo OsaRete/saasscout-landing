@@ -6,3 +6,6 @@ export { discoveredProblemRowToEvolutionObservation, problemIntelligenceRowToEvo
 
 export { assessProblemEvolution, getProblemEvolutionObservations, getRecentProblemEvolutionAssessments } from "./repository.ts";
 export type { KnowledgeEvolutionSupabaseClient, ProblemEvolutionAssessmentResult, ProblemEvolutionObservationsResult, ProblemEvolutionRepositoryDiagnostics, ProblemEvolutionRepositoryOptions, ProblemEvolutionSourceDiagnostic, RecentProblemEvolutionAssessmentsResult } from "./repository.ts";
+
+export { runKnowledgeEvolutionDiscoveryDiagnostics } from "./discovery-diagnostics.ts";
+export type { KnowledgeEvolutionDiscoveryDiagnosticProblem, KnowledgeEvolutionDiscoveryDiagnostics } from "./discovery-diagnostics.ts";
