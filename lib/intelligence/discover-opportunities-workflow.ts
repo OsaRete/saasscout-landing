@@ -10,6 +10,8 @@ import {
   type DiscoverySource,
 } from "@/lib/knowledge/discovery-data-moat-sources";
 import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
+import { writeDual, type DualWriteReport } from "@/lib/knowledge/dual-writer";
+import type { ProblemObservationInput } from "@/lib/knowledge/problem-observations";
 import { runKnowledgeEvolutionDiscoveryDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
@@ -181,6 +183,56 @@ function buildOrchestratorAssistedDiscoveredProblemRows({
     });
     return null;
   }
+}
+
+function buildKnowledgeEvolutionObservationInputs({
+  problems,
+  userId,
+  discoveryId,
+}: {
+  problems: PlannedDiscoveredProblem[];
+  userId: string;
+  discoveryId: string;
+}): ProblemObservationInput[] {
+  const observedAt = new Date();
+
+  return problems.map((problem, index) => ({
+    title: problem.problem_title,
+    observedAt,
+    source: {
+      sourceType: "discovery",
+      sourceName: "SaaSScout Discover Opportunities",
+      sourceRank: index + 1,
+      sourceTable: "discovered_problems",
+    },
+    provenance: {
+      sourceTable: "discovered_problems",
+      sourceId: discoveryId,
+      userId,
+    },
+    evidenceSummary: problem.source_evidence,
+    affectedNiches: problem.affected_niches,
+    problemCluster: problem.problem_cluster,
+    scores: {
+      pain: problem.pain_score,
+      revenue: problem.revenue_score,
+      urgency: problem.urgency_score,
+      trend: problem.trend_score,
+      buyingSignal: problem.buying_signal_score,
+      frequency: problem.frequency_score,
+      sourceQuality: problem.source_quality_score,
+      opportunity: problem.opportunity_score,
+      intelligence: problem.opportunity_score,
+      confidence: problem.source_quality_score,
+    },
+    evidenceCount: problem.source_evidence ? 1 : 0,
+    sourceCount: 1,
+    sourceTypes: ["discovery"],
+  }));
+}
+
+function logDiscoveryDualWriteReport(report: DualWriteReport) {
+  console.info("Discovery Knowledge Evolution dual-write diagnostics:", report);
 }
 
 function runDiscoveryOrchestratorDiagnostics({
@@ -455,29 +507,47 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   });
   let problemsToInsert = orchestratorProblemsToInsert || legacyProblemsToInsert;
 
-  let { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
-    .from("discovered_problems")
-    .insert(problemsToInsert)
-    .select();
+  const dualWriteResult = await writeDual({
+    legacy: {
+      write: async () => {
+        let { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
+          .from("discovered_problems")
+          .insert(problemsToInsert)
+          .select();
 
-  if (problemsError && orchestratorProblemsToInsert) {
-    console.warn("Discovery orchestrator assisted persistence insert failed; retrying legacy problems:", {
-      message: problemsError instanceof Error ? problemsError.message : "Unknown discovered_problems insert error.",
-    });
-    problemsToInsert = legacyProblemsToInsert;
-    const legacyInsert = await getSupabaseAdminClient()
-      .from("discovered_problems")
-      .insert(problemsToInsert)
-      .select();
-    insertedProblems = legacyInsert.data;
-    problemsError = legacyInsert.error;
-  }
+        if (problemsError && orchestratorProblemsToInsert) {
+          console.warn("Discovery orchestrator assisted persistence insert failed; retrying legacy problems:", {
+            message: problemsError instanceof Error ? problemsError.message : "Unknown discovered_problems insert error.",
+          });
+          problemsToInsert = legacyProblemsToInsert;
+          const legacyInsert = await getSupabaseAdminClient()
+            .from("discovered_problems")
+            .insert(problemsToInsert)
+            .select();
+          insertedProblems = legacyInsert.data;
+          problemsError = legacyInsert.error;
+        }
 
-  if (problemsError) throw problemsError;
+        if (problemsError) throw problemsError;
 
-  for (const problem of problemsToInsert) {
-    await updateProblemIntelligence(problem);
-  }
+        for (const problem of problemsToInsert) {
+          await updateProblemIntelligence(problem);
+        }
+
+        return insertedProblems || [];
+      },
+    },
+    knowledgeEvolution: {
+      getObservationInputs: () => buildKnowledgeEvolutionObservationInputs({
+        problems: problemsToInsert,
+        userId,
+        discoveryId: discoveryData.id,
+      }),
+    },
+  });
+
+  logDiscoveryDualWriteReport(dualWriteResult.report);
+  const insertedProblems = dualWriteResult.legacyResult;
 
   if (isKnowledgeEvolutionDiagnosticsEnabled()) {
     await runKnowledgeEvolutionDiscoveryDiagnostics({
