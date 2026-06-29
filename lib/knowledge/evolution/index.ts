@@ -9,3 +9,6 @@ export type { KnowledgeEvolutionSupabaseClient, ProblemEvolutionAssessmentResult
 
 export { runKnowledgeEvolutionDiscoveryDiagnostics } from "./discovery-diagnostics.ts";
 export type { KnowledgeEvolutionDiscoveryDiagnosticProblem, KnowledgeEvolutionDiscoveryDiagnostics } from "./discovery-diagnostics.ts";
+
+export { runKnowledgeEvolutionWeeklyDiagnostics } from "./weekly-diagnostics.ts";
+export type { KnowledgeEvolutionWeeklyDiagnosticProblem, KnowledgeEvolutionWeeklyDiagnostics } from "./weekly-diagnostics.ts";
