@@ -10,6 +10,12 @@ export {
   normalizeKnowledgeText,
 } from "./fingerprint";
 export { createKnowledgeRelationship, relationshipEntityId } from "./relationships";
+export {
+  buildProblemObservation,
+  buildProblemObservationBatch,
+  serializeProblemObservation,
+  validateProblemObservation,
+} from "./problem-observations";
 export type {
   ConfidenceEvolutionInput,
   KnowledgeConsolidationCandidate,
@@ -21,6 +27,15 @@ export type {
   KnowledgeSource,
   KnowledgeUpdateInput,
 } from "./types";
+export type {
+  ProblemObservation,
+  ProblemObservationInput,
+  ProblemObservationMarketMetadata,
+  ProblemObservationNicheMetadata,
+  ProblemObservationScoreBreakdown,
+  ProblemObservationSourceMetadata,
+  ProblemObservationValidationResult,
+} from "./problem-observations";
 
 export * from "./deduplication";
 export * from "./evolution";
