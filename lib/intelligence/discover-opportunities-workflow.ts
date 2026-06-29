@@ -543,6 +543,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
         userId,
         discoveryId: discoveryData.id,
       }),
+      client: getSupabaseAdminClient(),
     },
   });
 

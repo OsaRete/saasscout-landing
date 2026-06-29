@@ -104,7 +104,7 @@ describe("Knowledge Evolution dual writer", () => {
         observationInputs: [validObservation()],
         write: (options) => {
           order.push("knowledge");
-          return writeKnowledgeEvolution(options);
+          return writeKnowledgeEvolution({ observationInputs: options.observationInputs });
         },
       },
       featureFlag: "1",
@@ -116,6 +116,32 @@ describe("Knowledge Evolution dual writer", () => {
     assert.equal(result.report.knowledge_success, true);
     assert.equal(result.report.observation_count, 1);
     assert.equal(result.knowledgeResult?.observations[0].problem_title, "Manual onboarding follow-up is slow");
+  });
+
+  it("passes the Supabase client dependency to Knowledge Evolution persistence", async () => {
+    let receivedClient = false;
+    const client = {
+      from() {
+        throw new Error("client dependency should only be passed to the custom writer");
+      },
+    };
+
+    const result = await writeDual({
+      legacy: { write: () => ({ id: "legacy" }) },
+      knowledgeEvolution: {
+        observationInputs: [validObservation()],
+        client,
+        write: (options) => {
+          receivedClient = options.client === client;
+          return writeKnowledgeEvolution({ observationInputs: options.observationInputs });
+        },
+      },
+      featureFlag: "1",
+      logger,
+    });
+
+    assert.equal(receivedClient, true);
+    assert.equal(result.report.knowledge_success, true);
   });
 
   it("fails the request when legacy persistence fails and attaches a structured report", async () => {
@@ -187,7 +213,11 @@ describe("Knowledge Evolution dual writer", () => {
       knowledge_skipped: false,
       execution_time_ms: 0,
       observation_count: 2,
+      attempted_observations: 0,
+      inserted_observations: null,
       skipped_observations: 0,
+      failed_observations: 0,
+      warnings: [],
       validation_failures: [],
       persistence_failures: [],
     });
