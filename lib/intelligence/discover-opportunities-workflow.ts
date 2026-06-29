@@ -10,6 +10,7 @@ import {
   type DiscoverySource,
 } from "@/lib/knowledge/discovery-data-moat-sources";
 import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
+import { runKnowledgeEvolutionDiscoveryDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
 import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
@@ -47,6 +48,9 @@ function isDiscoveryOrchestratorAssistedPersistenceEnabled() {
   return process.env.DISCOVERY_ORCHESTRATOR_ASSISTED_PERSISTENCE === "1";
 }
 
+function isKnowledgeEvolutionDiagnosticsEnabled() {
+  return process.env.KNOWLEDGE_EVOLUTION_DIAGNOSTICS === "1";
+}
 
 function buildLegacyDiscoveredProblemRows({
   problems,
@@ -473,6 +477,13 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
 
   for (const problem of problemsToInsert) {
     await updateProblemIntelligence(problem);
+  }
+
+  if (isKnowledgeEvolutionDiagnosticsEnabled()) {
+    await runKnowledgeEvolutionDiscoveryDiagnostics({
+      client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient,
+      problems: problemsToInsert,
+    });
   }
 
   return {
