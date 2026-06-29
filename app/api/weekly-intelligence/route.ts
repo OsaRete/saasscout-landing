@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -113,6 +114,10 @@ function classifySourceCategory(text: string | null) {
   if (value.includes("ai") || value.includes("automation") || value.includes("agent") || value.includes("n8n")) return "AI/Automation";
 
   return "General";
+}
+
+function isKnowledgeEvolutionDiagnosticsEnabled() {
+  return process.env.KNOWLEDGE_EVOLUTION_DIAGNOSTICS === "1";
 }
 
 function getProblemCluster(text: string | null) {
@@ -779,6 +784,13 @@ export async function POST(req: Request) {
 
     for (const problem of problems) {
       await updateProblemIntelligence(problem);
+    }
+
+    if (isKnowledgeEvolutionDiagnosticsEnabled()) {
+      await runKnowledgeEvolutionWeeklyDiagnostics({
+        client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient,
+        problems,
+      });
     }
 
     return NextResponse.json({
