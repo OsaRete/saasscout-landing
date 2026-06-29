@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { updateGeneratedWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -230,61 +231,6 @@ function normalizeProblems(rawProblems: WeeklyDetectedProblem[]) {
   }));
 }
 
-function calculateIntelligenceScore(problem: WeeklyDetectedProblem) {
-  return Number(
-    (
-      (Number(problem.pain_score || 0) * 0.3 +
-        Number(problem.revenue_score || 0) * 0.3 +
-        Number(problem.urgency_score || 0) * 0.2 +
-        Number(problem.trend_score || 0) * 0.2) *
-      10
-    ).toFixed(1)
-  );
-}
-
-async function updateProblemIntelligence(problem: WeeklyDetectedProblem) {
-  const { data: existingProblem } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .select("*")
-    .eq("problem_title", problem.problem_title)
-    .maybeSingle();
-
-  const intelligenceScore = calculateIntelligenceScore(problem);
-
-  if (!existingProblem) {
-    await getSupabaseAdminClient().from("problem_intelligence").insert([
-      {
-        problem_title: problem.problem_title,
-        prepared_count: 0,
-        converted_count: 0,
-        avg_pain_score: Number(problem.pain_score || 0),
-        avg_revenue_score: Number(problem.revenue_score || 0),
-        avg_urgency_score: Number(problem.urgency_score || 0),
-        intelligence_score: intelligenceScore,
-      },
-    ]);
-
-    return;
-  }
-
-  await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .update({
-      avg_pain_score: Number(problem.pain_score || 0),
-      avg_revenue_score: Number(problem.revenue_score || 0),
-      avg_urgency_score: Number(problem.urgency_score || 0),
-      intelligence_score: Number(
-        (
-          (Number(existingProblem.intelligence_score || 0) +
-            intelligenceScore) /
-          2
-        ).toFixed(1)
-      ),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", existingProblem.id);
-}
-
 export async function POST(req: Request) {
   try {
     const authHeader = req.headers.get("authorization");
@@ -340,7 +286,7 @@ export async function POST(req: Request) {
     if (problemsError) throw problemsError;
 
     for (const problem of problems) {
-      await updateProblemIntelligence(problem);
+      await updateGeneratedWeeklyProblemIntelligence(problem);
     }
 
     return NextResponse.json({

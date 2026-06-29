@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 
-import { updateProblemIntelligence } from "../lib/knowledge/problem-intelligence-store.ts";
+import { updateGeneratedWeeklyProblemIntelligence, updateProblemIntelligence, updateWeeklyProblemIntelligence } from "../lib/knowledge/problem-intelligence-store.ts";
 
 type QueryCall = {
   table: string;
@@ -125,5 +125,110 @@ describe("updateProblemIntelligence", () => {
     await updateProblemIntelligence({ ...problem, opportunity_score: 0 }, client);
 
     assert.equal((calls[1].insert as Record<string, unknown>[])[0].intelligence_score, 70);
+  });
+
+  it("preserves weekly-intelligence-style insert semantics, last_seen_at, and problem_intelligence-only writes", async () => {
+    const now = mock.method(Date.prototype, "toISOString", () => "2026-06-27T00:00:00.000Z");
+    const { client, calls } = createMockClient(null);
+
+    try {
+      await updateWeeklyProblemIntelligence({ ...problem, opportunity_score: 8.2, trend_score: 7 }, client);
+    } finally {
+      now.mock.restore();
+    }
+
+    assert.deepEqual(calls.map((call) => call.table), ["problem_intelligence", "problem_intelligence"]);
+    assert.deepEqual(calls[0].eq, { column: "problem_title", value: "Manual client onboarding" });
+    assert.deepEqual(calls[1].insert, [
+      {
+        problem_title: "Manual client onboarding",
+        prepared_count: 0,
+        converted_count: 0,
+        avg_pain_score: 8,
+        avg_revenue_score: 7,
+        avg_urgency_score: 6,
+        avg_buying_signal_score: 9,
+        avg_frequency_score: 5,
+        avg_source_quality_score: 8,
+        avg_opportunity_score: 8.2,
+        intelligence_score: 82,
+        last_seen_at: "2026-06-27T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("preserves weekly-intelligence-style update semantics and does not touch feedback counters", async () => {
+    const now = mock.method(Date.prototype, "toISOString", () => "2026-06-27T00:00:00.000Z");
+    const { client, calls } = createMockClient({
+      id: "problem-1",
+      avg_opportunity_score: 6.2,
+      prepared_count: 4,
+      converted_count: 2,
+    });
+
+    try {
+      await updateWeeklyProblemIntelligence({ ...problem, opportunity_score: 8.2, trend_score: 7 }, client);
+    } finally {
+      now.mock.restore();
+    }
+
+    assert.deepEqual(calls.map((call) => call.table), ["problem_intelligence", "problem_intelligence"]);
+    assert.equal(calls[0].eq?.value, "Manual client onboarding");
+    assert.deepEqual(calls[1].update, {
+      avg_pain_score: 8,
+      avg_revenue_score: 7,
+      avg_urgency_score: 6,
+      avg_buying_signal_score: 9,
+      avg_frequency_score: 5,
+      avg_source_quality_score: 8,
+      avg_opportunity_score: 7.2,
+      intelligence_score: 72,
+      updated_at: "2026-06-27T00:00:00.000Z",
+      last_seen_at: "2026-06-27T00:00:00.000Z",
+    });
+    assert.equal("prepared_count" in calls[1].update!, false);
+    assert.equal("converted_count" in calls[1].update!, false);
+  });
+
+  it("preserves generate-weekly-report-style insert semantics without last_seen_at", async () => {
+    const { client, calls } = createMockClient(null);
+
+    await updateGeneratedWeeklyProblemIntelligence({ ...problem, trend_score: 5 }, client);
+
+    assert.deepEqual(calls.map((call) => call.table), ["problem_intelligence", "problem_intelligence"]);
+    assert.deepEqual(calls[1].insert, [
+      {
+        problem_title: "Manual client onboarding",
+        prepared_count: 0,
+        converted_count: 0,
+        avg_pain_score: 8,
+        avg_revenue_score: 7,
+        avg_urgency_score: 6,
+        intelligence_score: 67,
+      },
+    ]);
+  });
+
+  it("preserves generate-weekly-report-style update semantics and exact-title lookup without semantic deduplication", async () => {
+    const now = mock.method(Date.prototype, "toISOString", () => "2026-06-27T00:00:00.000Z");
+    const { client, calls } = createMockClient({ id: "problem-1", intelligence_score: 70 });
+
+    try {
+      await updateGeneratedWeeklyProblemIntelligence({ ...problem, problem_title: "Manual client onboarding!", trend_score: 5 }, client);
+    } finally {
+      now.mock.restore();
+    }
+
+    assert.deepEqual(calls[0].eq, { column: "problem_title", value: "Manual client onboarding!" });
+    assert.deepEqual(calls[1].update, {
+      avg_pain_score: 8,
+      avg_revenue_score: 7,
+      avg_urgency_score: 6,
+      intelligence_score: 68.5,
+      updated_at: "2026-06-27T00:00:00.000Z",
+    });
+    assert.equal("last_seen_at" in calls[1].update!, false);
+    assert.equal("prepared_count" in calls[1].update!, false);
+    assert.equal("converted_count" in calls[1].update!, false);
   });
 });

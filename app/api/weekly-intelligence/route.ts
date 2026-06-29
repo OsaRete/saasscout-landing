@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 
 export const runtime = "nodejs";
@@ -610,10 +611,6 @@ function normalizeProblems(rawProblems: WeeklyDetectedProblem[], sources: Weekly
   });
 }
 
-function calculateIntelligenceScore(problem: ScoredProblem) {
-  return Number((Number(problem.opportunity_score || 0) * 10).toFixed(1));
-}
-
 async function saveWeeklySources({
   runId,
   sources,
@@ -646,66 +643,6 @@ async function saveWeeklySources({
   }));
 
   const { error } = await getSupabaseAdminClient().from("weekly_sources").insert(rows);
-  if (error) throw error;
-}
-
-async function updateProblemIntelligence(problem: ScoredProblem) {
-  const { data: existingProblem, error: fetchError } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .select("*")
-    .eq("problem_title", problem.problem_title)
-    .maybeSingle();
-
-  if (fetchError) throw fetchError;
-
-  const intelligenceScore = calculateIntelligenceScore(problem);
-
-  if (!existingProblem) {
-    const { error } = await getSupabaseAdminClient().from("problem_intelligence").insert([
-      {
-        problem_title: problem.problem_title,
-        prepared_count: 0,
-        converted_count: 0,
-        avg_pain_score: Number(problem.pain_score || 0),
-        avg_revenue_score: Number(problem.revenue_score || 0),
-        avg_urgency_score: Number(problem.urgency_score || 0),
-        avg_buying_signal_score: Number(problem.buying_signal_score || 0),
-        avg_frequency_score: Number(problem.frequency_score || 0),
-        avg_source_quality_score: Number(problem.source_quality_score || 0),
-        avg_opportunity_score: Number(problem.opportunity_score || 0),
-        intelligence_score: intelligenceScore,
-        last_seen_at: new Date().toISOString(),
-      },
-    ]);
-
-    if (error) throw error;
-    return;
-  }
-
-  const updatedOpportunityScore = Number(
-    (
-      (Number(existingProblem.avg_opportunity_score || 0) +
-        Number(problem.opportunity_score || 0)) /
-      2
-    ).toFixed(1)
-  );
-
-  const { error } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .update({
-      avg_pain_score: Number(problem.pain_score || 0),
-      avg_revenue_score: Number(problem.revenue_score || 0),
-      avg_urgency_score: Number(problem.urgency_score || 0),
-      avg_buying_signal_score: Number(problem.buying_signal_score || 0),
-      avg_frequency_score: Number(problem.frequency_score || 0),
-      avg_source_quality_score: Number(problem.source_quality_score || 0),
-      avg_opportunity_score: updatedOpportunityScore,
-      intelligence_score: Number((updatedOpportunityScore * 10).toFixed(1)),
-      updated_at: new Date().toISOString(),
-      last_seen_at: new Date().toISOString(),
-    })
-    .eq("id", existingProblem.id);
-
   if (error) throw error;
 }
 
@@ -783,7 +720,7 @@ export async function POST(req: Request) {
     if (problemsError) throw problemsError;
 
     for (const problem of problems) {
-      await updateProblemIntelligence(problem);
+      await updateWeeklyProblemIntelligence(problem);
     }
 
     if (isKnowledgeEvolutionDiagnosticsEnabled()) {
