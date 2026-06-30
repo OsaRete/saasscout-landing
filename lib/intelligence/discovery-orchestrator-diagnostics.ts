@@ -29,6 +29,15 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       result.outputs.confidenceEvaluation?.candidates
     ),
     feedback_signal_count: countItems(result.outputs.feedbackLearning?.signals),
+    solution_intelligence: result.outputs.solutionIntelligenceEvaluation ? {
+      evaluated_category_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.evaluatedCategoryCount,
+      recommended_category: result.outputs.solutionIntelligenceEvaluation.diagnostics.recommendedCategory,
+      rejected_category_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.rejectedCategoryCount,
+      low_confidence_reason_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.lowConfidenceReasonCount,
+      missing_evidence_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.missingEvidenceCount,
+      warning_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.warnings.length,
+      recommendation_produced: Boolean(result.outputs.solutionIntelligenceEvaluation.recommendation?.recommendedCategory),
+    } : null,
     deduplication_group_count:
       result.outputs.semanticProblemDeduplication?.summary.groupCount || 0,
   };

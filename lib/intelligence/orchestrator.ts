@@ -19,6 +19,7 @@ import { MonetizationEngine } from "../engines/monetization";
 import { FounderIntelligenceEngine } from "../engines/founder";
 import { ConfidenceEngine } from "../engines/confidence";
 import { FeedbackEngine } from "../engines/feedback";
+import { SolutionIntelligenceEngine, type SolutionIntelligenceInput } from "../engines/solution";
 import { ProblemIntelligenceSynthesisEngine } from "./problem-synthesis";
 import { advanceDiscoveryStage, appendDiscoveryWarning, createInitialDiscoveryState } from "./state";
 import type {
@@ -60,6 +61,53 @@ function emptyConsolidation(): KnowledgeConsolidationResult {
   };
 }
 
+
+function isSolutionIntelligenceDiagnosticsEnabled() {
+  return process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS === "1";
+}
+
+function getDefaultModularStages(): DiscoveryPipelineStage[] {
+  if (!isSolutionIntelligenceDiagnosticsEnabled()) return defaultModularStages;
+  const stages = [...defaultModularStages];
+  const synthesisIndex = stages.indexOf("problem_intelligence_synthesis");
+  if (synthesisIndex === -1) return [...stages, "solution_intelligence_evaluation"];
+  stages.splice(synthesisIndex + 1, 0, "solution_intelligence_evaluation");
+  return stages;
+}
+
+function buildSolutionIntelligenceInputFromOutputs({
+  runId,
+  detectedAt,
+  outputs,
+}: {
+  runId: string;
+  detectedAt: string;
+  outputs: DiscoveryModularPipelineOutputs;
+}): SolutionIntelligenceInput | null {
+  const candidate = outputs.problemIntelligenceSynthesis?.candidates[0];
+  if (!candidate) return null;
+
+  return {
+    runId,
+    problemId: candidate.id,
+    problemTitle: candidate.synthesizedProblemTitle,
+    problemSummary: candidate.synthesizedSummary,
+    affectedMarkets: candidate.affectedMarkets,
+    affectedAudiences: candidate.affectedAudiences,
+    evidenceReferences: candidate.supportingEvidenceReferences,
+    evaluatedAt: detectedAt,
+    context: {
+      canonicalProblemCluster: candidate.canonicalProblemCluster,
+      problemConfidence: candidate.confidence,
+      problemScore: candidate.scoreBreakdown.totalScore,
+      opportunityCandidateCount: outputs.opportunityDetection?.candidates.length || 0,
+      monetizationCandidateCount: outputs.monetizationEvaluation?.candidates.length || 0,
+      confidenceCandidateCount: outputs.confidenceEvaluation?.candidates.length || 0,
+      suggestedSolutionCount: candidate.suggestedSolutions.length,
+    },
+  };
+}
+
 const defaultModularStages: DiscoveryPipelineStage[] = [
   "evidence_normalization",
   "knowledge_update_preparation",
@@ -85,6 +133,7 @@ export class DiscoveryOrchestrator {
     if (stage === "evidence_normalization") return ["rawEvidenceInputs"];
     if (stage === "knowledge_update_preparation" || stage === "pain_detection") return ["normalizedEvidence"];
     if (stage === "founder_intelligence") return ["founderProfile"];
+    if (stage === "solution_intelligence_evaluation") return ["problemIntelligenceSynthesis"];
     return [];
   }
 
@@ -261,7 +310,7 @@ export class DiscoveryOrchestrator {
    * Dry-run mode returns typed outputs, pipeline state and diagnostics for integration testing before persistence exists.
    */
   executeModularPipeline(state: DiscoveryPipelineState, options: DiscoveryModularPipelineOptions = { dryRun: true }): DiscoveryModularPipelineResult {
-    const stages = options.stages || defaultModularStages;
+    const stages = options.stages || getDefaultModularStages();
     const diagnostics: DiscoveryPipelineStageDiagnostic[] = [];
     const outputs: DiscoveryModularPipelineOutputs = {};
     const warnings = [...state.warnings];
@@ -357,6 +406,24 @@ export class DiscoveryOrchestrator {
       addDiagnostic("problem_intelligence_synthesis", [], ["evidence", "knowledge", "engineCandidates"]);
       outputs.problemIntelligenceSynthesis = new ProblemIntelligenceSynthesisEngine().run({ evidence, knowledgeUpdates, knownProblems, relationships, painDetection: outputs.painDetection, patternDetection: outputs.patternDetection, trendDetection: outputs.trendDetection, opportunityDetection: outputs.opportunityDetection, monetizationEvaluation: outputs.monetizationEvaluation, confidenceEvaluation: outputs.confidenceEvaluation, feedbackLearning: outputs.feedbackLearning, runId, synthesizedAt: detectedAt });
       markCompleted("problem_intelligence_synthesis");
+    }
+
+    if (include("solution_intelligence_evaluation")) {
+      const stageWarnings = isSolutionIntelligenceDiagnosticsEnabled()
+        ? []
+        : ["Solution Intelligence diagnostics are disabled; dry-run stage did not execute."];
+      const availableInputs = outputs.problemIntelligenceSynthesis?.candidates.length
+        ? ["problemIntelligenceSynthesis", "opportunityCandidates", "monetizationCandidates", "confidenceCandidates"]
+        : [];
+      const diagnostic = addDiagnostic("solution_intelligence_evaluation", ["problemIntelligenceSynthesis"], availableInputs, stageWarnings);
+
+      if (diagnostic.status !== "skipped" && isSolutionIntelligenceDiagnosticsEnabled() && options.dryRun !== false) {
+        const solutionInput = buildSolutionIntelligenceInputFromOutputs({ runId, detectedAt, outputs });
+        if (solutionInput) {
+          outputs.solutionIntelligenceEvaluation = new SolutionIntelligenceEngine().run(solutionInput);
+          markCompleted("solution_intelligence_evaluation");
+        }
+      }
     }
 
     if (include("semantic_problem_deduplication")) {

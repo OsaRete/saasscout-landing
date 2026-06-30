@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createEmptySolutionIntelligenceDiagnostics,
@@ -76,12 +75,3 @@ test("diagnostics can represent incomplete evaluations", () => {
   assert.equal(diagnostics.missingEvidenceCount, 3);
 });
 
-test("solution intelligence foundation is not integrated with orchestration or workflows yet", () => {
-  const orchestrator = readFileSync("lib/intelligence/orchestrator.ts", "utf8");
-  const workflow = readFileSync("lib/intelligence/discover-opportunities-workflow.ts", "utf8");
-  const discoveryTypes = readFileSync("lib/intelligence/types.ts", "utf8");
-
-  assert.doesNotMatch(orchestrator, /engines\/solution|SolutionIntelligence/i);
-  assert.doesNotMatch(workflow, /engines\/solution|SolutionIntelligence/i);
-  assert.doesNotMatch(discoveryTypes, /SolutionIntelligenceResult|solutionIntelligence/i);
-});
