@@ -22,6 +22,7 @@ import {
   type PlannedDiscoveredProblem,
 } from "@/lib/intelligence/discovery-orchestrator-persistence-plan";
 import { buildDiscoveryShadowComparisonMetrics } from "@/lib/intelligence/discovery-shadow-comparison";
+import { buildSolutionShadowComparisonMetricsFromDiscoveryResult } from "@/lib/intelligence/solution-shadow-comparison";
 import { evaluateDiscoveryPersistenceQuality } from "@/lib/intelligence/discovery-persistence-quality-gates";
 import { buildDiscoveryQualityComparison } from "@/lib/intelligence/quality-comparison";
 import { decideDiscoveryPipeline } from "@/lib/intelligence/decision";
@@ -52,6 +53,10 @@ function isDiscoveryOrchestratorAssistedPersistenceEnabled() {
 
 function isKnowledgeEvolutionDiagnosticsEnabled() {
   return process.env.KNOWLEDGE_EVOLUTION_DIAGNOSTICS === "1";
+}
+
+function isSolutionIntelligenceDiagnosticsEnabled() {
+  return process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS === "1";
 }
 
 function buildLegacyDiscoveredProblemRows({
@@ -276,6 +281,16 @@ function runDiscoveryOrchestratorDiagnostics({
       "Discovery orchestrator shadow comparison:",
       shadowComparisonMetrics
     );
+
+    if (isSolutionIntelligenceDiagnosticsEnabled()) {
+      console.info(
+        "Solution Intelligence shadow comparison:",
+        buildSolutionShadowComparisonMetricsFromDiscoveryResult({
+          legacyProblems,
+          orchestratorResult: result,
+        })
+      );
+    }
 
     console.info(
       "Discovery orchestrator persistence plan diagnostics:",
