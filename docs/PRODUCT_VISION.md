@@ -8,7 +8,7 @@ Actualmente, esa información se encuentra dispersa entre redes sociales, foros,
 
 SaaSScout existe para resolver ese problema.
 
-No es simplemente una herramienta de inteligencia artificial ni un generador de ideas para SaaS. Es una plataforma de inteligencia de mercado que observa continuamente el mercado, recopila evidencia real, la analiza, la relaciona y transforma esa información en conocimiento estructurado capaz de identificar oportunidades de negocio respaldadas por datos.
+No es simplemente una herramienta de inteligencia artificial ni un generador de ideas para SaaS. Es una plataforma de inteligencia de mercado que observa continuamente el mercado, recopila evidencia real, la analiza, la relaciona y transforma esa información en conocimiento estructurado capaz de identificar problemas reales, evaluar múltiples categorías de solución y recomendar oportunidades de negocio respaldadas por datos.
 
 Nuestra visión
 
@@ -18,7 +18,7 @@ La IA analiza, razona y encuentra patrones, mientras que SaaSScout construye un 
 
 El objetivo no es responder únicamente a la pregunta de un usuario.
 
-El objetivo es construir una plataforma que entienda cada vez mejor el mercado.
+El objetivo es construir una plataforma que entienda cada vez mejor el mercado, cómo evolucionan sus problemas y qué tipo de solución tiene mayor probabilidad de resolver cada problema de forma monetizable.
 
 El corazón del producto: el Data Moat
 
@@ -36,7 +36,12 @@ Mientras otros productos dependen únicamente de un modelo de IA disponible para
 
 Nuestra misión
 
-Crear el sistema de inteligencia de mercado más confiable para fundadores, empresas e inversores, capaz de descubrir problemas reales, comprender su contexto, identificar oportunidades de negocio y proponer soluciones monetizables respaldadas siempre por evidencia verificable.
+Crear el sistema de inteligencia de mercado más confiable para fundadores, empresas e inversores, capaz de descubrir problemas reales, comprender su contexto, seguir su evolución, evaluar categorías de solución y recomendar la mejor solución monetizable para cada problema, respaldada siempre por evidencia verificable.
+
+
+SaaSScout ya no debe entenderse como una fábrica de ideas SaaS. Su misión es seleccionar la mejor respuesta de negocio para un problema real. Esa respuesta puede ser software SaaS, una aplicación móvil, una API, un producto físico, hardware, un marketplace, un servicio, una automatización, un producto de IA, educación, consultoría, un modelo híbrido o un nuevo modelo de negocio.
+
+La categoría de solución debe surgir del problema, de la evidencia y del contexto del mercado. Nunca debe imponerse por defecto.
 
 Cada respuesta generada por SaaSScout debe surgir de una combinación entre:
 
@@ -53,6 +58,10 @@ Cada interacción debe fortalecer la plataforma.
 La evidencia siempre tiene prioridad sobre las opiniones.
 
 Las oportunidades deben estar respaldadas por datos reales.
+
+SaaSScout debe recomendar soluciones, no formatos predeterminados.
+
+La mejor solución no siempre es software.
 
 El conocimiento construido hoy debe mejorar las decisiones del mañana.
 

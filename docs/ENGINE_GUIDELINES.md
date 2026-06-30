@@ -127,6 +127,8 @@ Trend Engine
 ↓
 Opportunity Engine
 ↓
+Solution Intelligence Engine
+↓
 Founder Match Engine
 ↓
 Monetization Engine
@@ -238,6 +240,48 @@ Cada oportunidad debe estar respaldada por conocimiento verificable.
 
 ⸻
 
+Solution Intelligence Engine
+
+Objetivo
+
+Determinar qué categoría de solución resuelve mejor cada problema.
+
+No debe asumir que la respuesta correcta es SaaS o software.
+
+Debe comparar categorías como:
+
+* SaaS software;
+* aplicaciones móviles;
+* APIs;
+* productos físicos;
+* hardware;
+* marketplaces;
+* servicios;
+* automatizaciones;
+* productos de IA;
+* educación;
+* consultoría;
+* modelos híbridos;
+* nuevos modelos de negocio.
+
+Debe evaluar:
+
+* ajuste problema-solución;
+* disposición de pago;
+* recurrencia;
+* escalabilidad;
+* complejidad técnica;
+* complejidad operativa;
+* necesidad de confianza humana;
+* evidencia histórica de soluciones similares;
+* outcomes de soluciones anteriores.
+
+Su responsabilidad es convertir Problem Intelligence en una recomendación de solución defendible.
+
+Una oportunidad fuerte no es solo un problema importante; es un problema importante con una solución adecuada para su contexto.
+
+⸻
+
 Founder Match Engine
 
 Objetivo
@@ -307,6 +351,7 @@ Convertir resultados reales en inteligencia.
 
 Debe aprender de:
 
+* soluciones construidas;
 * SaaS construidos;
 * validaciones;
 * ingresos;

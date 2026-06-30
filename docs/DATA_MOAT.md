@@ -20,7 +20,7 @@ El Data Moat no.
 
 Para SaaSScout, el Data Moat es el conjunto de conocimiento estructurado que permite comprender el mercado mejor que cualquier modelo de IA trabajando únicamente con información disponible en ese momento.
 
-Cada nueva fuente analizada, cada problema identificado, cada oportunidad validada y cada relación descubierta fortalecen este activo.
+Cada nueva fuente analizada, cada problema identificado, cada categoría de solución evaluada, cada oportunidad validada, cada resultado observado y cada relación descubierta fortalecen este activo.
 
 El objetivo no es almacenar datos.
 
@@ -40,6 +40,8 @@ Si una información no mejora la capacidad futura del sistema para:
 * generar inteligencia,
 * identificar patrones,
 * mejorar recomendaciones,
+* seleccionar mejores categorías de solución,
+* aprender qué soluciones funcionan mejor con el tiempo,
 
 esa información no debe formar parte del Data Moat.
 
@@ -90,6 +92,10 @@ Detección de patrones
 Construcción de relaciones
 ↓
 Knowledge Base
+↓
+Problem Intelligence
+↓
+Solution Intelligence
 ↓
 Opportunity Engine
 ↓
@@ -161,6 +167,11 @@ Ejemplos:
 * Tendencias.
 * Soluciones existentes.
 * Soluciones inexistentes.
+* Categorías de solución aplicables.
+* Categorías descartadas y razones.
+* Resultados históricos por categoría de solución.
+* Soluciones que funcionaron mejor para problemas similares.
+* Soluciones que fallaron y por qué.
 * Competidores.
 * Herramientas utilizadas actualmente.
 * Disposición estimada de pago.
@@ -204,6 +215,8 @@ Cada scan:
 * descubre nueva evidencia;
 * valida hipótesis existentes;
 * encuentra nuevas relaciones;
+* compara categorías de solución;
+* aprende qué soluciones producen mejores resultados;
 * mejora modelos de clasificación;
 * incrementa la confianza de determinadas oportunidades;
 * fortalece el conocimiento del mercado.
@@ -243,6 +256,9 @@ El objetivo consiste en construir la base de conocimiento más completa, precisa
 * oportunidades de negocio;
 * soluciones existentes;
 * soluciones faltantes;
+* categorías de solución;
+* resultados de soluciones;
+* correspondencia entre problemas y soluciones efectivas;
 * tendencias emergentes;
 * posibilidades de monetización.
 
