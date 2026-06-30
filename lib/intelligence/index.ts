@@ -32,3 +32,14 @@ export type {
   DiscoveryResult,
   DiscoveryStage,
 } from "./types";
+
+export {
+  buildSolutionDiagnosticAggregateReport,
+  createEmptySolutionDiagnosticAggregateReport,
+  formatSolutionDiagnosticSummary,
+  getSolutionConfidenceBucket,
+  mergeSolutionDiagnosticAggregateReports,
+  type SolutionCategoryDiagnosticStats,
+  type SolutionConfidenceBucket,
+  type SolutionDiagnosticAggregateReport,
+} from "./solution-diagnostics/index.ts";
