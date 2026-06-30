@@ -38,7 +38,10 @@ Evidence Layer
 Knowledge Layer (Data Moat)
         │
         ▼
-Detection Engines
+Detection Engines / Knowledge Evolution
+        │
+        ▼
+Solution Intelligence Layer
         │
         ▼
 Intelligence Layer
@@ -152,11 +155,11 @@ El objetivo es comprender mejor el mercado.
 
 ⸻
 
-4. Detection Engines
+4. Detection Engines / Knowledge Evolution
 
 Los motores especializados analizan el conocimiento acumulado desde distintas perspectivas.
 
-Cada motor tiene una responsabilidad concreta.
+Cada motor tiene una responsabilidad concreta. Juntos detectan problemas, patrones y evolución del conocimiento antes de que el sistema evalúe qué tipo de solución conviene construir.
 
 Pain Detection Engine
 
@@ -233,7 +236,47 @@ Toda recomendación debe incluir un nivel de confianza.
 
 ⸻
 
-5. Intelligence Layer
+5. Solution Intelligence Layer
+
+La Solution Intelligence Layer evalúa qué categoría de solución puede resolver mejor cada problema detectado.
+
+Esta capa existe porque SaaSScout no debe asumir que la mejor solución es software.
+
+Debe comparar categorías como:
+
+* SaaS software
+* aplicaciones móviles
+* APIs
+* productos físicos
+* hardware
+* marketplaces
+* servicios
+* automatizaciones
+* productos de IA
+* educación
+* consultoría
+* modelos híbridos
+* nuevos modelos de negocio
+
+La evaluación debe considerar:
+
+* naturaleza del problema
+* urgencia
+* contexto del usuario afectado
+* comportamiento actual de workaround
+* disposición de pago
+* complejidad operativa
+* necesidad de confianza humana
+* frecuencia de uso
+* posibilidad de distribución
+* defensibilidad
+* evidencia histórica sobre soluciones similares
+
+Esta capa conecta Problem Intelligence con decisiones de negocio. Su salida no es una idea genérica, sino una recomendación razonada sobre qué tipo de solución merece explorarse y por qué.
+
+⸻
+
+6. Intelligence Layer
 
 La Intelligence Layer coordina el razonamiento del sistema.
 
@@ -252,7 +295,7 @@ Este principio reduce costes, mejora la consistencia y fortalece el aprendizaje 
 
 ⸻
 
-6. Decision Layer
+7. Decision Layer
 
 Aquí el sistema combina todos los motores de inteligencia para generar recomendaciones.
 
@@ -267,6 +310,8 @@ Debe considerar simultáneamente:
 * tendencias
 * monetización
 * founder fit
+* ajuste entre problema y categoría de solución
+* evidencia histórica de resultados por tipo de solución
 
 La decisión final debe ser explicable.
 
@@ -274,7 +319,7 @@ El usuario siempre debe poder comprender por qué el sistema llegó a una determ
 
 ⸻
 
-7. Output Layer
+8. Output Layer
 
 Esta capa transforma la inteligencia en productos útiles para el usuario.
 
@@ -286,6 +331,7 @@ Ejemplos:
 * Founder Reports
 * Competitor Analysis
 * Pricing Suggestions
+* Best-Solution Recommendations
 * MVP Recommendations
 * Validation Plans
 * Exportaciones
@@ -296,7 +342,7 @@ Cada salida debe estar respaldada por evidencia verificable.
 
 ⸻
 
-8. Continuous Learning Layer
+9. Continuous Learning Layer
 
 El aprendizaje continuo representa el ciclo más importante del sistema.
 
@@ -312,6 +358,8 @@ Cada:
 * validación
 * corrección
 * resultado real
+* outcome de solución
+* cambios en la categoría de solución recomendada
 
 debe enriquecer el Data Moat.
 

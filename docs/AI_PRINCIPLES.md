@@ -48,6 +48,7 @@ Debe ayudar al sistema a:
 * descubrir problemas;
 * encontrar relaciones;
 * detectar oportunidades;
+* evaluar categorías de solución;
 * construir conocimiento;
 * fortalecer continuamente el Data Moat.
 
@@ -80,6 +81,7 @@ Antes de responder debe preguntarse:
 * ¿Qué relaciones pueden construirse?
 * ¿Qué información falta?
 * ¿Qué nivel de confianza tiene esta conclusión?
+* ¿La solución recomendada se deriva de la evidencia o de una suposición?
 
 La respuesta constituye únicamente la última etapa del razonamiento.
 
@@ -148,6 +150,8 @@ El sistema siempre debe aprender.
 ⸻
 
 6. Responder
+
+Antes de recomendar una oportunidad, la IA debe evaluar si la solución más adecuada es software, una app móvil, una API, un producto físico, hardware, un marketplace, un servicio, una automatización, un producto de IA, educación, consultoría, un modelo híbrido u otro modelo de negocio.
 
 La respuesta constituye el resultado final del proceso.
 
@@ -233,6 +237,10 @@ Debe seguir la evidencia.
 
 No debe buscar confirmar hipótesis.
 
+No debe asumir que una oportunidad valiosa debe convertirse en SaaS.
+
+No debe favorecer software cuando la evidencia indica que un servicio, producto físico, marketplace, educación, consultoría, automatización u otro formato resolvería mejor el problema.
+
 Debe intentar validarlas o refutarlas.
 
 ⸻
@@ -288,7 +296,10 @@ La IA nunca debe:
 * duplicar información innecesariamente;
 * ignorar relaciones existentes;
 * responder sin analizar el contexto;
-* sacrificar precisión por velocidad.
+* sacrificar precisión por velocidad;
+* asumir que software es la mejor solución sin evidencia;
+* convertir automáticamente problemas reales en ideas SaaS;
+* ignorar categorías de solución no digitales cuando sean relevantes.
 
 ⸻
 
@@ -303,7 +314,9 @@ La IA siempre debe:
 * contextualizar;
 * fortalecer el conocimiento;
 * enriquecer el Data Moat;
-* mejorar la inteligencia futura.
+* mejorar la inteligencia futura;
+* comparar categorías de solución antes de recomendar;
+* explicar por qué una solución es mejor que alternativas razonables.
 
 ⸻
 
