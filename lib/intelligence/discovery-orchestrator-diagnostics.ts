@@ -1,12 +1,27 @@
+import { buildSolutionDiagnosticAggregateReport, formatSolutionDiagnosticSummary } from "./solution-diagnostics/index.ts";
 import type { DiscoveryModularPipelineResult } from "./types";
 
 function countItems<T>(items?: T[]) {
   return Array.isArray(items) ? items.length : 0;
 }
 
+function isSolutionIntelligenceDiagnosticsEnabled() {
+  return process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS === "1";
+}
+
+function buildSolutionIntelligenceDiagnosticReport(result: DiscoveryModularPipelineResult) {
+  if (!isSolutionIntelligenceDiagnosticsEnabled() || !result.outputs.solutionIntelligenceEvaluation) return null;
+  const aggregateReport = buildSolutionDiagnosticAggregateReport([result.outputs.solutionIntelligenceEvaluation]);
+  return {
+    aggregate_report: aggregateReport,
+    developer_summary: formatSolutionDiagnosticSummary(aggregateReport),
+  };
+}
+
 export function buildDiscoveryOrchestratorDiagnosticMetrics(
   result: DiscoveryModularPipelineResult
 ) {
+  const solutionIntelligenceDiagnosticReport = buildSolutionIntelligenceDiagnosticReport(result);
   return {
     stages_executed: result.diagnostics
       .filter((diagnostic) => diagnostic.status === "completed")
@@ -38,6 +53,7 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       warning_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.warnings.length,
       recommendation_produced: Boolean(result.outputs.solutionIntelligenceEvaluation.recommendation?.recommendedCategory),
     } : null,
+    ...(solutionIntelligenceDiagnosticReport ? { solution_intelligence_diagnostic_report: solutionIntelligenceDiagnosticReport } : {}),
     deduplication_group_count:
       result.outputs.semanticProblemDeduplication?.summary.groupCount || 0,
   };
