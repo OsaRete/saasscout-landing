@@ -15,6 +15,7 @@ import type { FounderIntelligenceResult, FounderProfile } from "../engines/found
 import type { ConfidenceDetectionResult } from "../engines/confidence";
 import type { FeedbackEvent, FeedbackLearningResult } from "../engines/feedback";
 import type { ProblemSynthesisResult } from "./problem-synthesis";
+import type { SolutionIntelligenceResult } from "../engines/solution";
 
 export type DiscoveryStage =
   | "initialized"
@@ -38,6 +39,7 @@ export type DiscoveryPipelineStage =
   | "confidence_evaluation"
   | "feedback_learning"
   | "problem_intelligence_synthesis"
+  | "solution_intelligence_evaluation"
   | "semantic_problem_deduplication";
 
 export type DiscoveryStageStatus = "ready" | "skipped" | "completed";
@@ -105,6 +107,7 @@ export type DiscoveryModularPipelineOutputs = {
   confidenceEvaluation?: ConfidenceDetectionResult;
   feedbackLearning?: FeedbackLearningResult;
   problemIntelligenceSynthesis?: ProblemSynthesisResult;
+  solutionIntelligenceEvaluation?: SolutionIntelligenceResult;
   semanticProblemDeduplication?: ProblemDeduplicationResult;
 };
 

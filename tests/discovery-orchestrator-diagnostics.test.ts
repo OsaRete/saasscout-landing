@@ -54,6 +54,7 @@ test("buildDiscoveryOrchestratorDiagnosticMetrics returns compact aggregate coun
     monetization_candidate_count: 2,
     confidence_candidate_count: 1,
     feedback_signal_count: 2,
+    solution_intelligence: null,
     deduplication_group_count: 4,
   });
 });
