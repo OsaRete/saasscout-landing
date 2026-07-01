@@ -104,6 +104,14 @@ export type ProblemSynthesisCandidateCollapseReport = {
   singleCandidateMode: boolean;
   semanticTitlesGenerated: number;
   semanticTitlesSelected: number;
+  semanticTitlesRejected: number;
+  semanticTitleRejectionReasons: Array<{ reason: string; count: number }>;
+  semanticTitleCanonicalization: {
+    generatedCount: number;
+    uniqueCanonicalTitleCount: number;
+    duplicateCanonicalTitleCount: number;
+    canonicalTitleCounts: Array<{ title: string; count: number }>;
+  };
   rawTitlesRejected: number;
   semanticTitleScoreDistribution: { min: number; max: number; average: number };
   topSemanticTitles: Array<{ title: string; score: number; sourceTitle: string }>;

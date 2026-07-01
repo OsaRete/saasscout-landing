@@ -171,6 +171,10 @@ test("semantic naming rejects raw evidence titles and preserves single candidate
   assert.ok(report.rawTitlesRejected >= 1);
   assert.ok(report.semanticTitlesGenerated >= 1);
   assert.equal(report.semanticTitlesSelected, 1);
+  assert.ok(report.semanticTitlesRejected >= 0);
+  assert.ok(Array.isArray(report.semanticTitleRejectionReasons));
+  assert.ok(report.semanticTitleCanonicalization.generatedCount >= 1);
+  assert.ok(report.semanticTitleCanonicalization.uniqueCanonicalTitleCount >= 1);
   assert.ok(report.topSemanticTitles[0].score >= report.topSemanticTitles.at(-1)!.score);
   assert.deepEqual(synthesis.candidates[0], new ProblemIntelligenceSynthesisEngine().run({
     evidence,
