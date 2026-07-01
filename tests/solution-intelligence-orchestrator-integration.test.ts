@@ -54,7 +54,17 @@ test("diagnostic metrics expose safe solution intelligence aggregates", () => {
     completedAt: "2026-06-30T00:00:00.000Z",
   } as unknown as DiscoveryModularPipelineResult;
 
-  assert.deepEqual(buildDiscoveryOrchestratorDiagnosticMetrics(result).solution_intelligence, {
+  const metrics = buildDiscoveryOrchestratorDiagnosticMetrics(result);
+
+  assert.deepEqual(metrics.solution_intelligence_stage, {
+    included: true,
+    completed: true,
+    skipped: false,
+    missing_inputs_caused_skip: false,
+    missingInputs: [],
+    warnings: [],
+  });
+  assert.deepEqual(metrics.solution_intelligence, {
     evaluated_category_count: 13,
     recommended_category: "automation",
     rejected_category_count: 4,
@@ -63,4 +73,14 @@ test("diagnostic metrics expose safe solution intelligence aggregates", () => {
     warning_count: 1,
     recommendation_produced: true,
   });
+});
+
+test("discover opportunities workflow return shape stays legacy-only", () => {
+  const workflow = readFileSync("lib/intelligence/discover-opportunities-workflow.ts", "utf8");
+  const returnStart = workflow.lastIndexOf("  return {\n    success: true,");
+  const returnEnd = workflow.indexOf("  };", returnStart);
+  const returnBlock = workflow.slice(returnStart, returnEnd + "  };".length);
+
+  assert.notEqual(returnStart, -1);
+  assert.doesNotMatch(returnBlock, /orchestratorDiagnostics|solution_intelligence|modular_stage_statuses|environment_flags/);
 });

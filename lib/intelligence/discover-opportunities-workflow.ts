@@ -290,6 +290,13 @@ function runDiscoveryOrchestratorDiagnostics({
           orchestratorResult: result,
         })
       );
+
+      if (orchestratorDiagnostics.solution_intelligence_diagnostic_report) {
+        console.info(
+          "Solution Intelligence Diagnostic Summary",
+          orchestratorDiagnostics.solution_intelligence_diagnostic_report.developer_summary
+        );
+      }
     }
 
     console.info(
