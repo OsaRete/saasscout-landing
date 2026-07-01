@@ -113,3 +113,43 @@ test("problem synthesis diagnostics report candidate collapse counts without inc
   assert.match(report.collapseExplanation, /single-candidate mode/);
   assert.ok(report.topPotentialNextCandidateTitles.length <= 5);
 });
+
+test("problem synthesis seed diagnostics detect and down-rank generic titles while preserving one emitted candidate", () => {
+  const synthesis = new ProblemIntelligenceSynthesisEngine().run({
+    evidence,
+    runId: "generic-seed-test",
+    synthesizedAt: "2026-01-03T00:00:00.000Z",
+    painDetection: {
+      runId: "generic-seed-test",
+      detectedAt: "2026-01-03T00:00:00.000Z",
+      candidates: [
+        { id: "pain-generic", title: "manual", normalizedTitle: "manual", context: { market: null, audience: null, nicheCategory: null, knowledgeProblemId: null, relatedRelationshipIds: [] }, evidence: [], severity: "high", frequency: "persistent", score: { severityScore: 9, frequencyScore: 9, evidenceScore: 1, confidenceScore: 5, totalScore: 9, rationale: [] }, rank: 1 },
+        { id: "pain-specific", title: "Invoice approval delays for construction subcontractors", normalizedTitle: "invoice approval delays for construction subcontractors", context: { market: "Construction", audience: "Subcontractors", nicheCategory: "Invoice approvals", knowledgeProblemId: null, relatedRelationshipIds: [] }, evidence: [{ fingerprint: "seed-a", sourceType: "external_source", sourceName: "Forum", sourceUrl: null, capturedAt: "2026-01-01T00:00:00.000Z", claim: "Subcontractors wait weeks for invoice approvals after site changes.", painIntensity: 8, frequencySignal: 8, confidenceScore: 8, sourceQualityScore: 8 }], severity: "high", frequency: "persistent", score: { severityScore: 8, frequencyScore: 8, evidenceScore: 8, confidenceScore: 8, totalScore: 7, rationale: [] }, rank: 2 },
+      ],
+      signals: [],
+      warnings: [],
+      summary: { evidenceCount: 2, signalCount: 2, candidateCount: 2, highestScore: 9, averageConfidence: 8 },
+    },
+    opportunityDetection: {
+      runId: "generic-seed-test",
+      detectedAt: "2026-01-03T00:00:00.000Z",
+      candidates: [{ id: "opp-specific", title: "Invoice approval delays for construction subcontractors", normalizedTitle: "invoice approval delays for construction subcontractors", context: { market: "Construction", audience: "Subcontractors", nicheCategory: "Invoice approvals", primaryTheme: "Invoice approvals", painCandidateIds: ["pain-specific"], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: "Construction", audience: "Subcontractors", nicheCategory: "Invoice approvals", primaryProblem: "Invoice approval delays for construction subcontractors", existingSolutionSignals: [], underservedSignals: ["approval tracking"] }, evidence: [{ fingerprint: "seed-b", sourceType: "external_source", sourceName: "Review", sourceUrl: null, capturedAt: "2026-01-02T00:00:00.000Z", claim: "Construction subcontractors need faster invoice approval tracking.", market: "Construction", audience: "Subcontractors", nicheCategory: "Invoice approvals", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 6, differentiationPotentialScore: 7, evidenceScore: 8, confidenceScore: 8, riskPenalty: 1, totalScore: 8, rationale: [] }, readiness: "ready", risk: "moderate", rank: 1 }],
+      signals: [],
+      warnings: [],
+      summary: { evidenceCount: 2, painCandidateCount: 2, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 1, candidateCount: 1, highestScore: 8, averageConfidence: 8 },
+    },
+  });
+
+  const report = synthesis.diagnostics[0].candidateCollapseReport;
+  assert.equal(synthesis.candidates.length, 1);
+  assert.equal(report.extractedSeedCount, 3);
+  assert.equal(report.rankedSeedCount, 2);
+  assert.equal(report.genericTitleSeedCount, 1);
+  assert.equal(report.downrankedGenericSeedCount, 1);
+  assert.equal(report.seedsWithCrossEngineSupport, 1);
+  assert.ok(report.seedsWithoutEnoughEvidence >= 1);
+  assert.equal(report.rankedSeeds.find((seed) => seed.normalizedTitle === "manual")?.genericTitle, true);
+  assert.equal(report.rankedSeeds.find((seed) => seed.normalizedTitle === "manual")?.downrankedGeneric, true);
+  assert.equal(report.topRankedSeedTitles[0], "Invoice approval delays for construction subcontractors");
+  assert.ok(report.topRankedSeedScores[0] > (report.rankedSeeds.find((seed) => seed.normalizedTitle === "manual")?.score || 0));
+});

@@ -1,5 +1,5 @@
 import type { Evidence } from "../../evidence";
-import type { ProblemSynthesisCandidate, ProblemSynthesisCandidateCollapseReport, ProblemSynthesisDiagnostics, ProblemSynthesisInput, ProblemSynthesisResult, ProblemScoreBreakdown } from "./types";
+import type { ProblemSynthesisCandidate, ProblemSynthesisCandidateCollapseReport, ProblemSynthesisDiagnostics, ProblemSynthesisInput, ProblemSynthesisResult, ProblemScoreBreakdown, ProblemSynthesisSeedDiagnostic } from "./types";
 
 function clampScore(value: unknown, fallback = 0) {
   const score = Number(value);
@@ -36,9 +36,26 @@ type SynthesisSeed = {
   normalizedTitle: string;
   market: string;
   audience: string;
-  score: number;
+  problemCluster: string;
+  engine: string;
+  baseScore: number;
   rank: number;
+  evidenceCount: number;
+  sourceQualityScore: number;
+  titleSpecificityScore: number;
+  claimSpecificityScore: number;
+  genericTitle: boolean;
 };
+
+type RankedSynthesisSeed = SynthesisSeed & {
+  score: number;
+  engineSupport: string[];
+  rejectionReasons: string[];
+  downrankedGeneric: boolean;
+};
+
+const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service"]);
+const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
 
 function safeLogTitle(value: string) {
   return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
@@ -51,56 +68,137 @@ function firstText(...values: unknown[]) {
   return "unknown";
 }
 
+function specificityScore(value: string) {
+  const words = normalize(value).split(" ").filter(Boolean);
+  if (words.length === 0) return 0;
+  const lengthScore = Math.min(10, words.length * 2);
+  const descriptiveBonus = words.some((word) => word.length >= 8) ? 1 : 0;
+  return clampScore(lengthScore + descriptiveBonus, 0);
+}
+
+function isGenericTitle(title: string, normalizedTitle = normalize(title)) {
+  const words = normalizedTitle.split(" ").filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length === 1 && GENERIC_TITLES.has(words[0])) return true;
+  return words.length <= 2 && words.every((word) => GENERIC_TITLES.has(word));
+}
+
 function candidateSeeds(input: ProblemSynthesisInput): SynthesisSeed[] {
-  const toSeed = (candidate: { title?: string; normalizedTitle?: string; score?: { totalScore?: number }; rank?: number; context?: Record<string, unknown> }): SynthesisSeed => {
+  const toSeed = (engine: string, candidate: { title?: string; normalizedTitle?: string; score?: { totalScore?: number; confidenceScore?: number; evidenceScore?: number }; rank?: number; context?: Record<string, unknown>; marketContext?: Record<string, unknown>; evidence?: Array<{ sourceQualityScore?: number; claim?: string }> }): SynthesisSeed => {
     const context = candidate.context || {};
+    const marketContext = candidate.marketContext || {};
     const markets = Array.isArray(context.markets) ? context.markets : [];
     const audiences = Array.isArray(context.audiences) ? context.audiences : [];
-    const market = firstText(context.market, markets[0], context.nicheCategory);
-    const audience = firstText(context.audience, audiences[0], context.nicheCategory);
-    const title = firstText(candidate.title, context.primaryProblem, context.primaryClaim, context.primaryTheme);
+    const market = firstText(context.market, marketContext.market, markets[0], context.nicheCategory, marketContext.nicheCategory);
+    const audience = firstText(context.audience, marketContext.audience, audiences[0], context.nicheCategory, marketContext.nicheCategory);
+    const title = firstText(candidate.title, context.primaryProblem, marketContext.primaryProblem, context.primaryClaim, context.primaryTheme);
+    const normalizedTitle = candidate.normalizedTitle || normalize(title);
+    const evidenceItems = candidate.evidence || [];
+    const claims = evidenceItems.map((item) => item.claim).filter(Boolean) as string[];
+    const problemCluster = normalize(firstText(context.primaryTheme, context.primaryProblem, marketContext.primaryProblem, context.nicheCategory, marketContext.nicheCategory, title)) || "unknown";
     return {
       title,
-      normalizedTitle: candidate.normalizedTitle || normalize(title),
+      normalizedTitle,
       market: normalize(market) || "unknown",
       audience: normalize(audience) || "unknown",
-      score: clampScore(candidate.score?.totalScore, 0),
+      problemCluster,
+      engine,
+      baseScore: clampScore(candidate.score?.totalScore, 0),
       rank: candidate.rank || 999,
+      evidenceCount: evidenceItems.length,
+      sourceQualityScore: average(evidenceItems.map((item) => item.sourceQualityScore), clampScore(candidate.score?.confidenceScore, 0)),
+      titleSpecificityScore: specificityScore(title),
+      claimSpecificityScore: average(claims.map(specificityScore), specificityScore(firstText(context.primaryClaim, context.primaryProblem, marketContext.primaryProblem, title))),
+      genericTitle: isGenericTitle(title, normalizedTitle),
     };
   };
 
   return [
-    ...(input.painDetection?.candidates || []),
-    ...(input.patternDetection?.candidates || []),
-    ...(input.trendDetection?.candidates || []),
-    ...(input.opportunityDetection?.candidates || []),
-    ...(input.monetizationEvaluation?.candidates || []),
-    ...(input.confidenceEvaluation?.candidates || []),
-  ].map(toSeed);
+    ...(input.painDetection?.candidates || []).map((candidate) => toSeed("pain", candidate)),
+    ...(input.patternDetection?.candidates || []).map((candidate) => toSeed("pattern", candidate)),
+    ...(input.trendDetection?.candidates || []).map((candidate) => toSeed("trend", candidate)),
+    ...(input.opportunityDetection?.candidates || []).map((candidate) => toSeed("opportunity", candidate)),
+    ...(input.monetizationEvaluation?.candidates || []).map((candidate) => toSeed("monetization", candidate)),
+    ...(input.confidenceEvaluation?.candidates || []).map((candidate) => toSeed("confidence", candidate)),
+  ];
+}
+
+function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
+  const groups = new Map<string, SynthesisSeed[]>();
+  for (const seed of seeds) {
+    const clusterKey = [seed.normalizedTitle, seed.market, seed.audience, seed.problemCluster].join("|");
+    groups.set(clusterKey, [...(groups.get(clusterKey) || []), seed]);
+  }
+
+  return [...groups.values()].map((group) => {
+    const representative = [...group].sort((a, b) => b.baseScore - a.baseScore || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle))[0];
+    const engineSupport = unique(group.map((seed) => seed.engine)).sort();
+    const evidenceCount = group.reduce((sum, seed) => sum + seed.evidenceCount, 0);
+    const genericTitle = group.some((seed) => seed.genericTitle);
+    const hasContext = representative.market !== "unknown" || representative.audience !== "unknown" || representative.problemCluster !== representative.normalizedTitle;
+    const downrankedGeneric = genericTitle && (!hasContext || evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED);
+    const rejectionReasons = [
+      downrankedGeneric ? "generic_title_without_enough_context" : "",
+      evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED ? "not_enough_evidence" : "",
+      engineSupport.length < 2 ? "single_engine_support" : "",
+    ].filter(Boolean);
+    const score = Math.round(clampScore(
+      average(group.map((seed) => seed.baseScore), 0) * 0.36
+      + Math.min(10, evidenceCount * 1.5) * 0.14
+      + average(group.map((seed) => seed.sourceQualityScore), 0) * 0.12
+      + representative.titleSpecificityScore * 0.14
+      + representative.claimSpecificityScore * 0.1
+      + Math.min(10, engineSupport.length * 2) * 0.14
+      - (downrankedGeneric ? 3 : 0),
+      0
+    ) * 100) / 100;
+
+    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric };
+  }).sort((a, b) => b.score - a.score || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
+}
+
+function seedDiagnostic(seed: RankedSynthesisSeed): ProblemSynthesisSeedDiagnostic {
+  return {
+    title: safeLogTitle(seed.title),
+    normalizedTitle: seed.normalizedTitle,
+    market: seed.market,
+    audience: seed.audience,
+    problemCluster: seed.problemCluster,
+    score: seed.score,
+    rejectionReasons: seed.rejectionReasons,
+    engineSupport: seed.engineSupport,
+    evidenceCount: seed.evidenceCount,
+    genericTitle: seed.genericTitle,
+    downrankedGeneric: seed.downrankedGeneric,
+  };
+}
+
+function countReasons(seeds: RankedSynthesisSeed[]) {
+  const counts = new Map<string, number>();
+  for (const seed of seeds) {
+    for (const reason of seed.rejectionReasons) counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([reason, count]) => ({ reason, count }));
 }
 
 function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandidateCount: number, emittedTitle: string): ProblemSynthesisCandidateCollapseReport {
   const seeds = candidateSeeds(input);
-  const rankedSeeds = [...seeds].sort((a, b) => b.score - a.score || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
+  const rankedSeeds = rankSeeds(seeds);
   const normalizedTitles = new Set(seeds.map((seed) => seed.normalizedTitle).filter(Boolean));
-  const clusters = new Map<string, SynthesisSeed>();
-
-  for (const seed of rankedSeeds) {
-    const clusterKey = [seed.normalizedTitle, seed.market, seed.audience].join("|");
-    if (!clusters.has(clusterKey)) clusters.set(clusterKey, seed);
-  }
-
-  const eligibleSynthesisClusterCount = clusters.size;
+  const eligibleSynthesisClusterCount = rankedSeeds.length;
   const rejectedSynthesisClusterCount = Math.max(0, eligibleSynthesisClusterCount - emittedCandidateCount);
   const emittedNormalizedTitle = normalize(emittedTitle);
-  const topPotentialNextCandidateTitles = [...clusters.values()]
-    .filter((seed) => seed.normalizedTitle !== emittedNormalizedTitle)
+  const rejectedSeeds = rankedSeeds.filter((seed) => seed.normalizedTitle !== emittedNormalizedTitle);
+  const topPotentialNextCandidateTitles = rejectedSeeds
     .map((seed) => safeLogTitle(seed.title))
     .filter(Boolean)
     .slice(0, 5);
   const rejectionReasons = rejectedSynthesisClusterCount > 0
     ? [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: rejectedSynthesisClusterCount }]
     : [];
+  const seedRejectionReasons = countReasons(rejectedSeeds);
 
   return {
     upstreamCandidateCounts: {
@@ -113,12 +211,23 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
     },
     totalPossibleSynthesisSeedCount: seeds.length,
     uniqueNormalizedTitleCount: normalizedTitles.size,
-    uniqueTitleMarketAudienceClusterCount: clusters.size,
+    uniqueTitleMarketAudienceClusterCount: eligibleSynthesisClusterCount,
     eligibleSynthesisClusterCount,
     emittedSynthesisCandidateCount: emittedCandidateCount,
     rejectedSynthesisClusterCount,
     rejectionReasons,
     topPotentialNextCandidateTitles,
+    extractedSeedCount: seeds.length,
+    rankedSeedCount: rankedSeeds.length,
+    genericTitleSeedCount: rankedSeeds.filter((seed) => seed.genericTitle).length,
+    downrankedGenericSeedCount: rankedSeeds.filter((seed) => seed.downrankedGeneric).length,
+    topRankedSeedTitles: rankedSeeds.slice(0, 5).map((seed) => safeLogTitle(seed.title)),
+    topRankedSeedScores: rankedSeeds.slice(0, 5).map((seed) => seed.score),
+    topRejectedSeedTitles: rejectedSeeds.slice(0, 5).map((seed) => safeLogTitle(seed.title)),
+    topRejectionReasons: seedRejectionReasons.slice(0, 5).map((item) => item.reason),
+    seedsWithCrossEngineSupport: rankedSeeds.filter((seed) => seed.engineSupport.length > 1).length,
+    seedsWithoutEnoughEvidence: rankedSeeds.filter((seed) => seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED).length,
+    rankedSeeds: rankedSeeds.slice(0, 10).map(seedDiagnostic),
     singleCandidateMode: true,
     collapseExplanation: emittedCandidateCount > 0
       ? "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, so only the top ranked synthesis cluster is emitted and all other eligible clusters are diagnostics-only."
