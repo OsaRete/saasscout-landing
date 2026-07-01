@@ -108,6 +108,16 @@ export type ProblemSynthesisCandidateCollapseReport = {
   semanticTitleScoreDistribution: { min: number; max: number; average: number };
   topSemanticTitles: Array<{ title: string; score: number; sourceTitle: string }>;
   rawTitleRejectionReasons: Array<{ reason: string; count: number }>;
+  multiCandidateModeEnabled: boolean;
+  maxCandidateCount: number;
+  emittedCandidateCount: number;
+  rejectedCandidateCount: number;
+  emittedCandidateTitles: string[];
+  rejectedCandidateTitles: string[];
+  duplicateRejectionCount: number;
+  weakEvidenceRejectionCount: number;
+  genericTitleRejectionCount: number;
+  semanticTitleQualityScores: Array<{ title: string; score: number }>;
   collapseExplanation: string;
 };
 

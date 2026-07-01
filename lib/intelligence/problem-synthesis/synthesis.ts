@@ -60,6 +60,9 @@ type RankedSynthesisSeed = SynthesisSeed & {
 
 const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service"]);
 const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
+const MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES = 3;
+const MIN_SYNTHESIS_CONFIDENCE = 5;
+const MIN_SEMANTIC_TITLE_SCORE = 3;
 const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signals", "manual workflows lead"];
 const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "onboarding", "billing", "follow", "approval", "automation", "operations", "reporting", "spreadsheet", "customer", "lead", "handoff"]);
 const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff"]);
@@ -284,21 +287,73 @@ function scoreDistribution(scores: number[]) {
   };
 }
 
-function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandidateCount: number, emittedTitle: string): ProblemSynthesisCandidateCollapseReport {
+function isMultiCandidateDiagnosticsEnabled() {
+  return process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS === "1";
+}
+
+type CandidateSelection = {
+  emittedSeeds: RankedSynthesisSeed[];
+  rejectedSeeds: Array<{ seed: RankedSynthesisSeed; reasons: string[] }>;
+  maxCandidateCount: number;
+  multiCandidateModeEnabled: boolean;
+};
+
+function selectionRejectionReasons(seed: RankedSynthesisSeed, emittedSeeds: RankedSynthesisSeed[], confidence: number, hasMeaningfulSummary: boolean) {
+  const normalizedSemanticTitle = normalize(seed.semanticTitle);
+  const emittedTitleKeys = new Set(emittedSeeds.map((item) => normalize(item.semanticTitle)));
+  const emittedMarketAudienceClusters = new Set(emittedSeeds.map((item) => [item.market, item.audience].join("|")));
+  return [
+    !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE ? "generic_or_weak_semantic_title" : "",
+    seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED || seed.engineSupport.length < 2 ? "weak_evidence_support" : "",
+    !hasMeaningfulSummary ? "weak_summary" : "",
+    emittedTitleKeys.has(normalizedSemanticTitle) ? "duplicate_normalized_title" : "",
+    emittedMarketAudienceClusters.has([seed.market, seed.audience].join("|")) ? "duplicate_market_audience_cluster" : "",
+    confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
+    rawTitleRejectionReasons(seed.semanticTitle).length > 0 ? "semantic_title_matches_raw_evidence_pattern" : "",
+  ].filter(Boolean);
+}
+
+function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, hasMeaningfulSummary: boolean): CandidateSelection {
+  const rankedSeeds = rankSeeds(candidateSeeds(input));
+  const multiCandidateModeEnabled = isMultiCandidateDiagnosticsEnabled();
+  const maxCandidateCount = multiCandidateModeEnabled ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1;
+  const emittedSeeds: RankedSynthesisSeed[] = [];
+  const rejectedSeeds: Array<{ seed: RankedSynthesisSeed; reasons: string[] }> = [];
+
+  for (const seed of rankedSeeds) {
+    if (!multiCandidateModeEnabled && emittedSeeds.length >= 1) {
+      rejectedSeeds.push({ seed, reasons: ["single_candidate_mode_retains_only_top_ranked_cluster"] });
+      continue;
+    }
+
+    const reasons = multiCandidateModeEnabled
+      ? selectionRejectionReasons(seed, emittedSeeds, confidence, hasMeaningfulSummary)
+      : [];
+
+    if (reasons.length === 0 && emittedSeeds.length < maxCandidateCount) {
+      emittedSeeds.push(seed);
+    } else {
+      rejectedSeeds.push({ seed, reasons: reasons.length > 0 ? reasons : ["max_candidate_count_reached"] });
+    }
+  }
+
+  return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled };
+}
+
+function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: CandidateSelection): ProblemSynthesisCandidateCollapseReport {
   const seeds = candidateSeeds(input);
   const rankedSeeds = rankSeeds(seeds);
   const normalizedTitles = new Set(seeds.map((seed) => seed.normalizedTitle).filter(Boolean));
   const eligibleSynthesisClusterCount = rankedSeeds.length;
+  const emittedCandidateCount = selection.emittedSeeds.length;
   const rejectedSynthesisClusterCount = Math.max(0, eligibleSynthesisClusterCount - emittedCandidateCount);
-  const emittedNormalizedTitle = normalize(emittedTitle);
-  const rejectedSeeds = rankedSeeds.filter((seed) => normalize(seed.semanticTitle) !== emittedNormalizedTitle);
-  const topPotentialNextCandidateTitles = rejectedSeeds
-    .map((seed) => safeLogTitle(seed.title))
-    .filter(Boolean)
-    .slice(0, 5);
-  const rejectionReasons = rejectedSynthesisClusterCount > 0
-    ? [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: rejectedSynthesisClusterCount }]
-    : [];
+  const rejectedSeeds = selection.rejectedSeeds.map((item) => item.seed);
+  const topPotentialNextCandidateTitles = rejectedSeeds.map((seed) => safeLogTitle(seed.semanticTitle)).filter(Boolean).slice(0, 5);
+  const rejectionReasonCounts = new Map<string, number>();
+  for (const rejection of selection.rejectedSeeds) {
+    for (const reason of rejection.reasons) rejectionReasonCounts.set(reason, (rejectionReasonCounts.get(reason) || 0) + 1);
+  }
+  const rejectionReasons = [...rejectionReasonCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([reason, count]) => ({ reason, count }));
   const seedRejectionReasons = countReasons(rejectedSeeds);
   const semanticScores = rankedSeeds.map((seed) => seed.semanticTitleScore);
 
@@ -330,16 +385,28 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
     seedsWithCrossEngineSupport: rankedSeeds.filter((seed) => seed.engineSupport.length > 1).length,
     seedsWithoutEnoughEvidence: rankedSeeds.filter((seed) => seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED).length,
     rankedSeeds: rankedSeeds.slice(0, 10).map(seedDiagnostic),
-    singleCandidateMode: true,
+    singleCandidateMode: !selection.multiCandidateModeEnabled,
     semanticTitlesGenerated: rankedSeeds.length,
     semanticTitlesSelected: emittedCandidateCount,
     rawTitlesRejected: rankedSeeds.filter((seed) => seed.rawTitleRejected).length,
     semanticTitleScoreDistribution: scoreDistribution(semanticScores),
     topSemanticTitles: rankedSeeds.slice(0, 5).map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore, sourceTitle: safeLogTitle(seed.title) })),
     rawTitleRejectionReasons: countRawTitleReasons(rankedSeeds),
-    collapseExplanation: emittedCandidateCount > 0
-      ? "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, so only the top ranked synthesis cluster is emitted and all other eligible clusters are diagnostics-only."
-      : "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, but no candidate was emitted because no reusable normalized evidence was available.",
+    multiCandidateModeEnabled: selection.multiCandidateModeEnabled,
+    maxCandidateCount: selection.maxCandidateCount,
+    emittedCandidateCount,
+    rejectedCandidateCount: selection.rejectedSeeds.length,
+    emittedCandidateTitles: selection.emittedSeeds.map((seed) => safeLogTitle(seed.semanticTitle)),
+    rejectedCandidateTitles: selection.rejectedSeeds.map((item) => safeLogTitle(item.seed.semanticTitle)),
+    duplicateRejectionCount: rejectionReasons.filter((item) => item.reason.includes("duplicate")).reduce((sum, item) => sum + item.count, 0),
+    weakEvidenceRejectionCount: rejectionReasonCounts.get("weak_evidence_support") || 0,
+    genericTitleRejectionCount: rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0,
+    semanticTitleQualityScores: rankedSeeds.map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore })),
+    collapseExplanation: selection.multiCandidateModeEnabled
+      ? `Problem synthesis is operating in diagnostic-only multi-candidate mode, so up to ${selection.maxCandidateCount} quality-gated semantic candidates are emitted only inside modular diagnostics.`
+      : emittedCandidateCount > 0
+        ? "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, so only the top ranked synthesis cluster is emitted and all other eligible clusters are diagnostics-only."
+        : "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, but no candidate was emitted because no reusable normalized evidence was available.",
   };
 }
 
@@ -403,55 +470,69 @@ export class ProblemIntelligenceSynthesisEngine {
     const markets = unique(evidence.map((item) => item.market || item.nicheCategory));
     const audiences = unique(evidence.map((item) => item.audience || item.nicheCategory));
     const sourceNames = unique(evidence.map((item) => item.sourceName));
-    const title = primaryTitle(input);
     const scoreBreakdown = buildScoreBreakdown(input);
     const confidence = Math.round(clampScore(scoreBreakdown.confidenceScore || scoreBreakdown.totalScore, 0) * 100) / 100;
     const conciseEvidenceSummary = claims.length > 0 ? claims.slice(0, 3).map(sentence).join(" ") : "No reusable evidence claims were available for synthesis.";
-    const synthesizedSummary = sentence(`${title} is supported by ${evidence.length} evidence item${evidence.length === 1 ? "" : "s"}${markets.length ? ` across ${markets.slice(0, 3).join(", ")}` : ""}${audiences.length ? ` for ${audiences.slice(0, 3).join(", ")}` : ""}`);
+    const hasMeaningfulSummary = claims.length > 0 && conciseEvidenceSummary.length >= 40;
+    const selection = evidence.length === 0
+      ? { emittedSeeds: [], rejectedSeeds: [], maxCandidateCount: isMultiCandidateDiagnosticsEnabled() ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1, multiCandidateModeEnabled: isMultiCandidateDiagnosticsEnabled() }
+      : selectSynthesisSeeds(input, confidence, hasMeaningfulSummary);
+    const fallbackTitle = primaryTitle(input);
+    const emittedTitles = selection.emittedSeeds.length > 0 ? selection.emittedSeeds.map((seed) => seed.semanticTitle) : (evidence.length === 0 || selection.multiCandidateModeEnabled ? [] : [fallbackTitle]);
+    const candidateCollapseReport = buildCandidateCollapseReport(input, selection.emittedSeeds.length > 0 || evidence.length === 0 ? selection : { ...selection, emittedSeeds: rankSeeds(candidateSeeds(input)).slice(0, 1) });
     const warnings = evidence.length === 0 ? ["Problem synthesis produced no candidates because no normalized evidence was available."] : [];
-    const emittedCandidateCount = evidence.length === 0 ? 0 : 1;
-    const candidateCollapseReport = buildCandidateCollapseReport(input, emittedCandidateCount, title);
-    const diagnostic: ProblemSynthesisDiagnostics = {
-      synthesizedTitle: title,
-      synthesizedSummary,
-      evidenceCount: evidence.length,
-      evidenceReferences,
-      confidence,
-      synthesisCompleteness: completeness(input, evidence.length),
-      candidateCollapseReport,
-      engineCandidateCounts: {
-        pain: input.painDetection?.candidates.length || 0,
-        pattern: input.patternDetection?.candidates.length || 0,
-        trend: input.trendDetection?.candidates.length || 0,
-        opportunity: input.opportunityDetection?.candidates.length || 0,
-        monetization: input.monetizationEvaluation?.candidates.length || 0,
-        confidence: input.confidenceEvaluation?.candidates.length || 0,
-        feedback: input.feedbackLearning?.signals.length || 0,
-      },
-      warnings,
+    const engineCandidateCounts = {
+      pain: input.painDetection?.candidates.length || 0,
+      pattern: input.patternDetection?.candidates.length || 0,
+      trend: input.trendDetection?.candidates.length || 0,
+      opportunity: input.opportunityDetection?.candidates.length || 0,
+      monetization: input.monetizationEvaluation?.candidates.length || 0,
+      confidence: input.confidenceEvaluation?.candidates.length || 0,
+      feedback: input.feedbackLearning?.signals.length || 0,
     };
-    const candidates: ProblemSynthesisCandidate[] = evidence.length === 0 ? [] : [{
-      id: `${runId}:problem-synthesis:${normalize(title) || "candidate"}`,
-      synthesizedProblemTitle: title,
-      synthesizedSummary,
-      affectedMarkets: markets,
-      affectedAudiences: audiences,
-      suggestedSolutions: suggestedSolutions(input),
-      conciseEvidenceSummary,
-      canonicalProblemCluster: canonicalCluster(title, input),
-      scoreBreakdown,
-      supportingEvidenceReferences: evidenceReferences,
-      confidence,
-      narrative: { title, summary: synthesizedSummary, primaryTheme: canonicalCluster(title, input), rationale: ["Deterministically selected the strongest engine title.", "Synthesized evidence, market, audience, score, and confidence signals without AI."] },
-      evidenceSummary: { evidenceCount: evidence.length, sourceCount: sourceNames.length, sourceNames, markets, audiences, claims, references: evidenceReferences, summary: conciseEvidenceSummary },
-      diagnostics: diagnostic,
-    }];
+
+    const diagnostics: ProblemSynthesisDiagnostics[] = emittedTitles.map((title) => {
+      const synthesizedSummary = sentence(`${title} is supported by ${evidence.length} evidence item${evidence.length === 1 ? "" : "s"}${markets.length ? ` across ${markets.slice(0, 3).join(", ")}` : ""}${audiences.length ? ` for ${audiences.slice(0, 3).join(", ")}` : ""}`);
+      return {
+        synthesizedTitle: title,
+        synthesizedSummary,
+        evidenceCount: evidence.length,
+        evidenceReferences,
+        confidence,
+        synthesisCompleteness: completeness(input, evidence.length),
+        candidateCollapseReport,
+        engineCandidateCounts,
+        warnings,
+      };
+    });
+
+    const candidates: ProblemSynthesisCandidate[] = emittedTitles.map((title, index) => {
+      const diagnostic = diagnostics[index];
+      const cluster = canonicalCluster(title, input);
+      return {
+        id: `${runId}:problem-synthesis:${normalize(title) || "candidate"}`,
+        synthesizedProblemTitle: title,
+        synthesizedSummary: diagnostic.synthesizedSummary,
+        affectedMarkets: markets,
+        affectedAudiences: audiences,
+        suggestedSolutions: suggestedSolutions(input),
+        conciseEvidenceSummary,
+        canonicalProblemCluster: cluster,
+        scoreBreakdown,
+        supportingEvidenceReferences: evidenceReferences,
+        confidence,
+        narrative: { title, summary: diagnostic.synthesizedSummary, primaryTheme: cluster, rationale: ["Deterministically selected a quality-gated semantic engine title.", "Synthesized evidence, market, audience, score, and confidence signals without AI."] },
+        evidenceSummary: { evidenceCount: evidence.length, sourceCount: sourceNames.length, sourceNames, markets, audiences, claims, references: evidenceReferences, summary: conciseEvidenceSummary },
+        diagnostics: diagnostic,
+      };
+    });
+    const diagnostic = diagnostics[0] || { synthesizedTitle: fallbackTitle, synthesizedSummary: "", evidenceCount: evidence.length, evidenceReferences, confidence, synthesisCompleteness: completeness(input, evidence.length), candidateCollapseReport, engineCandidateCounts, warnings };
 
     return {
       runId,
       synthesizedAt,
       candidates,
-      diagnostics: [diagnostic],
+      diagnostics: diagnostics.length > 0 ? diagnostics : [diagnostic],
       warnings,
       summary: { evidenceCount: evidence.length, candidateCount: candidates.length, averageConfidence: confidence, averageCompleteness: diagnostic.synthesisCompleteness },
     };
