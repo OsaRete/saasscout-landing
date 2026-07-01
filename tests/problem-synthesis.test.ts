@@ -180,3 +180,113 @@ test("semantic naming rejects raw evidence titles and preserves single candidate
     opportunityDetection: { runId: "semantic-title-test", detectedAt: "2026-01-03T00:00:00.000Z", candidates: [{ id: "opp-semantic", title: "Workflow automation for agency operations", normalizedTitle: "workflow automation for agency operations", context: { market: "Agencies", audience: "Agency owners", nicheCategory: "Workflow automation", primaryTheme: "Agency workflow automation", painCandidateIds: ["pain-raw"], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: "Agencies", audience: "Agency owners", nicheCategory: "Workflow automation", primaryProblem: "manual workflows lead to errors", existingSolutionSignals: [], underservedSignals: ["workflow error prevention"] }, evidence: [{ fingerprint: "raw-b", sourceType: "external_source", sourceName: "Forum", sourceUrl: null, capturedAt: "2026-01-02T00:00:00.000Z", claim: "Agency workflow operations need error prevention.", market: "Agencies", audience: "Agency owners", nicheCategory: "Workflow automation", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 8, confidenceScore: 8, riskPenalty: 1, totalScore: 8.5, rationale: [] }, readiness: "ready", risk: "moderate", rank: 1 }], signals: [], warnings: [], summary: { evidenceCount: 2, painCandidateCount: 1, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 1, candidateCount: 1, highestScore: 8.5, averageConfidence: 8 } },
   }).candidates[0]);
 });
+
+test("problem synthesis multi-candidate diagnostics flag emits up to three quality-gated semantic candidates", () => {
+  const previous = process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
+  process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = "1";
+
+  const seedEvidence = [
+    ...evidence,
+    { ...evidence[0], deduplicationFingerprint: "evidence-c", market: "Construction", audience: "Subcontractors", nicheCategory: "Invoice approvals", extractedClaim: "Subcontractors repeatedly lose time waiting for invoice approvals.", detectedProblemTitle: "Invoice approval bottleneck" },
+    { ...evidence[1], deduplicationFingerprint: "evidence-d", market: "Sales", audience: "Sales managers", nicheCategory: "CRM follow up", extractedClaim: "Sales managers miss customer follow ups because CRM handoffs are disconnected.", detectedProblemTitle: "Disconnected CRM follow up" },
+  ];
+  const engineCandidate = (id: string, title: string, normalizedTitle: string, market: string, audience: string, theme: string, rank: number) => ({
+    id,
+    title,
+    normalizedTitle,
+    context: { market, audience, nicheCategory: theme, primaryTheme: theme, primaryProblem: title, painCandidateIds: [], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] },
+    marketContext: { market, audience, nicheCategory: theme, primaryProblem: title, existingSolutionSignals: [], underservedSignals: [theme] },
+    evidence: [
+      { fingerprint: `${id}-a`, sourceType: "external_source", sourceName: "Forum", sourceUrl: null, capturedAt: "2026-01-01T00:00:00.000Z", claim: `${audience} report repeated ${theme} problems.`, market, audience, nicheCategory: theme, painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 },
+      { fingerprint: `${id}-b`, sourceType: "external_source", sourceName: "Review", sourceUrl: null, capturedAt: "2026-01-02T00:00:00.000Z", claim: `${market} teams need better ${theme} coordination.`, market, audience, nicheCategory: theme, painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 },
+    ],
+    score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 8, confidenceScore: 8, totalScore: 8, rationale: [] },
+    readiness: "ready" as const,
+    risk: "moderate" as const,
+    rank,
+  });
+
+  try {
+    const synthesis = new ProblemIntelligenceSynthesisEngine().run({
+      evidence: seedEvidence,
+      runId: "multi-candidate-test",
+      synthesizedAt: "2026-01-03T00:00:00.000Z",
+      opportunityDetection: {
+        runId: "multi-candidate-test",
+        detectedAt: "2026-01-03T00:00:00.000Z",
+        candidates: [
+          engineCandidate("opp-onboarding", "Client onboarding workflow breakdown", "client onboarding workflow breakdown", "Agencies", "Agency owners", "Client onboarding", 1),
+          engineCandidate("opp-invoice", "Invoice approval delays for subcontractors", "invoice approval delays for subcontractors", "Construction", "Subcontractors", "Invoice approvals", 2),
+          engineCandidate("opp-crm", "Disconnected CRM follow up gaps", "disconnected crm follow up gaps", "Sales", "Sales managers", "CRM follow up", 3),
+          engineCandidate("opp-extra", "Spreadsheet workflow reporting gaps", "spreadsheet workflow reporting gaps", "Accounting", "Controllers", "Spreadsheet workflow reporting", 4),
+        ],
+        signals: [],
+        warnings: [],
+        summary: { evidenceCount: 4, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 4, candidateCount: 4, highestScore: 8, averageConfidence: 8 },
+      },
+      confidenceEvaluation: {
+        runId: "multi-candidate-test",
+        detectedAt: "2026-01-03T00:00:00.000Z",
+        candidates: [
+          engineCandidate("conf-onboarding", "Client onboarding workflow breakdown", "client onboarding workflow breakdown", "Agencies", "Agency owners", "Client onboarding", 1),
+          engineCandidate("conf-invoice", "Invoice approval delays for subcontractors", "invoice approval delays for subcontractors", "Construction", "Subcontractors", "Invoice approvals", 2),
+          engineCandidate("conf-crm", "Disconnected CRM follow up gaps", "disconnected crm follow up gaps", "Sales", "Sales managers", "CRM follow up", 3),
+          engineCandidate("conf-extra", "Spreadsheet workflow reporting gaps", "spreadsheet workflow reporting gaps", "Accounting", "Controllers", "Spreadsheet workflow reporting", 4),
+        ],
+        signals: [],
+        warnings: [],
+        summary: { evidenceCount: 4, knowledgeProblemCount: 0, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, opportunityCandidateCount: 4, monetizationCandidateCount: 0, founderFitCandidateCount: 0, signalCount: 4, candidateCount: 4, highestScore: 8, averageConfidence: 8 },
+      },
+    });
+
+    const report = synthesis.diagnostics[0].candidateCollapseReport;
+    assert.equal(synthesis.candidates.length, 3);
+    assert.equal(report.multiCandidateModeEnabled, true);
+    assert.equal(report.maxCandidateCount, 3);
+    assert.equal(report.emittedCandidateCount, 3);
+    assert.equal(report.rejectedCandidateCount, 1);
+    assert.deepEqual(synthesis.candidates.map((candidate) => candidate.synthesizedProblemTitle), report.emittedCandidateTitles);
+    assert.ok(synthesis.candidates.every((candidate) => !/evidence|reddit|lead to/i.test(candidate.synthesizedProblemTitle)));
+    assert.ok(report.semanticTitleQualityScores.length >= 4);
+  } finally {
+    if (previous === undefined) delete process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
+    else process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = previous;
+  }
+});
+
+test("problem synthesis multi-candidate diagnostics rejects weak generic raw and duplicate candidates", () => {
+  const previous = process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
+  process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = "1";
+
+  try {
+    const weak = new ProblemIntelligenceSynthesisEngine().run({
+      evidence,
+      runId: "multi-rejection-test",
+      synthesizedAt: "2026-01-03T00:00:00.000Z",
+      opportunityDetection: {
+        runId: "multi-rejection-test",
+        detectedAt: "2026-01-03T00:00:00.000Z",
+        candidates: [
+          { id: "valid-a", title: "Client onboarding workflow breakdown", normalizedTitle: "client onboarding workflow breakdown", context: { market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", primaryTheme: "Client onboarding", painCandidateIds: [], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", primaryProblem: "Client onboarding workflow breakdown", existingSolutionSignals: [], underservedSignals: ["handoff"] }, evidence: [{ fingerprint: "valid-a1", sourceType: "external_source", sourceName: "Forum", sourceUrl: null, capturedAt: "2026-01-01T00:00:00.000Z", claim: "Agency onboarding handoffs break repeatedly.", market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }, { fingerprint: "valid-a2", sourceType: "external_source", sourceName: "Review", sourceUrl: null, capturedAt: "2026-01-02T00:00:00.000Z", claim: "Agencies need onboarding coordination.", market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 8, confidenceScore: 8, totalScore: 8, rationale: [] }, readiness: "ready", risk: "moderate", rank: 1 },
+          { id: "dup-a", title: "Client onboarding workflow breakdown", normalizedTitle: "client onboarding workflow breakdown", context: { market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", primaryTheme: "Client onboarding", painCandidateIds: [], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", primaryProblem: "Client onboarding workflow breakdown", existingSolutionSignals: [], underservedSignals: ["handoff"] }, evidence: [{ fingerprint: "dup-a1", sourceType: "external_source", sourceName: "Forum", sourceUrl: null, capturedAt: "2026-01-01T00:00:00.000Z", claim: "Duplicate onboarding problem.", market: "Agencies", audience: "Agency owners", nicheCategory: "Client onboarding", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 8, confidenceScore: 8, totalScore: 7.9, rationale: [] }, readiness: "ready", risk: "moderate", rank: 2 },
+          { id: "generic-a", title: "manual", normalizedTitle: "manual", context: { market: null, audience: null, nicheCategory: null, primaryTheme: "manual", painCandidateIds: [], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: null, audience: null, nicheCategory: null, primaryProblem: "manual", existingSolutionSignals: [], underservedSignals: [] }, evidence: [], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 1, confidenceScore: 8, totalScore: 8, rationale: [] }, readiness: "ready", risk: "moderate", rank: 3 },
+          { id: "raw-a", title: "evidence reddit sources manual workflows lead to errors", normalizedTitle: "evidence reddit sources manual workflows lead to errors", context: { market: "Operations", audience: "Operators", nicheCategory: "Workflow", primaryTheme: "Workflow", painCandidateIds: [], patternCandidateIds: [], trendCandidateIds: [], knowledgeProblemIds: [], relatedRelationshipIds: [] }, marketContext: { market: "Operations", audience: "Operators", nicheCategory: "Workflow", primaryProblem: "evidence reddit sources manual workflows lead to errors", existingSolutionSignals: [], underservedSignals: [] }, evidence: [{ fingerprint: "raw-a1", sourceType: "external_source", sourceName: "Reddit", sourceUrl: null, capturedAt: "2026-01-01T00:00:00.000Z", claim: "Operators mention workflow errors.", market: "Operations", audience: "Operators", nicheCategory: "Workflow", painIntensity: 8, frequencySignal: 8, buyingIntentSignal: 7, confidenceScore: 8, sourceQualityScore: 8 }], score: { marketPullScore: 8, problemUrgencyScore: 8, solutionPotentialScore: 8, buildSimplicityScore: 7, differentiationPotentialScore: 8, evidenceScore: 1, confidenceScore: 8, totalScore: 8, rationale: [] }, readiness: "ready", risk: "moderate", rank: 4 },
+        ],
+        signals: [],
+        warnings: [],
+        summary: { evidenceCount: 2, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 4, candidateCount: 4, highestScore: 8, averageConfidence: 8 },
+      },
+    });
+
+    const report = weak.diagnostics[0].candidateCollapseReport;
+    assert.equal(weak.candidates.length, 0);
+    assert.equal(report.multiCandidateModeEnabled, true);
+    assert.ok(report.weakEvidenceRejectionCount >= 1);
+    assert.ok(report.genericTitleRejectionCount >= 1);
+    assert.ok(report.rejectionReasons.some((item) => item.reason === "weak_evidence_support"));
+    assert.ok(report.rejectedCandidateTitles.every((title) => !/evidence reddit/i.test(title)));
+  } finally {
+    if (previous === undefined) delete process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
+    else process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = previous;
+  }
+});
