@@ -88,3 +88,28 @@ test("production discovery response shape remains unchanged because synthesis is
   assert.match(typesSource, /problemIntelligenceSynthesis\?: ProblemSynthesisResult/);
   assert.doesNotMatch(typesSource, /export type DiscoveryResult = \{[\s\S]*problemIntelligenceSynthesis/);
 });
+
+test("problem synthesis diagnostics report candidate collapse counts without increasing emitted candidates", () => {
+  const synthesis = synthesize();
+  const report = synthesis.diagnostics[0].candidateCollapseReport;
+
+  assert.equal(synthesis.candidates.length, 1);
+  assert.deepEqual(report.upstreamCandidateCounts, {
+    pain: 1,
+    pattern: 1,
+    trend: 0,
+    opportunity: 1,
+    monetization: 0,
+    confidence: 0,
+  });
+  assert.equal(report.totalPossibleSynthesisSeedCount, 3);
+  assert.equal(report.uniqueNormalizedTitleCount, 3);
+  assert.equal(report.uniqueTitleMarketAudienceClusterCount, 3);
+  assert.equal(report.eligibleSynthesisClusterCount, 3);
+  assert.equal(report.emittedSynthesisCandidateCount, 1);
+  assert.equal(report.rejectedSynthesisClusterCount, 2);
+  assert.deepEqual(report.rejectionReasons, [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: 2 }]);
+  assert.equal(report.singleCandidateMode, true);
+  assert.match(report.collapseExplanation, /single-candidate mode/);
+  assert.ok(report.topPotentialNextCandidateTitles.length <= 5);
+});
