@@ -63,9 +63,24 @@ const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
 const MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES = 3;
 const MIN_SYNTHESIS_CONFIDENCE = 5;
 const MIN_SEMANTIC_TITLE_SCORE = 3;
-const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signals", "manual workflows lead"];
-const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "onboarding", "billing", "follow", "approval", "automation", "operations", "reporting", "spreadsheet", "customer", "lead", "handoff"]);
-const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff"]);
+const MIN_SEMANTIC_TITLE_WORDS = 3;
+const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signals", "weekly intelligence", "data moat", "manual workflows lead"];
+const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "workflows", "onboarding", "billing", "follow", "up", "approval", "automation", "operations", "operational", "process", "reporting", "spreadsheet", "spreadsheets", "customer", "lead", "leads", "handoff", "handoffs"]);
+const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs"]);
+const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
+const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays"]);
+const CANONICAL_TITLE_RULES: Array<{ title: string; terms: string[]; any?: string[] }> = [
+  { title: "CRM Workflow Fragmentation", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs", "follow"] },
+  { title: "Sales Follow-up Automation", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer"] },
+  { title: "Manual Workflow Automation", terms: ["manual", "workflow"], any: ["automation", "errors", "delays", "operations"] },
+  { title: "Manual Lead Management", terms: ["lead"], any: ["manual", "errors", "delays", "follow", "management"] },
+  { title: "Spreadsheet Dependency", terms: ["spreadsheet"], any: ["spreadsheets", "dependency", "workflow", "manual", "reporting"] },
+  { title: "Client Onboarding Friction", terms: ["client", "onboarding"], any: ["friction", "handoff", "handoffs", "scattered", "workflow"] },
+  { title: "Client Operations Fragmentation", terms: ["client", "operations"], any: ["fragmentation", "fragmented", "scattered", "disconnected"] },
+  { title: "Billing Workflow Automation", terms: ["billing"], any: ["workflow", "automation", "approval", "invoice"] },
+  { title: "Invoice Approval Bottlenecks", terms: ["invoice", "approval"], any: ["bottleneck", "bottlenecks", "delay", "delays"] },
+  { title: "Operational Process Bottlenecks", terms: ["operations"], any: ["bottleneck", "bottlenecks", "delay", "delays", "process", "manual"] },
+];
 
 function safeLogTitle(value: string) {
   return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
@@ -99,6 +114,10 @@ function titleCase(value: string) {
   )).join(" ");
 }
 
+function canonicalTitleKey(title: string) {
+  return normalize(title).replace(/\b(workflows|workflow)\b/g, "workflow").replace(/\b(errors|mistakes)\b/g, "errors").replace(/\b(delays|delay)\b/g, "delays");
+}
+
 function rawTitleRejectionReasons(title: string) {
   const normalizedTitle = normalize(title);
   const words = normalizedTitle.split(" ").filter(Boolean);
@@ -114,28 +133,61 @@ function rawTitleRejectionReasons(title: string) {
 
 function semanticProblemPhrase(seed: SynthesisSeed) {
   const cluster = seed.problemCluster !== "unknown" ? seed.problemCluster : "";
-  const title = normalize(seed.title);
-  const problemWords = [...new Set([...cluster.split(" "), ...title.split(" ")].filter((word) => BUSINESS_CONTEXT_TERMS.has(word) || PROBLEM_CONTEXT_TERMS.has(word)))];
-  const context = problemWords.slice(0, 4).join(" ");
-  if (context.includes("client") && context.includes("onboarding")) return "client onboarding friction";
-  if (context.includes("invoice") && context.includes("approval")) return "invoice approval bottleneck";
-  if (context.includes("crm")) return "disconnected crm operations";
-  if (context.includes("sales") && context.includes("follow")) return "manual sales follow up";
-  if (context.includes("spreadsheet") && context.includes("workflow")) return "spreadsheet based workflow management";
-  if (context.includes("agency") && context.includes("operations")) return "fragmented agency operations";
-  if (context) return context;
-  return cluster || title || "workflow automation";
+  const text = normalize([seed.title, cluster, seed.market, seed.audience].filter(Boolean).join(" "));
+  const words = text.split(" ").filter((word) => word && !TITLE_STOP_WORDS.has(word));
+  const wordSet = new Set(words);
+  for (const rule of CANONICAL_TITLE_RULES) {
+    const requiredMatch = rule.terms.every((term) => wordSet.has(term));
+    const optionalMatch = !rule.any || rule.any.some((term) => wordSet.has(term));
+    if (requiredMatch && optionalMatch) return rule.title;
+  }
+  const businessWords = unique(words.map((word) => {
+    if (word === "workflows") return "workflow";
+    if (word === "leads") return "lead";
+    if (word === "spreadsheets") return "spreadsheet";
+    if (word === "operational") return "operations";
+    return word;
+  }).filter((word) => BUSINESS_CONTEXT_TERMS.has(word)));
+  const problemWords = unique(words.map((word) => {
+    if (word === "fragmented" || word === "disconnected" || word === "scattered") return "fragmentation";
+    if (word === "bottleneck") return "bottlenecks";
+    if (word === "dependency" || word === "dependencies") return "dependency";
+    if (word === "delay") return "delays";
+    return word;
+  }).filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)));
+  const subject = businessWords.filter((word) => !["workflow", "automation", "manual"].includes(word)).slice(0, 2);
+  const concept = subject.length > 0 ? subject.join(" ") : businessWords.includes("workflow") ? "workflow" : "operations";
+  const problem = problemWords.includes("fragmentation") ? "fragmentation"
+    : problemWords.includes("dependency") ? "dependency"
+      : problemWords.includes("bottlenecks") || problemWords.includes("delays") ? "bottlenecks"
+        : businessWords.includes("automation") || problemWords.includes("manual") ? "automation"
+          : "bottlenecks";
+  return `${concept} ${problem}`;
 }
 
 function semanticTitleForSeed(seed: SynthesisSeed) {
   const phrase = semanticProblemPhrase(seed);
-  const market = seed.market !== "unknown" ? seed.market : "";
-  const audience = seed.audience !== "unknown" ? seed.audience : "";
   const title = titleCase(phrase);
-  if (normalize(title).split(" ").length >= 3) return title;
-  if (market) return `${title} for ${titleCase(market)}`;
-  if (audience) return `${title} for ${titleCase(audience)}`;
-  return title;
+  return canonicalTitleKey(title) === "crm workflow fragmentation" ? "CRM Workflow Fragmentation" : title;
+}
+
+function semanticTitleRejectionReasons(title: string) {
+  const normalizedTitle = normalize(title);
+  const words = normalizedTitle.split(" ").filter(Boolean);
+  const uniqueWords = new Set(words);
+  const repeatedConcept = uniqueWords.size < words.length || words.some((word, index) => words.indexOf(word) !== index);
+  const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
+  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)).length;
+  return [
+    RAW_EVIDENCE_PREFIXES.some((prefix) => normalizedTitle.startsWith(prefix)) ? "blocked_raw_evidence_prefix" : "",
+    words.length < MIN_SEMANTIC_TITLE_WORDS ? "below_semantic_word_threshold" : "",
+    words.length > 5 ? "sentence_fragment_too_long" : "",
+    GENERIC_SEMANTIC_TITLES.has(normalizedTitle) || isGenericTitle(title, normalizedTitle) ? "overly_generic_business_title" : "",
+    repeatedConcept ? "repeated_word_or_concept" : "",
+    businessContext === 0 ? "missing_business_context" : "",
+    problemContext === 0 ? "missing_problem_context" : "",
+    rawTitleRejectionReasons(title).length > 0 ? "matches_raw_evidence_pattern" : "",
+  ].filter(Boolean);
 }
 
 function semanticTitleScore(seed: SynthesisSeed, engineSupport: string[], rawRejected: boolean) {
@@ -300,16 +352,17 @@ type CandidateSelection = {
 
 function selectionRejectionReasons(seed: RankedSynthesisSeed, emittedSeeds: RankedSynthesisSeed[], confidence: number, hasMeaningfulSummary: boolean) {
   const normalizedSemanticTitle = normalize(seed.semanticTitle);
-  const emittedTitleKeys = new Set(emittedSeeds.map((item) => normalize(item.semanticTitle)));
+  const emittedTitleKeys = new Set(emittedSeeds.map((item) => canonicalTitleKey(item.semanticTitle)));
   const emittedMarketAudienceClusters = new Set(emittedSeeds.map((item) => [item.market, item.audience].join("|")));
+  const semanticRejectionReasons = semanticTitleRejectionReasons(seed.semanticTitle);
   return [
-    !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE ? "generic_or_weak_semantic_title" : "",
+    !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE || semanticRejectionReasons.length > 0 ? "generic_or_weak_semantic_title" : "",
     seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED || seed.engineSupport.length < 2 ? "weak_evidence_support" : "",
     !hasMeaningfulSummary ? "weak_summary" : "",
-    emittedTitleKeys.has(normalizedSemanticTitle) ? "duplicate_normalized_title" : "",
+    emittedTitleKeys.has(canonicalTitleKey(seed.semanticTitle)) ? "duplicate_normalized_title" : "",
     emittedMarketAudienceClusters.has([seed.market, seed.audience].join("|")) ? "duplicate_market_audience_cluster" : "",
     confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
-    rawTitleRejectionReasons(seed.semanticTitle).length > 0 ? "semantic_title_matches_raw_evidence_pattern" : "",
+    semanticRejectionReasons.length > 0 ? "semantic_title_quality_rejected" : "",
   ].filter(Boolean);
 }
 
@@ -356,6 +409,19 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
   const rejectionReasons = [...rejectionReasonCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([reason, count]) => ({ reason, count }));
   const seedRejectionReasons = countReasons(rejectedSeeds);
   const semanticScores = rankedSeeds.map((seed) => seed.semanticTitleScore);
+  const semanticRejected = rankedSeeds.filter((seed) => semanticTitleRejectionReasons(seed.semanticTitle).length > 0);
+  const semanticReasonCounts = new Map<string, number>();
+  for (const seed of semanticRejected) {
+    for (const reason of semanticTitleRejectionReasons(seed.semanticTitle)) semanticReasonCounts.set(reason, (semanticReasonCounts.get(reason) || 0) + 1);
+  }
+  const semanticTitleRejectionReasonsReport = [...semanticReasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([reason, count]) => ({ reason, count }));
+  const canonicalTitleCounts = new Map<string, number>();
+  for (const seed of rankedSeeds) canonicalTitleCounts.set(seed.semanticTitle, (canonicalTitleCounts.get(seed.semanticTitle) || 0) + 1);
+  const canonicalTitleCountsReport = [...canonicalTitleCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([title, count]) => ({ title, count }));
 
   return {
     upstreamCandidateCounts: {
@@ -388,6 +454,14 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     singleCandidateMode: !selection.multiCandidateModeEnabled,
     semanticTitlesGenerated: rankedSeeds.length,
     semanticTitlesSelected: emittedCandidateCount,
+    semanticTitlesRejected: semanticRejected.length,
+    semanticTitleRejectionReasons: semanticTitleRejectionReasonsReport,
+    semanticTitleCanonicalization: {
+      generatedCount: rankedSeeds.length,
+      uniqueCanonicalTitleCount: canonicalTitleCounts.size,
+      duplicateCanonicalTitleCount: Math.max(0, rankedSeeds.length - canonicalTitleCounts.size),
+      canonicalTitleCounts: canonicalTitleCountsReport.slice(0, 10),
+    },
     rawTitlesRejected: rankedSeeds.filter((seed) => seed.rawTitleRejected).length,
     semanticTitleScoreDistribution: scoreDistribution(semanticScores),
     topSemanticTitles: rankedSeeds.slice(0, 5).map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore, sourceTitle: safeLogTitle(seed.title) })),
