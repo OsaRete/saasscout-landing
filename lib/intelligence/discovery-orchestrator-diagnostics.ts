@@ -9,6 +9,10 @@ function isSolutionIntelligenceDiagnosticsEnabled() {
   return process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS === "1";
 }
 
+function isDiscoveryOrchestratorDiagnosticsEnabled() {
+  return process.env.DISCOVERY_ORCHESTRATOR_DIAGNOSTICS === "1";
+}
+
 function buildSolutionIntelligenceDiagnosticReport(result: DiscoveryModularPipelineResult) {
   if (!isSolutionIntelligenceDiagnosticsEnabled() || !result.outputs.solutionIntelligenceEvaluation) return null;
   const aggregateReport = buildSolutionDiagnosticAggregateReport([result.outputs.solutionIntelligenceEvaluation]);
@@ -22,7 +26,20 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
   result: DiscoveryModularPipelineResult
 ) {
   const solutionIntelligenceDiagnosticReport = buildSolutionIntelligenceDiagnosticReport(result);
+  const solutionIntelligenceStage = result.diagnostics.find(
+    (diagnostic) => diagnostic.stage === "solution_intelligence_evaluation"
+  );
   return {
+    environment_flags: {
+      DISCOVERY_ORCHESTRATOR_DIAGNOSTICS: isDiscoveryOrchestratorDiagnosticsEnabled(),
+      SOLUTION_INTELLIGENCE_DIAGNOSTICS: isSolutionIntelligenceDiagnosticsEnabled(),
+    },
+    modular_stage_statuses: result.diagnostics.map((diagnostic) => ({
+      stage: diagnostic.stage,
+      status: diagnostic.status,
+      missingInputs: diagnostic.missingInputs,
+      warnings: diagnostic.warnings,
+    })),
     stages_executed: result.diagnostics
       .filter((diagnostic) => diagnostic.status === "completed")
       .map((diagnostic) => diagnostic.stage),
@@ -44,6 +61,16 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       result.outputs.confidenceEvaluation?.candidates
     ),
     feedback_signal_count: countItems(result.outputs.feedbackLearning?.signals),
+    solution_intelligence_stage: {
+      included: Boolean(solutionIntelligenceStage || result.outputs.solutionIntelligenceEvaluation),
+      completed: solutionIntelligenceStage?.status === "completed" || Boolean(result.outputs.solutionIntelligenceEvaluation),
+      skipped: solutionIntelligenceStage?.status === "skipped",
+      missing_inputs_caused_skip: Boolean(
+        solutionIntelligenceStage?.status === "skipped" && solutionIntelligenceStage.missingInputs.length > 0
+      ),
+      missingInputs: solutionIntelligenceStage?.missingInputs || [],
+      warnings: solutionIntelligenceStage?.warnings || [],
+    },
     solution_intelligence: result.outputs.solutionIntelligenceEvaluation ? {
       evaluated_category_count: result.outputs.solutionIntelligenceEvaluation.diagnostics.evaluatedCategoryCount,
       recommended_category: result.outputs.solutionIntelligenceEvaluation.diagnostics.recommendedCategory,
