@@ -1,5 +1,5 @@
 import type { Evidence } from "../../evidence";
-import type { ProblemSynthesisCandidate, ProblemSynthesisDiagnostics, ProblemSynthesisInput, ProblemSynthesisResult, ProblemScoreBreakdown } from "./types";
+import type { ProblemSynthesisCandidate, ProblemSynthesisCandidateCollapseReport, ProblemSynthesisDiagnostics, ProblemSynthesisInput, ProblemSynthesisResult, ProblemScoreBreakdown } from "./types";
 
 function clampScore(value: unknown, fallback = 0) {
   const score = Number(value);
@@ -29,6 +29,101 @@ function normalize(value: string) {
 
 function evidenceReference(evidence: Evidence) {
   return [evidence.deduplicationFingerprint, evidence.sourceName, evidence.sourceUrl].filter(Boolean).join(" — ");
+}
+
+type SynthesisSeed = {
+  title: string;
+  normalizedTitle: string;
+  market: string;
+  audience: string;
+  score: number;
+  rank: number;
+};
+
+function safeLogTitle(value: string) {
+  return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "unknown";
+}
+
+function candidateSeeds(input: ProblemSynthesisInput): SynthesisSeed[] {
+  const toSeed = (candidate: { title?: string; normalizedTitle?: string; score?: { totalScore?: number }; rank?: number; context?: Record<string, unknown> }): SynthesisSeed => {
+    const context = candidate.context || {};
+    const markets = Array.isArray(context.markets) ? context.markets : [];
+    const audiences = Array.isArray(context.audiences) ? context.audiences : [];
+    const market = firstText(context.market, markets[0], context.nicheCategory);
+    const audience = firstText(context.audience, audiences[0], context.nicheCategory);
+    const title = firstText(candidate.title, context.primaryProblem, context.primaryClaim, context.primaryTheme);
+    return {
+      title,
+      normalizedTitle: candidate.normalizedTitle || normalize(title),
+      market: normalize(market) || "unknown",
+      audience: normalize(audience) || "unknown",
+      score: clampScore(candidate.score?.totalScore, 0),
+      rank: candidate.rank || 999,
+    };
+  };
+
+  return [
+    ...(input.painDetection?.candidates || []),
+    ...(input.patternDetection?.candidates || []),
+    ...(input.trendDetection?.candidates || []),
+    ...(input.opportunityDetection?.candidates || []),
+    ...(input.monetizationEvaluation?.candidates || []),
+    ...(input.confidenceEvaluation?.candidates || []),
+  ].map(toSeed);
+}
+
+function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandidateCount: number, emittedTitle: string): ProblemSynthesisCandidateCollapseReport {
+  const seeds = candidateSeeds(input);
+  const rankedSeeds = [...seeds].sort((a, b) => b.score - a.score || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
+  const normalizedTitles = new Set(seeds.map((seed) => seed.normalizedTitle).filter(Boolean));
+  const clusters = new Map<string, SynthesisSeed>();
+
+  for (const seed of rankedSeeds) {
+    const clusterKey = [seed.normalizedTitle, seed.market, seed.audience].join("|");
+    if (!clusters.has(clusterKey)) clusters.set(clusterKey, seed);
+  }
+
+  const eligibleSynthesisClusterCount = clusters.size;
+  const rejectedSynthesisClusterCount = Math.max(0, eligibleSynthesisClusterCount - emittedCandidateCount);
+  const emittedNormalizedTitle = normalize(emittedTitle);
+  const topPotentialNextCandidateTitles = [...clusters.values()]
+    .filter((seed) => seed.normalizedTitle !== emittedNormalizedTitle)
+    .map((seed) => safeLogTitle(seed.title))
+    .filter(Boolean)
+    .slice(0, 5);
+  const rejectionReasons = rejectedSynthesisClusterCount > 0
+    ? [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: rejectedSynthesisClusterCount }]
+    : [];
+
+  return {
+    upstreamCandidateCounts: {
+      pain: input.painDetection?.candidates.length || 0,
+      pattern: input.patternDetection?.candidates.length || 0,
+      trend: input.trendDetection?.candidates.length || 0,
+      opportunity: input.opportunityDetection?.candidates.length || 0,
+      monetization: input.monetizationEvaluation?.candidates.length || 0,
+      confidence: input.confidenceEvaluation?.candidates.length || 0,
+    },
+    totalPossibleSynthesisSeedCount: seeds.length,
+    uniqueNormalizedTitleCount: normalizedTitles.size,
+    uniqueTitleMarketAudienceClusterCount: clusters.size,
+    eligibleSynthesisClusterCount,
+    emittedSynthesisCandidateCount: emittedCandidateCount,
+    rejectedSynthesisClusterCount,
+    rejectionReasons,
+    topPotentialNextCandidateTitles,
+    singleCandidateMode: true,
+    collapseExplanation: emittedCandidateCount > 0
+      ? "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, so only the top ranked synthesis cluster is emitted and all other eligible clusters are diagnostics-only."
+      : "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, but no candidate was emitted because no reusable normalized evidence was available.",
+  };
 }
 
 function primaryTitle(input: ProblemSynthesisInput) {
@@ -109,6 +204,8 @@ export class ProblemIntelligenceSynthesisEngine {
     const conciseEvidenceSummary = claims.length > 0 ? claims.slice(0, 3).map(sentence).join(" ") : "No reusable evidence claims were available for synthesis.";
     const synthesizedSummary = sentence(`${title} is supported by ${evidence.length} evidence item${evidence.length === 1 ? "" : "s"}${markets.length ? ` across ${markets.slice(0, 3).join(", ")}` : ""}${audiences.length ? ` for ${audiences.slice(0, 3).join(", ")}` : ""}`);
     const warnings = evidence.length === 0 ? ["Problem synthesis produced no candidates because no normalized evidence was available."] : [];
+    const emittedCandidateCount = evidence.length === 0 ? 0 : 1;
+    const candidateCollapseReport = buildCandidateCollapseReport(input, emittedCandidateCount, title);
     const diagnostic: ProblemSynthesisDiagnostics = {
       synthesizedTitle: title,
       synthesizedSummary,
@@ -116,6 +213,7 @@ export class ProblemIntelligenceSynthesisEngine {
       evidenceReferences,
       confidence,
       synthesisCompleteness: completeness(input, evidence.length),
+      candidateCollapseReport,
       engineCandidateCounts: {
         pain: input.painDetection?.candidates.length || 0,
         pattern: input.patternDetection?.candidates.length || 0,

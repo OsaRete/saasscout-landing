@@ -26,6 +26,7 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
   result: DiscoveryModularPipelineResult
 ) {
   const solutionIntelligenceDiagnosticReport = buildSolutionIntelligenceDiagnosticReport(result);
+  const problemSynthesisCollapseReport = result.outputs.problemIntelligenceSynthesis?.diagnostics[0]?.candidateCollapseReport || null;
   const solutionIntelligenceStage = result.diagnostics.find(
     (diagnostic) => diagnostic.stage === "solution_intelligence_evaluation"
   );
@@ -61,6 +62,24 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       result.outputs.confidenceEvaluation?.candidates
     ),
     feedback_signal_count: countItems(result.outputs.feedbackLearning?.signals),
+    problem_synthesis: problemSynthesisCollapseReport ? {
+      upstream_pain_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.pain,
+      upstream_pattern_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.pattern,
+      upstream_trend_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.trend,
+      upstream_opportunity_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.opportunity,
+      upstream_monetization_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.monetization,
+      upstream_confidence_candidate_count: problemSynthesisCollapseReport.upstreamCandidateCounts.confidence,
+      total_possible_synthesis_seed_count: problemSynthesisCollapseReport.totalPossibleSynthesisSeedCount,
+      unique_normalized_title_count: problemSynthesisCollapseReport.uniqueNormalizedTitleCount,
+      unique_title_market_audience_cluster_count: problemSynthesisCollapseReport.uniqueTitleMarketAudienceClusterCount,
+      eligible_synthesis_cluster_count: problemSynthesisCollapseReport.eligibleSynthesisClusterCount,
+      emitted_synthesis_candidate_count: problemSynthesisCollapseReport.emittedSynthesisCandidateCount,
+      rejected_synthesis_cluster_count: problemSynthesisCollapseReport.rejectedSynthesisClusterCount,
+      rejection_reasons: problemSynthesisCollapseReport.rejectionReasons,
+      top_5_potential_next_candidate_titles: problemSynthesisCollapseReport.topPotentialNextCandidateTitles,
+      single_candidate_mode: problemSynthesisCollapseReport.singleCandidateMode,
+      collapse_explanation: problemSynthesisCollapseReport.collapseExplanation,
+    } : null,
     solution_intelligence_stage: {
       included: Boolean(solutionIntelligenceStage || result.outputs.solutionIntelligenceEvaluation),
       completed: solutionIntelligenceStage?.status === "completed" || Boolean(result.outputs.solutionIntelligenceEvaluation),

@@ -72,6 +72,7 @@ test("buildDiscoveryOrchestratorDiagnosticMetrics returns aggregate counts and a
     monetization_candidate_count: 2,
     confidence_candidate_count: 1,
     feedback_signal_count: 2,
+    problem_synthesis: null,
     solution_intelligence_stage: {
       included: false,
       completed: false,
@@ -124,4 +125,56 @@ test("solution intelligence skipped stage exposes missing inputs and safe flag b
 
   delete process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS;
   delete process.env.DISCOVERY_ORCHESTRATOR_DIAGNOSTICS;
+});
+
+
+test("problem synthesis collapse diagnostics are exposed through orchestrator metrics", () => {
+  const result = {
+    runId: "diagnostic-run",
+    dryRun: true,
+    diagnostics: [],
+    outputs: {
+      problemIntelligenceSynthesis: {
+        candidates: [{}],
+        diagnostics: [{
+          candidateCollapseReport: {
+            upstreamCandidateCounts: { pain: 2, pattern: 1, trend: 1, opportunity: 2, monetization: 1, confidence: 1 },
+            totalPossibleSynthesisSeedCount: 8,
+            uniqueNormalizedTitleCount: 6,
+            uniqueTitleMarketAudienceClusterCount: 7,
+            eligibleSynthesisClusterCount: 7,
+            emittedSynthesisCandidateCount: 1,
+            rejectedSynthesisClusterCount: 6,
+            rejectionReasons: [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: 6 }],
+            topPotentialNextCandidateTitles: ["Second safe title"],
+            singleCandidateMode: true,
+            collapseExplanation: "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode.",
+          },
+        }],
+      },
+    },
+    warnings: [],
+    completedAt: "2026-06-27T00:00:00.000Z",
+  } as unknown as DiscoveryModularPipelineResult;
+
+  const metrics = buildDiscoveryOrchestratorDiagnosticMetrics(result);
+
+  assert.deepEqual(metrics.problem_synthesis, {
+    upstream_pain_candidate_count: 2,
+    upstream_pattern_candidate_count: 1,
+    upstream_trend_candidate_count: 1,
+    upstream_opportunity_candidate_count: 2,
+    upstream_monetization_candidate_count: 1,
+    upstream_confidence_candidate_count: 1,
+    total_possible_synthesis_seed_count: 8,
+    unique_normalized_title_count: 6,
+    unique_title_market_audience_cluster_count: 7,
+    eligible_synthesis_cluster_count: 7,
+    emitted_synthesis_candidate_count: 1,
+    rejected_synthesis_cluster_count: 6,
+    rejection_reasons: [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: 6 }],
+    top_5_potential_next_candidate_titles: ["Second safe title"],
+    single_candidate_mode: true,
+    collapse_explanation: "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode.",
+  });
 });

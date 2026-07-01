@@ -55,6 +55,27 @@ export type ProblemEvidenceSummary = {
   summary: string;
 };
 
+export type ProblemSynthesisCandidateCollapseReport = {
+  upstreamCandidateCounts: {
+    pain: number;
+    pattern: number;
+    trend: number;
+    opportunity: number;
+    monetization: number;
+    confidence: number;
+  };
+  totalPossibleSynthesisSeedCount: number;
+  uniqueNormalizedTitleCount: number;
+  uniqueTitleMarketAudienceClusterCount: number;
+  eligibleSynthesisClusterCount: number;
+  emittedSynthesisCandidateCount: number;
+  rejectedSynthesisClusterCount: number;
+  rejectionReasons: Array<{ reason: string; count: number }>;
+  topPotentialNextCandidateTitles: string[];
+  singleCandidateMode: boolean;
+  collapseExplanation: string;
+};
+
 export type ProblemSynthesisDiagnostics = {
   synthesizedTitle: string;
   synthesizedSummary: string;
@@ -62,6 +83,7 @@ export type ProblemSynthesisDiagnostics = {
   evidenceReferences: string[];
   confidence: number;
   synthesisCompleteness: number;
+  candidateCollapseReport: ProblemSynthesisCandidateCollapseReport;
   engineCandidateCounts: {
     pain: number;
     pattern: number;
