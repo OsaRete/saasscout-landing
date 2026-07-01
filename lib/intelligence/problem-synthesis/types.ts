@@ -55,6 +55,20 @@ export type ProblemEvidenceSummary = {
   summary: string;
 };
 
+export type ProblemSynthesisSeedDiagnostic = {
+  title: string;
+  normalizedTitle: string;
+  market: string;
+  audience: string;
+  problemCluster: string;
+  score: number;
+  rejectionReasons: string[];
+  engineSupport: string[];
+  evidenceCount: number;
+  genericTitle: boolean;
+  downrankedGeneric: boolean;
+};
+
 export type ProblemSynthesisCandidateCollapseReport = {
   upstreamCandidateCounts: {
     pain: number;
@@ -72,6 +86,17 @@ export type ProblemSynthesisCandidateCollapseReport = {
   rejectedSynthesisClusterCount: number;
   rejectionReasons: Array<{ reason: string; count: number }>;
   topPotentialNextCandidateTitles: string[];
+  extractedSeedCount: number;
+  rankedSeedCount: number;
+  genericTitleSeedCount: number;
+  downrankedGenericSeedCount: number;
+  topRankedSeedTitles: string[];
+  topRankedSeedScores: number[];
+  topRejectedSeedTitles: string[];
+  topRejectionReasons: string[];
+  seedsWithCrossEngineSupport: number;
+  seedsWithoutEnoughEvidence: number;
+  rankedSeeds: ProblemSynthesisSeedDiagnostic[];
   singleCandidateMode: boolean;
   collapseExplanation: string;
 };
