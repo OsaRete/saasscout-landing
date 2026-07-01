@@ -89,6 +89,12 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       seeds_without_enough_evidence: problemSynthesisCollapseReport.seedsWithoutEnoughEvidence,
       ranked_seeds: problemSynthesisCollapseReport.rankedSeeds,
       single_candidate_mode: problemSynthesisCollapseReport.singleCandidateMode,
+      semantic_titles_generated: problemSynthesisCollapseReport.semanticTitlesGenerated,
+      semantic_titles_selected: problemSynthesisCollapseReport.semanticTitlesSelected,
+      raw_titles_rejected: problemSynthesisCollapseReport.rawTitlesRejected,
+      semantic_title_score_distribution: problemSynthesisCollapseReport.semanticTitleScoreDistribution,
+      top_semantic_titles: problemSynthesisCollapseReport.topSemanticTitles,
+      raw_title_rejection_reasons: problemSynthesisCollapseReport.rawTitleRejectionReasons,
       collapse_explanation: problemSynthesisCollapseReport.collapseExplanation,
     } : null,
     solution_intelligence_stage: {

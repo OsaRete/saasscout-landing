@@ -52,10 +52,17 @@ type RankedSynthesisSeed = SynthesisSeed & {
   engineSupport: string[];
   rejectionReasons: string[];
   downrankedGeneric: boolean;
+  semanticTitle: string;
+  semanticTitleScore: number;
+  rawTitleRejected: boolean;
+  rawTitleRejectionReasons: string[];
 };
 
 const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service"]);
 const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
+const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signals", "manual workflows lead"];
+const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "onboarding", "billing", "follow", "approval", "automation", "operations", "reporting", "spreadsheet", "customer", "lead", "handoff"]);
+const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff"]);
 
 function safeLogTitle(value: string) {
   return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
@@ -81,6 +88,71 @@ function isGenericTitle(title: string, normalizedTitle = normalize(title)) {
   if (words.length === 0) return true;
   if (words.length === 1 && GENERIC_TITLES.has(words[0])) return true;
   return words.length <= 2 && words.every((word) => GENERIC_TITLES.has(word));
+}
+
+function titleCase(value: string) {
+  return normalize(value).split(" ").filter(Boolean).map((word) => (
+    word.length <= 3 && ["crm", "smb", "api"].includes(word) ? word.toUpperCase() : `${word[0].toUpperCase()}${word.slice(1)}`
+  )).join(" ");
+}
+
+function rawTitleRejectionReasons(title: string) {
+  const normalizedTitle = normalize(title);
+  const words = normalizedTitle.split(" ").filter(Boolean);
+  return [
+    RAW_EVIDENCE_PREFIXES.some((prefix) => normalizedTitle.startsWith(prefix)) ? "raw_evidence_prefix" : "",
+    /["“”‘’]/.test(title) ? "quoted_text" : "",
+    words.length > 7 ? "long_copied_phrase" : "",
+    /\b(reddit|linkedin|discussion|discussions|source|sources|signals|evidence)\b/.test(normalizedTitle) ? "source_sentence_language" : "",
+    normalizedTitle.includes("lead to") || normalizedTitle.includes("leads to") ? "sentence_causality_phrase" : "",
+    isGenericTitle(title, normalizedTitle) ? "generic_low_information_title" : "",
+  ].filter(Boolean);
+}
+
+function semanticProblemPhrase(seed: SynthesisSeed) {
+  const cluster = seed.problemCluster !== "unknown" ? seed.problemCluster : "";
+  const title = normalize(seed.title);
+  const problemWords = [...new Set([...cluster.split(" "), ...title.split(" ")].filter((word) => BUSINESS_CONTEXT_TERMS.has(word) || PROBLEM_CONTEXT_TERMS.has(word)))];
+  const context = problemWords.slice(0, 4).join(" ");
+  if (context.includes("client") && context.includes("onboarding")) return "client onboarding friction";
+  if (context.includes("invoice") && context.includes("approval")) return "invoice approval bottleneck";
+  if (context.includes("crm")) return "disconnected crm operations";
+  if (context.includes("sales") && context.includes("follow")) return "manual sales follow up";
+  if (context.includes("spreadsheet") && context.includes("workflow")) return "spreadsheet based workflow management";
+  if (context.includes("agency") && context.includes("operations")) return "fragmented agency operations";
+  if (context) return context;
+  return cluster || title || "workflow automation";
+}
+
+function semanticTitleForSeed(seed: SynthesisSeed) {
+  const phrase = semanticProblemPhrase(seed);
+  const market = seed.market !== "unknown" ? seed.market : "";
+  const audience = seed.audience !== "unknown" ? seed.audience : "";
+  const title = titleCase(phrase);
+  if (normalize(title).split(" ").length >= 3) return title;
+  if (market) return `${title} for ${titleCase(market)}`;
+  if (audience) return `${title} for ${titleCase(audience)}`;
+  return title;
+}
+
+function semanticTitleScore(seed: SynthesisSeed, engineSupport: string[], rawRejected: boolean) {
+  const title = semanticTitleForSeed(seed);
+  const normalizedTitle = normalize(title);
+  const words = normalizedTitle.split(" ").filter(Boolean);
+  const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
+  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word)).length;
+  const marketContext = seed.market !== "unknown" || seed.audience !== "unknown" ? 1 : 0;
+  const canonicalReuse = seed.problemCluster !== "unknown" && normalizedTitle.includes(seed.problemCluster.split(" ")[0]) ? 1 : 0;
+  return Math.round(clampScore(
+    Math.min(10, words.length * 1.6) * 0.2
+    + Math.min(10, businessContext * 2.2) * 0.2
+    + Math.min(10, problemContext * 2.4) * 0.2
+    + Math.min(10, engineSupport.length * 2.5) * 0.18
+    + marketContext * 1.2
+    + canonicalReuse * 0.8
+    + (rawRejected ? 0.7 : 0),
+    0
+  ) * 100) / 100;
 }
 
 function candidateSeeds(input: ProblemSynthesisInput): SynthesisSeed[] {
@@ -137,8 +209,13 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
     const genericTitle = group.some((seed) => seed.genericTitle);
     const hasContext = representative.market !== "unknown" || representative.audience !== "unknown" || representative.problemCluster !== representative.normalizedTitle;
     const downrankedGeneric = genericTitle && (!hasContext || evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED);
+    const rawRejectionReasons = rawTitleRejectionReasons(representative.title);
+    const rawTitleRejected = rawRejectionReasons.length > 0;
+    const semanticTitle = semanticTitleForSeed(representative);
+    const semanticScore = semanticTitleScore(representative, engineSupport, rawTitleRejected);
     const rejectionReasons = [
       downrankedGeneric ? "generic_title_without_enough_context" : "",
+      rawTitleRejected ? "raw_title_replaced_by_semantic_title" : "",
       evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED ? "not_enough_evidence" : "",
       engineSupport.length < 2 ? "single_engine_support" : "",
     ].filter(Boolean);
@@ -149,12 +226,13 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
       + representative.titleSpecificityScore * 0.14
       + representative.claimSpecificityScore * 0.1
       + Math.min(10, engineSupport.length * 2) * 0.14
+      + semanticScore * 0.08
       - (downrankedGeneric ? 3 : 0),
       0
     ) * 100) / 100;
 
-    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric };
-  }).sort((a, b) => b.score - a.score || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
+    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric, semanticTitle, semanticTitleScore: semanticScore, rawTitleRejected, rawTitleRejectionReasons: rawRejectionReasons };
+  }).sort((a, b) => b.score - a.score || b.semanticTitleScore - a.semanticTitleScore || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
 }
 
 function seedDiagnostic(seed: RankedSynthesisSeed): ProblemSynthesisSeedDiagnostic {
@@ -170,6 +248,10 @@ function seedDiagnostic(seed: RankedSynthesisSeed): ProblemSynthesisSeedDiagnost
     evidenceCount: seed.evidenceCount,
     genericTitle: seed.genericTitle,
     downrankedGeneric: seed.downrankedGeneric,
+    semanticTitle: seed.semanticTitle,
+    semanticTitleScore: seed.semanticTitleScore,
+    rawTitleRejected: seed.rawTitleRejected,
+    rawTitleRejectionReasons: seed.rawTitleRejectionReasons,
   };
 }
 
@@ -183,6 +265,25 @@ function countReasons(seeds: RankedSynthesisSeed[]) {
     .map(([reason, count]) => ({ reason, count }));
 }
 
+function countRawTitleReasons(seeds: RankedSynthesisSeed[]) {
+  const counts = new Map<string, number>();
+  for (const seed of seeds) {
+    for (const reason of seed.rawTitleRejectionReasons) counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([reason, count]) => ({ reason, count }));
+}
+
+function scoreDistribution(scores: number[]) {
+  if (scores.length === 0) return { min: 0, max: 0, average: 0 };
+  return {
+    min: Math.min(...scores),
+    max: Math.max(...scores),
+    average: Math.round(average(scores, 0) * 100) / 100,
+  };
+}
+
 function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandidateCount: number, emittedTitle: string): ProblemSynthesisCandidateCollapseReport {
   const seeds = candidateSeeds(input);
   const rankedSeeds = rankSeeds(seeds);
@@ -190,7 +291,7 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
   const eligibleSynthesisClusterCount = rankedSeeds.length;
   const rejectedSynthesisClusterCount = Math.max(0, eligibleSynthesisClusterCount - emittedCandidateCount);
   const emittedNormalizedTitle = normalize(emittedTitle);
-  const rejectedSeeds = rankedSeeds.filter((seed) => seed.normalizedTitle !== emittedNormalizedTitle);
+  const rejectedSeeds = rankedSeeds.filter((seed) => normalize(seed.semanticTitle) !== emittedNormalizedTitle);
   const topPotentialNextCandidateTitles = rejectedSeeds
     .map((seed) => safeLogTitle(seed.title))
     .filter(Boolean)
@@ -199,6 +300,7 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
     ? [{ reason: "single_candidate_mode_retains_only_top_ranked_cluster", count: rejectedSynthesisClusterCount }]
     : [];
   const seedRejectionReasons = countReasons(rejectedSeeds);
+  const semanticScores = rankedSeeds.map((seed) => seed.semanticTitleScore);
 
   return {
     upstreamCandidateCounts: {
@@ -229,6 +331,12 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
     seedsWithoutEnoughEvidence: rankedSeeds.filter((seed) => seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED).length,
     rankedSeeds: rankedSeeds.slice(0, 10).map(seedDiagnostic),
     singleCandidateMode: true,
+    semanticTitlesGenerated: rankedSeeds.length,
+    semanticTitlesSelected: emittedCandidateCount,
+    rawTitlesRejected: rankedSeeds.filter((seed) => seed.rawTitleRejected).length,
+    semanticTitleScoreDistribution: scoreDistribution(semanticScores),
+    topSemanticTitles: rankedSeeds.slice(0, 5).map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore, sourceTitle: safeLogTitle(seed.title) })),
+    rawTitleRejectionReasons: countRawTitleReasons(rankedSeeds),
     collapseExplanation: emittedCandidateCount > 0
       ? "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, so only the top ranked synthesis cluster is emitted and all other eligible clusters are diagnostics-only."
       : "Problem synthesis is intentionally operating in legacy-compatible single-candidate mode, but no candidate was emitted because no reusable normalized evidence was available.",
@@ -236,20 +344,8 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, emittedCandi
 }
 
 function primaryTitle(input: ProblemSynthesisInput) {
-  const candidates = [
-    ...(input.opportunityDetection?.candidates || []),
-    ...(input.painDetection?.candidates || []),
-    ...(input.patternDetection?.candidates || []),
-    ...(input.trendDetection?.candidates || []),
-    ...(input.monetizationEvaluation?.candidates || []),
-    ...(input.confidenceEvaluation?.candidates || []),
-  ];
-
-  const ranked = candidates
-    .map((candidate) => ({ title: candidate.title, normalizedTitle: candidate.normalizedTitle, score: clampScore(candidate.score?.totalScore, 0), rank: candidate.rank || 999 }))
-    .sort((a, b) => b.score - a.score || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
-
-  return ranked[0]?.title || input.evidence.find((item) => item.detectedProblemTitle)?.detectedProblemTitle || "Synthesized market problem";
+  const ranked = rankSeeds(candidateSeeds(input));
+  return ranked[0]?.semanticTitle || input.evidence.find((item) => item.detectedProblemTitle && rawTitleRejectionReasons(item.detectedProblemTitle).length === 0)?.detectedProblemTitle || "Synthesized market problem";
 }
 
 function canonicalCluster(title: string, input: ProblemSynthesisInput) {

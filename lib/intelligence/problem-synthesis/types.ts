@@ -67,6 +67,10 @@ export type ProblemSynthesisSeedDiagnostic = {
   evidenceCount: number;
   genericTitle: boolean;
   downrankedGeneric: boolean;
+  semanticTitle?: string;
+  semanticTitleScore?: number;
+  rawTitleRejected?: boolean;
+  rawTitleRejectionReasons?: string[];
 };
 
 export type ProblemSynthesisCandidateCollapseReport = {
@@ -98,6 +102,12 @@ export type ProblemSynthesisCandidateCollapseReport = {
   seedsWithoutEnoughEvidence: number;
   rankedSeeds: ProblemSynthesisSeedDiagnostic[];
   singleCandidateMode: boolean;
+  semanticTitlesGenerated: number;
+  semanticTitlesSelected: number;
+  rawTitlesRejected: number;
+  semanticTitleScoreDistribution: { min: number; max: number; average: number };
+  topSemanticTitles: Array<{ title: string; score: number; sourceTitle: string }>;
+  rawTitleRejectionReasons: Array<{ reason: string; count: number }>;
   collapseExplanation: string;
 };
 
