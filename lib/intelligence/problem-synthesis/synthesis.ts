@@ -84,8 +84,8 @@ const MIN_SYNTHESIS_CONFIDENCE = 5;
 const MIN_SEMANTIC_TITLE_SCORE = 3;
 const MIN_SEMANTIC_TITLE_WORDS = 3;
 const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signals", "weekly intelligence", "data moat", "manual workflows lead"];
-const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "workflows", "onboarding", "billing", "follow", "up", "approval", "automation", "operations", "operational", "process", "reporting", "spreadsheet", "spreadsheets", "customer", "lead", "leads", "handoff", "handoffs"]);
-const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs"]);
+const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "workflows", "onboarding", "billing", "follow", "up", "approval", "automation", "operations", "operational", "process", "reporting", "spreadsheet", "spreadsheets", "customer", "lead", "leads", "handoff", "handoffs", "gap", "gaps", "management"]);
+const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs", "gap", "gaps", "management"]);
 const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
 const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays", "operations bottlenecks", "workflow bottlenecks", "operations fragmentation", "lead automation", "manual lead management", "operational process bottlenecks"]);
 const SUMMARY_BLOCKED_PHRASES = ["evidence", "multiple sources", "weekly intelligence", "data moat"];
@@ -178,7 +178,7 @@ function semanticProblemPhrase(seed: SynthesisSeed) {
     if (word === "dependency" || word === "dependencies") return "dependency";
     if (word === "delay") return "delays";
     return word;
-  }).filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)));
+  }).filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks", "gaps", "management"].includes(word)));
   const subject = businessWords.filter((word) => !["workflow", "automation", "manual"].includes(word)).slice(0, 2);
   const concept = subject.length > 0 ? subject.join(" ") : businessWords.includes("workflow") ? "workflow" : "operations";
   const problem = problemWords.includes("fragmentation") ? "fragmentation"
@@ -260,7 +260,7 @@ function refinedTitleRejectionReasons(title: string) {
   const normalizedTitle = normalize(title);
   const words = normalizedTitle.split(" ").filter(Boolean);
   const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
-  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)).length;
+  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks", "gaps", "management"].includes(word)).length;
   return [
     ...semanticTitleRejectionReasons(title),
     words.length < 3 ? "refined_title_too_short" : "",
@@ -276,7 +276,7 @@ function titleSpecificityMetric(title: string) {
   if (tokens.length === 0) return 0;
   const lengthScore = Math.min(1, tokens.length / 5);
   const uniquenessScore = uniqueTokens.size / tokens.length;
-  const contextScore = Math.min(1, tokens.filter((token) => BUSINESS_CONTEXT_TERMS.has(token) || PROBLEM_CONTEXT_TERMS.has(token) || ["fragmentation", "dependency", "bottlenecks"].includes(token)).length / 3);
+  const contextScore = Math.min(1, tokens.filter((token) => BUSINESS_CONTEXT_TERMS.has(token) || PROBLEM_CONTEXT_TERMS.has(token) || ["fragmentation", "dependency", "bottlenecks", "gaps", "management"].includes(token)).length / 3);
   const genericPenalty = GENERIC_SEMANTIC_TITLES.has(normalize(title)) || isGenericTitle(title) || tokens.length <= 2 ? 0.65 : 1;
   return Math.round(((lengthScore * 0.5 + uniquenessScore * 0.25 + contextScore * 0.25) * 100) * genericPenalty * 100) / 100;
 }
@@ -317,7 +317,7 @@ function semanticTitleRejectionReasons(title: string) {
   const uniqueWords = new Set(words);
   const repeatedConcept = uniqueWords.size < words.length || words.some((word, index) => words.indexOf(word) !== index);
   const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
-  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)).length;
+  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks", "gaps", "management"].includes(word)).length;
   return [
     RAW_EVIDENCE_PREFIXES.some((prefix) => normalizedTitle.startsWith(prefix)) ? "blocked_raw_evidence_prefix" : "",
     words.length < MIN_SEMANTIC_TITLE_WORDS ? "below_semantic_word_threshold" : "",
@@ -663,30 +663,52 @@ function isMultiCandidateDiagnosticsEnabled() {
   return process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS === "1";
 }
 
+
+type CandidateDomain = "sales_follow_up" | "workflow_automation" | "spreadsheet_operations" | "crm_operations" | "billing_invoicing" | "client_operations" | "ai_automation" | "general_operations";
+
+function candidateDomain(seed: RankedSynthesisSeed): CandidateDomain {
+  const text = normalize([seed.semanticTitle, seed.title, seed.problemCluster, seed.market, seed.audience].join(" "));
+  if (hasAny(text, ["spreadsheet", "spreadsheets", "reporting"])) return "spreadsheet_operations";
+  if (hasAny(text, ["invoice", "billing", "invoicing", "cash", "approval"])) return "billing_invoicing";
+  if (hasAny(text, ["crm"])) return "crm_operations";
+  if (hasAny(text, ["sales", "lead", "leads", "follow", "qualification"])) return "sales_follow_up";
+  if (hasAny(text, ["client", "onboarding", "handoff", "customer"])) return "client_operations";
+  if (hasAny(text, ["ai", "artificial intelligence", "llm", "model"])) return "ai_automation";
+  if (hasAny(text, ["workflow", "workflows", "automation", "manual", "process"])) return "workflow_automation";
+  return "general_operations";
+}
+
+function isHighQualitySelectable(seed: RankedSynthesisSeed, confidence: number, hasMeaningfulSummary: boolean) {
+  const normalizedSemanticTitle = normalize(seed.semanticTitle);
+  const semanticRejectionReasons = semanticTitleRejectionReasons(seed.semanticTitle);
+  return [
+    !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE || semanticRejectionReasons.length > 0 ? "generic_or_weak_semantic_title" : "",
+    seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED || seed.engineSupport.length < 2 ? "weak_evidence_support" : "",
+    !hasMeaningfulSummary ? "weak_summary" : "",
+    confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
+    semanticRejectionReasons.length > 0 ? "semantic_title_quality_rejected" : "",
+  ].filter(Boolean);
+}
+
 type CandidateSelection = {
   emittedSeeds: RankedSynthesisSeed[];
   rejectedSeeds: Array<{ seed: RankedSynthesisSeed; reasons: string[] }>;
   maxCandidateCount: number;
   multiCandidateModeEnabled: boolean;
+  domainFillAttempts: Array<{ pass: string; seed: RankedSynthesisSeed; accepted: boolean; reasons: string[] }>;
+  availableHighQualityDomainCount: number;
 };
 
 function selectionRejectionReasons(seed: RankedSynthesisSeed, emittedSeeds: RankedSynthesisSeed[], confidence: number, hasMeaningfulSummary: boolean) {
-  const normalizedSemanticTitle = normalize(seed.semanticTitle);
+  const qualityReasons = isHighQualitySelectable(seed, confidence, hasMeaningfulSummary);
   const emittedTitleKeys = new Set(emittedSeeds.map((item) => canonicalTitleKey(item.semanticTitle)));
-  const emittedMarketAudienceClusters = new Set(emittedSeeds.map((item) => [item.market, item.audience].join("|")));
-  const emittedBusinessProblemKeys = new Set(emittedSeeds.map((item) => diversityProfile(item).businessProblemKey));
-  const semanticRejectionReasons = semanticTitleRejectionReasons(seed.semanticTitle);
+  const emittedBusinessProblemKeys = new Set(emittedSeeds.map((item) => `${candidateDomain(item)}|${diversityProfile(item).businessProblemKey}`));
   const candidateDiversityScore = diversityScore(seed, emittedSeeds);
   return [
-    !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE || semanticRejectionReasons.length > 0 ? "generic_or_weak_semantic_title" : "",
-    seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED || seed.engineSupport.length < 2 ? "weak_evidence_support" : "",
-    !hasMeaningfulSummary ? "weak_summary" : "",
+    ...qualityReasons,
     emittedTitleKeys.has(canonicalTitleKey(seed.semanticTitle)) ? "duplicate_normalized_title" : "",
-    emittedMarketAudienceClusters.has([seed.market, seed.audience].join("|")) ? "duplicate_market_audience_cluster" : "",
-    emittedBusinessProblemKeys.has(diversityProfile(seed).businessProblemKey) ? "duplicate_business_problem_cluster" : "",
-    emittedSeeds.length > 0 && candidateDiversityScore < 0.5 ? "low_candidate_diversity" : "",
-    confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
-    semanticRejectionReasons.length > 0 ? "semantic_title_quality_rejected" : "",
+    emittedBusinessProblemKeys.has(`${candidateDomain(seed)}|${diversityProfile(seed).businessProblemKey}`) ? "duplicate_business_problem_cluster" : "",
+    emittedSeeds.length > 0 && candidateDiversityScore < 0.5 && emittedSeeds.some((item) => candidateDomain(item) === candidateDomain(seed)) ? "low_candidate_diversity" : "",
   ].filter(Boolean);
 }
 
@@ -696,25 +718,58 @@ function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, 
   const maxCandidateCount = multiCandidateModeEnabled ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1;
   const emittedSeeds: RankedSynthesisSeed[] = [];
   const rejectedSeeds: Array<{ seed: RankedSynthesisSeed; reasons: string[] }> = [];
+  const domainFillAttempts: CandidateSelection["domainFillAttempts"] = [];
+  const rejectedSeedKeys = new Set<string>();
+  const seedKey = (seed: RankedSynthesisSeed) => [seed.semanticTitle, seed.normalizedTitle, seed.market, seed.audience, seed.problemCluster].join("|");
+  const rejectSeed = (seed: RankedSynthesisSeed, reasons: string[]) => {
+    const key = seedKey(seed);
+    if (rejectedSeedKeys.has(key) || emittedSeeds.includes(seed)) return;
+    rejectedSeedKeys.add(key);
+    rejectedSeeds.push({ seed, reasons });
+  };
 
-  for (const seed of rankedSeeds) {
-    if (!multiCandidateModeEnabled && emittedSeeds.length >= 1) {
-      rejectedSeeds.push({ seed, reasons: ["single_candidate_mode_retains_only_top_ranked_cluster"] });
-      continue;
+  if (!multiCandidateModeEnabled) {
+    for (const seed of rankedSeeds) {
+      if (emittedSeeds.length < 1) emittedSeeds.push(seed);
+      else rejectSeed(seed, ["single_candidate_mode_retains_only_top_ranked_cluster"]);
     }
+    return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount: new Set(rankedSeeds.map(candidateDomain)).size };
+  }
 
-    const reasons = multiCandidateModeEnabled
-      ? selectionRejectionReasons(seed, emittedSeeds, confidence, hasMeaningfulSummary)
-      : [];
+  const qualityEligibleSeeds = rankedSeeds.filter((seed) => isHighQualitySelectable(seed, confidence, hasMeaningfulSummary).length === 0);
+  const availableHighQualityDomainCount = new Set(qualityEligibleSeeds.map(candidateDomain)).size;
+  const usedDomains = new Set<CandidateDomain>();
 
-    if (reasons.length === 0 && emittedSeeds.length < maxCandidateCount) {
+  for (const seed of qualityEligibleSeeds) {
+    if (emittedSeeds.length >= maxCandidateCount) break;
+    const domain = candidateDomain(seed);
+    const reasons = selectionRejectionReasons(seed, emittedSeeds, confidence, hasMeaningfulSummary);
+    if (usedDomains.has(domain)) reasons.push("domain_already_represented_first_pass");
+    const accepted = reasons.length === 0;
+    domainFillAttempts.push({ pass: "domain_first_pass", seed, accepted, reasons });
+    if (accepted) {
       emittedSeeds.push(seed);
-    } else {
-      rejectedSeeds.push({ seed, reasons: reasons.length > 0 ? reasons : ["max_candidate_count_reached"] });
+      usedDomains.add(domain);
     }
   }
 
-  return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled };
+  for (const seed of qualityEligibleSeeds) {
+    if (emittedSeeds.length >= maxCandidateCount) break;
+    if (emittedSeeds.includes(seed)) continue;
+    const reasons = selectionRejectionReasons(seed, emittedSeeds, confidence, hasMeaningfulSummary);
+    const accepted = reasons.length === 0;
+    domainFillAttempts.push({ pass: "remaining_slot_fill", seed, accepted, reasons });
+    if (accepted) emittedSeeds.push(seed);
+  }
+
+  for (const seed of rankedSeeds) {
+    if (emittedSeeds.includes(seed)) continue;
+    const qualityReasons = isHighQualitySelectable(seed, confidence, hasMeaningfulSummary);
+    const reasons = qualityReasons.length > 0 ? qualityReasons : selectionRejectionReasons(seed, emittedSeeds, confidence, hasMeaningfulSummary);
+    rejectSeed(seed, reasons.length > 0 ? reasons : ["max_candidate_count_reached"]);
+  }
+
+  return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount };
 }
 
 function candidateSelectionRejections(selection: CandidateSelection) {
@@ -765,6 +820,43 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     .map(([title, count]) => ({ title, count }));
   const duplicateCanonicalTitleCount = Math.max(0, rankedSeeds.length - canonicalTitleCounts.size);
   const diversityScores = rankedSeeds.map((seed) => diversityScore(seed, selection.emittedSeeds.filter((emittedSeed) => emittedSeed !== seed)));
+  const availableHighQualityDomainCount = selection.availableHighQualityDomainCount;
+  const allDomains = new Set([...rankedSeeds.map(candidateDomain), ...selection.emittedSeeds.map(candidateDomain), ...selection.rejectedSeeds.map((item) => candidateDomain(item.seed))]);
+  const domainDiversityBuckets = [...allDomains].sort().map((domain) => {
+    const domainRankedSeeds = rankedSeeds.filter((seed) => candidateDomain(seed) === domain);
+    const domainEmittedSeeds = selection.emittedSeeds.filter((seed) => candidateDomain(seed) === domain);
+    const domainRejectedSeeds = selection.rejectedSeeds.filter((item) => candidateDomain(item.seed) === domain);
+    return {
+      domain,
+      count: domainRankedSeeds.length,
+      emitted: domainEmittedSeeds.length,
+      rejected: domainRejectedSeeds.length,
+      titles: unique(domainRankedSeeds.map((seed) => safeLogTitle(seed.semanticTitle))).slice(0, 5),
+    };
+  });
+  const domainSuppressionCounts = new Map<string, { domain: string; reason: string; count: number }>();
+  for (const rejection of selection.rejectedSeeds) {
+    const domain = candidateDomain(rejection.seed);
+    for (const reason of rejection.reasons) {
+      const key = `${domain}|${reason}`;
+      const current = domainSuppressionCounts.get(key) || { domain, reason, count: 0 };
+      current.count += 1;
+      domainSuppressionCounts.set(key, current);
+    }
+  }
+  const domainFillAttempts = selection.domainFillAttempts.map((attempt) => ({
+    pass: attempt.pass,
+    title: safeLogTitle(attempt.seed.semanticTitle),
+    domain: candidateDomain(attempt.seed),
+    accepted: attempt.accepted,
+    reasons: attempt.reasons,
+  }));
+  const domainBlockingReasons = rejectionReasons.filter((item) => item.reason !== "max_candidate_count_reached").map((item) => `${item.reason}:${item.count}`).join(", ");
+  const underfilledCandidateSlotsReason = emittedCandidateCount >= selection.maxCandidateCount ? null
+    : rankedSeeds.length === 0 ? "no_ranked_synthesis_seeds_available"
+      : availableHighQualityDomainCount <= emittedCandidateCount ? `only_${availableHighQualityDomainCount}_high_quality_distinct_domain(s)_available_after_quality_gates`
+        : domainBlockingReasons ? `remaining_candidates_blocked_by_quality_or_duplicate_gates (${domainBlockingReasons})`
+          : "no_additional_quality_gated_candidates_available";
 
   return {
     upstreamCandidateCounts: {
@@ -824,6 +916,13 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     suppressed_duplicate_clusters: suppressedDuplicateClusters(selection.rejectedSeeds),
     candidate_selection_rejections: candidateSelectionRejections(selection),
     diversity_distribution: scoreDistribution(diversityScores),
+    domain_diversity_buckets: domainDiversityBuckets,
+    emitted_candidate_domains: selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), domain: candidateDomain(seed) })),
+    rejected_candidate_domains: selection.rejectedSeeds.map((item) => ({ title: safeLogTitle(item.seed.semanticTitle), domain: candidateDomain(item.seed), reasons: item.reasons })).slice(0, 50),
+    domain_suppression_reasons: [...domainSuppressionCounts.values()].sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain) || a.reason.localeCompare(b.reason)),
+    domain_fill_attempts: domainFillAttempts,
+    available_high_quality_domain_count: availableHighQualityDomainCount,
+    underfilled_candidate_slots_reason: underfilledCandidateSlotsReason,
     refined_titles_generated: rankedSeeds.reduce((sum, seed) => sum + seed.titleRefinementGenerated, 0),
     refined_titles_selected: selection.emittedSeeds.length,
     title_specificity_distribution: scoreDistribution(rankedSeeds.map((seed) => seed.titleSpecificityScoreRefined)),
@@ -912,7 +1011,7 @@ export class ProblemIntelligenceSynthesisEngine {
     const conciseEvidenceSummary = claims.length > 0 ? claims.slice(0, 3).map(sentence).join(" ") : "No reusable evidence claims were available for synthesis.";
     const hasMeaningfulSummary = claims.length > 0 && conciseEvidenceSummary.length >= 40;
     const selection = evidence.length === 0
-      ? { emittedSeeds: [], rejectedSeeds: [], maxCandidateCount: isMultiCandidateDiagnosticsEnabled() ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1, multiCandidateModeEnabled: isMultiCandidateDiagnosticsEnabled() }
+      ? { emittedSeeds: [], rejectedSeeds: [], maxCandidateCount: isMultiCandidateDiagnosticsEnabled() ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1, multiCandidateModeEnabled: isMultiCandidateDiagnosticsEnabled(), domainFillAttempts: [], availableHighQualityDomainCount: 0 }
       : selectSynthesisSeeds(input, confidence, hasMeaningfulSummary);
     const fallbackTitle = primaryTitle(input);
     const emittedTitles = selection.emittedSeeds.length > 0 ? selection.emittedSeeds.map((seed) => seed.semanticTitle) : (evidence.length === 0 || selection.multiCandidateModeEnabled ? [] : [fallbackTitle]);

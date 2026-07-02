@@ -131,6 +131,13 @@ export type ProblemSynthesisCandidateCollapseReport = {
   suppressed_duplicate_clusters: Array<{ cluster: string; count: number; titles: string[] }>;
   candidate_selection_rejections: Array<{ title: string; reasons: string[]; diversity_score: number }>;
   diversity_distribution: { min: number; max: number; average: number };
+  domain_diversity_buckets: Array<{ domain: string; count: number; emitted: number; rejected: number; titles: string[] }>;
+  emitted_candidate_domains: Array<{ title: string; domain: string }>;
+  rejected_candidate_domains: Array<{ title: string; domain: string; reasons: string[] }>;
+  domain_suppression_reasons: Array<{ domain: string; reason: string; count: number }>;
+  domain_fill_attempts: Array<{ pass: string; title: string; domain: string; accepted: boolean; reasons: string[] }>;
+  available_high_quality_domain_count: number;
+  underfilled_candidate_slots_reason: string | null;
   refined_titles_generated: number;
   refined_titles_selected: number;
   title_specificity_distribution: { min: number; max: number; average: number };
