@@ -283,6 +283,15 @@ test("problem synthesis multi-candidate diagnostics flag emits up to five qualit
     assert.ok(report.domain_diversity_buckets.some((bucket) => bucket.domain === "spreadsheet_operations"));
     assert.ok(report.domain_diversity_buckets.some((bucket) => bucket.domain === "billing_invoicing"));
     assert.ok(report.domain_fill_attempts.some((attempt) => attempt.pass === "domain_first_pass" && attempt.accepted));
+    assert.equal(report.emitted_title_quality_scores.length, synthesis.candidates.length);
+    assert.equal(report.emitted_title_specificity_scores.length, synthesis.candidates.length);
+    assert.ok(report.emitted_title_quality_scores.every((item) => item.score >= 80));
+    assert.ok(report.emitted_title_specificity_scores.every((item) => item.score >= 80));
+    assert.equal(report.low_specificity_emitted_count, 0);
+    assert.ok(report.title_refinement_applied_count >= synthesis.candidates.length);
+    assert.ok(report.replacement_candidate_attempts >= 0);
+    assert.ok(report.title_quality_preservation_score >= 80);
+    assert.ok(Array.isArray(report.title_quality_gate_rejections));
     assert.ok(Array.isArray(report.rejected_candidate_domains));
     assert.ok(Array.isArray(report.domain_suppression_reasons));
   } finally {
