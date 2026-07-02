@@ -266,7 +266,7 @@ test("problem synthesis multi-candidate diagnostics flag emits up to five qualit
 
     const report = synthesis.diagnostics[0].candidateCollapseReport;
     assert.ok(synthesis.candidates.length <= 5);
-    assert.ok(synthesis.candidates.length >= 3);
+    assert.ok(synthesis.candidates.length >= 4);
     assert.equal(report.multiCandidateModeEnabled, true);
     assert.equal(report.maxCandidateCount, 5);
     assert.equal(report.emittedCandidateCount, synthesis.candidates.length);
@@ -276,6 +276,15 @@ test("problem synthesis multi-candidate diagnostics flag emits up to five qualit
     assert.ok(report.diversity_score > 0);
     assert.equal(report.emitted_candidate_diversity.length, synthesis.candidates.length);
     assert.ok(report.diversity_distribution.max <= 1);
+    assert.ok(report.available_high_quality_domain_count >= 4);
+    if (synthesis.candidates.length >= 5) assert.equal(report.underfilled_candidate_slots_reason, null);
+    else assert.ok(report.underfilled_candidate_slots_reason);
+    assert.equal(report.emitted_candidate_domains.length, synthesis.candidates.length);
+    assert.ok(report.domain_diversity_buckets.some((bucket) => bucket.domain === "spreadsheet_operations"));
+    assert.ok(report.domain_diversity_buckets.some((bucket) => bucket.domain === "billing_invoicing"));
+    assert.ok(report.domain_fill_attempts.some((attempt) => attempt.pass === "domain_first_pass" && attempt.accepted));
+    assert.ok(Array.isArray(report.rejected_candidate_domains));
+    assert.ok(Array.isArray(report.domain_suppression_reasons));
   } finally {
     if (previous === undefined) delete process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
     else process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = previous;
@@ -313,6 +322,8 @@ test("problem synthesis multi-candidate diagnostics rejects weak generic raw and
     assert.ok(report.genericTitleRejectionCount >= 1);
     assert.ok(report.rejectionReasons.some((item) => item.reason === "weak_evidence_support"));
     assert.ok(report.rejectedCandidateTitles.every((title) => !/evidence reddit/i.test(title)));
+    assert.ok(report.underfilled_candidate_slots_reason);
+    assert.equal(report.available_high_quality_domain_count, 0);
   } finally {
     if (previous === undefined) delete process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
     else process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = previous;

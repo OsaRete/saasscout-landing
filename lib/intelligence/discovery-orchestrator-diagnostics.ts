@@ -113,6 +113,13 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       ...(problemSynthesisCollapseReport.suppressed_duplicate_clusters !== undefined ? { suppressed_duplicate_clusters: problemSynthesisCollapseReport.suppressed_duplicate_clusters } : {}),
       ...(problemSynthesisCollapseReport.candidate_selection_rejections !== undefined ? { candidate_selection_rejections: problemSynthesisCollapseReport.candidate_selection_rejections } : {}),
       ...(problemSynthesisCollapseReport.diversity_distribution !== undefined ? { diversity_distribution: problemSynthesisCollapseReport.diversity_distribution } : {}),
+      ...(problemSynthesisCollapseReport.domain_diversity_buckets !== undefined ? { domain_diversity_buckets: problemSynthesisCollapseReport.domain_diversity_buckets } : {}),
+      ...(problemSynthesisCollapseReport.emitted_candidate_domains !== undefined ? { emitted_candidate_domains: problemSynthesisCollapseReport.emitted_candidate_domains } : {}),
+      ...(problemSynthesisCollapseReport.rejected_candidate_domains !== undefined ? { rejected_candidate_domains: problemSynthesisCollapseReport.rejected_candidate_domains } : {}),
+      ...(problemSynthesisCollapseReport.domain_suppression_reasons !== undefined ? { domain_suppression_reasons: problemSynthesisCollapseReport.domain_suppression_reasons } : {}),
+      ...(problemSynthesisCollapseReport.domain_fill_attempts !== undefined ? { domain_fill_attempts: problemSynthesisCollapseReport.domain_fill_attempts } : {}),
+      ...(problemSynthesisCollapseReport.available_high_quality_domain_count !== undefined ? { available_high_quality_domain_count: problemSynthesisCollapseReport.available_high_quality_domain_count } : {}),
+      ...(problemSynthesisCollapseReport.underfilled_candidate_slots_reason !== undefined ? { underfilled_candidate_slots_reason: problemSynthesisCollapseReport.underfilled_candidate_slots_reason } : {}),
       collapse_explanation: problemSynthesisCollapseReport.collapseExplanation,
     } : null,
     solution_intelligence_stage: {
