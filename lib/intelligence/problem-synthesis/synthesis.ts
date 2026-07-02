@@ -69,9 +69,17 @@ type RankedSynthesisSeed = SynthesisSeed & {
   duplicateTitlePenaltyApplied: boolean;
 };
 
+type CandidateDiversityProfile = {
+  businessProcess: string;
+  operationalDomain: string;
+  affectedAudience: string;
+  workflowCategory: string;
+  businessProblemKey: string;
+};
+
 const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service", "operations", "process", "management", "bottlenecks", "fragmentation"]);
 const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
-const MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES = 3;
+const MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES = 5;
 const MIN_SYNTHESIS_CONFIDENCE = 5;
 const MIN_SEMANTIC_TITLE_SCORE = 3;
 const MIN_SEMANTIC_TITLE_WORDS = 3;
@@ -439,6 +447,81 @@ function semanticSummaryForSeed(seed: SynthesisSeed, title: string, claims: stri
   return cleanSummary(`${users} rely on ${process}, causing ${consequence} and ${impact}`);
 }
 
+
+function inferOperationalDomain(seed: SynthesisSeed, title: string) {
+  const text = normalize([title, seed.title, seed.problemCluster, seed.market, seed.audience].join(" "));
+  if (hasAny(text, ["crm", "sales", "lead", "follow", "customer"])) return "revenue operations";
+  if (hasAny(text, ["invoice", "billing", "approval", "cash"])) return "finance operations";
+  if (hasAny(text, ["onboarding", "client", "handoff"])) return "client delivery";
+  if (hasAny(text, ["spreadsheet", "reporting", "visibility"])) return "operations reporting";
+  if (hasAny(text, ["agency", "workflow", "automation", "process"])) return "business operations";
+  return readablePhrase(seed.market, "general operations");
+}
+
+function inferWorkflowCategory(seed: SynthesisSeed, title: string) {
+  const text = normalize([title, seed.title, seed.problemCluster, seed.market, seed.audience].join(" "));
+  if (hasAny(text, ["approval", "invoice", "billing"])) return "approval workflow";
+  if (hasAny(text, ["follow", "lead", "qualification"])) return "follow-up workflow";
+  if (hasAny(text, ["onboarding", "handoff"])) return "onboarding workflow";
+  if (hasAny(text, ["spreadsheet", "reporting"])) return "reporting workflow";
+  if (hasAny(text, ["crm", "customer"])) return "customer workflow";
+  if (hasAny(text, ["automation", "manual", "process"])) return "manual process workflow";
+  return "operational workflow";
+}
+
+function diversityProfile(seed: RankedSynthesisSeed): CandidateDiversityProfile {
+  const claims = [seed.title, seed.problemCluster];
+  const businessProcess = normalize(inferBusinessProcess(seed, seed.semanticTitle, claims));
+  const operationalDomain = normalize(inferOperationalDomain(seed, seed.semanticTitle));
+  const affectedAudience = normalize(inferAffectedUsers(seed, claims));
+  const workflowCategory = normalize(inferWorkflowCategory(seed, seed.semanticTitle));
+  return {
+    businessProcess,
+    operationalDomain,
+    affectedAudience,
+    workflowCategory,
+    businessProblemKey: [businessProcess, operationalDomain, affectedAudience, workflowCategory].join("|"),
+  };
+}
+
+function diversityScore(seed: RankedSynthesisSeed, emittedSeeds: RankedSynthesisSeed[]) {
+  if (emittedSeeds.length === 0) return 1;
+  const profile = diversityProfile(seed);
+  const scores = emittedSeeds.map((emitted) => {
+    const emittedProfile = diversityProfile(emitted);
+    const differentDimensions = [
+      profile.businessProcess !== emittedProfile.businessProcess,
+      profile.operationalDomain !== emittedProfile.operationalDomain,
+      profile.affectedAudience !== emittedProfile.affectedAudience,
+      profile.workflowCategory !== emittedProfile.workflowCategory,
+    ].filter(Boolean).length;
+    return Math.round((differentDimensions / 4) * 100) / 100;
+  });
+  return Math.min(...scores);
+}
+
+function emittedCandidateDiversity(emittedSeeds: RankedSynthesisSeed[]) {
+  if (emittedSeeds.length <= 1) return emittedSeeds.length;
+  const scores: number[] = [];
+  for (let index = 0; index < emittedSeeds.length; index += 1) {
+    scores.push(diversityScore(emittedSeeds[index], emittedSeeds.filter((_, otherIndex) => otherIndex !== index)));
+  }
+  return Math.round(average(scores, 0) * 100) / 100;
+}
+
+function suppressedDuplicateClusters(rejectedSeeds: CandidateSelection["rejectedSeeds"]) {
+  const clusters = new Map<string, { cluster: string; count: number; titles: string[] }>();
+  for (const rejection of rejectedSeeds) {
+    if (!rejection.reasons.some((reason) => reason.includes("duplicate") || reason === "low_candidate_diversity")) continue;
+    const profile = diversityProfile(rejection.seed);
+    const current = clusters.get(profile.businessProblemKey) || { cluster: profile.businessProblemKey, count: 0, titles: [] };
+    current.count += 1;
+    current.titles = unique([...current.titles, safeLogTitle(rejection.seed.semanticTitle)]).slice(0, 5);
+    clusters.set(profile.businessProblemKey, current);
+  }
+  return [...clusters.values()].sort((a, b) => b.count - a.count || a.cluster.localeCompare(b.cluster)).slice(0, 10);
+}
+
 function candidateSeeds(input: ProblemSynthesisInput): SynthesisSeed[] {
   const toSeed = (engine: string, candidate: { title?: string; normalizedTitle?: string; score?: { totalScore?: number; confidenceScore?: number; evidenceScore?: number }; rank?: number; context?: Record<string, unknown>; marketContext?: Record<string, unknown>; evidence?: Array<{ sourceQualityScore?: number; claim?: string }> }): SynthesisSeed => {
     const context = candidate.context || {};
@@ -591,13 +674,17 @@ function selectionRejectionReasons(seed: RankedSynthesisSeed, emittedSeeds: Rank
   const normalizedSemanticTitle = normalize(seed.semanticTitle);
   const emittedTitleKeys = new Set(emittedSeeds.map((item) => canonicalTitleKey(item.semanticTitle)));
   const emittedMarketAudienceClusters = new Set(emittedSeeds.map((item) => [item.market, item.audience].join("|")));
+  const emittedBusinessProblemKeys = new Set(emittedSeeds.map((item) => diversityProfile(item).businessProblemKey));
   const semanticRejectionReasons = semanticTitleRejectionReasons(seed.semanticTitle);
+  const candidateDiversityScore = diversityScore(seed, emittedSeeds);
   return [
     !normalizedSemanticTitle || isGenericTitle(seed.semanticTitle, normalizedSemanticTitle) || seed.semanticTitleScore < MIN_SEMANTIC_TITLE_SCORE || semanticRejectionReasons.length > 0 ? "generic_or_weak_semantic_title" : "",
     seed.evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED || seed.engineSupport.length < 2 ? "weak_evidence_support" : "",
     !hasMeaningfulSummary ? "weak_summary" : "",
     emittedTitleKeys.has(canonicalTitleKey(seed.semanticTitle)) ? "duplicate_normalized_title" : "",
     emittedMarketAudienceClusters.has([seed.market, seed.audience].join("|")) ? "duplicate_market_audience_cluster" : "",
+    emittedBusinessProblemKeys.has(diversityProfile(seed).businessProblemKey) ? "duplicate_business_problem_cluster" : "",
+    emittedSeeds.length > 0 && candidateDiversityScore < 0.5 ? "low_candidate_diversity" : "",
     confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
     semanticRejectionReasons.length > 0 ? "semantic_title_quality_rejected" : "",
   ].filter(Boolean);
@@ -628,6 +715,14 @@ function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, 
   }
 
   return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled };
+}
+
+function candidateSelectionRejections(selection: CandidateSelection) {
+  return selection.rejectedSeeds.slice(0, 25).map((item) => ({
+    title: safeLogTitle(item.seed.semanticTitle),
+    reasons: item.reasons,
+    diversity_score: diversityScore(item.seed, selection.emittedSeeds),
+  }));
 }
 
 function countItems(items: string[], label: "reason" | "warning") {
@@ -669,6 +764,7 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([title, count]) => ({ title, count }));
   const duplicateCanonicalTitleCount = Math.max(0, rankedSeeds.length - canonicalTitleCounts.size);
+  const diversityScores = rankedSeeds.map((seed) => diversityScore(seed, selection.emittedSeeds.filter((emittedSeed) => emittedSeed !== seed)));
 
   return {
     upstreamCandidateCounts: {
@@ -723,6 +819,11 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     weakEvidenceRejectionCount: rejectionReasonCounts.get("weak_evidence_support") || 0,
     genericTitleRejectionCount: (rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0) + selection.rejectedSeeds.filter((item) => item.seed.genericTitle || item.seed.genericTitlePenaltyApplied).length,
     semanticTitleQualityScores: rankedSeeds.map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore })),
+    diversity_score: emittedCandidateDiversity(selection.emittedSeeds),
+    emitted_candidate_diversity: selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), ...diversityProfile(seed), diversity_score: diversityScore(seed, selection.emittedSeeds.filter((emittedSeed) => emittedSeed !== seed)) })),
+    suppressed_duplicate_clusters: suppressedDuplicateClusters(selection.rejectedSeeds),
+    candidate_selection_rejections: candidateSelectionRejections(selection),
+    diversity_distribution: scoreDistribution(diversityScores),
     refined_titles_generated: rankedSeeds.reduce((sum, seed) => sum + seed.titleRefinementGenerated, 0),
     refined_titles_selected: selection.emittedSeeds.length,
     title_specificity_distribution: scoreDistribution(rankedSeeds.map((seed) => seed.titleSpecificityScoreRefined)),

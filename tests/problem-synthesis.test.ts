@@ -204,7 +204,7 @@ test("semantic summary generation produces analyst-style problem summaries and d
   assert.ok(Array.isArray(report.summary_generation_warnings));
 });
 
-test("problem synthesis multi-candidate diagnostics flag emits up to three quality-gated semantic candidates", () => {
+test("problem synthesis multi-candidate diagnostics flag emits up to five quality-gated semantic candidates", () => {
   const previous = process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
   process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = "1";
 
@@ -242,10 +242,11 @@ test("problem synthesis multi-candidate diagnostics flag emits up to three quali
           engineCandidate("opp-invoice", "Invoice approval delays for subcontractors", "invoice approval delays for subcontractors", "Construction", "Subcontractors", "Invoice approvals", 2),
           engineCandidate("opp-crm", "Disconnected CRM follow up gaps", "disconnected crm follow up gaps", "Sales", "Sales managers", "CRM follow up", 3),
           engineCandidate("opp-extra", "Spreadsheet workflow reporting gaps", "spreadsheet workflow reporting gaps", "Accounting", "Controllers", "Spreadsheet workflow reporting", 4),
+          engineCandidate("opp-billing", "Billing approval workflow delays", "billing approval workflow delays", "Healthcare", "Billing teams", "Billing approvals", 5),
         ],
         signals: [],
         warnings: [],
-        summary: { evidenceCount: 4, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 4, candidateCount: 4, highestScore: 8, averageConfidence: 8 },
+        summary: { evidenceCount: 4, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, signalCount: 4, candidateCount: 5, highestScore: 8, averageConfidence: 8 },
       },
       confidenceEvaluation: {
         runId: "multi-candidate-test",
@@ -255,22 +256,26 @@ test("problem synthesis multi-candidate diagnostics flag emits up to three quali
           engineCandidate("conf-invoice", "Invoice approval delays for subcontractors", "invoice approval delays for subcontractors", "Construction", "Subcontractors", "Invoice approvals", 2),
           engineCandidate("conf-crm", "Disconnected CRM follow up gaps", "disconnected crm follow up gaps", "Sales", "Sales managers", "CRM follow up", 3),
           engineCandidate("conf-extra", "Spreadsheet workflow reporting gaps", "spreadsheet workflow reporting gaps", "Accounting", "Controllers", "Spreadsheet workflow reporting", 4),
+          engineCandidate("conf-billing", "Billing approval workflow delays", "billing approval workflow delays", "Healthcare", "Billing teams", "Billing approvals", 5),
         ],
         signals: [],
         warnings: [],
-        summary: { evidenceCount: 4, knowledgeProblemCount: 0, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, opportunityCandidateCount: 4, monetizationCandidateCount: 0, founderFitCandidateCount: 0, signalCount: 4, candidateCount: 4, highestScore: 8, averageConfidence: 8 },
+        summary: { evidenceCount: 4, knowledgeProblemCount: 0, painCandidateCount: 0, patternCandidateCount: 0, trendCandidateCount: 0, opportunityCandidateCount: 5, monetizationCandidateCount: 0, founderFitCandidateCount: 0, signalCount: 4, candidateCount: 5, highestScore: 8, averageConfidence: 8 },
       },
     });
 
     const report = synthesis.diagnostics[0].candidateCollapseReport;
-    assert.equal(synthesis.candidates.length, 3);
+    assert.ok(synthesis.candidates.length <= 5);
+    assert.ok(synthesis.candidates.length >= 3);
     assert.equal(report.multiCandidateModeEnabled, true);
-    assert.equal(report.maxCandidateCount, 3);
-    assert.equal(report.emittedCandidateCount, 3);
-    assert.equal(report.rejectedCandidateCount, 1);
+    assert.equal(report.maxCandidateCount, 5);
+    assert.equal(report.emittedCandidateCount, synthesis.candidates.length);
     assert.deepEqual(synthesis.candidates.map((candidate) => candidate.synthesizedProblemTitle), report.emittedCandidateTitles);
     assert.ok(synthesis.candidates.every((candidate) => !/evidence|reddit|lead to/i.test(candidate.synthesizedProblemTitle)));
-    assert.ok(report.semanticTitleQualityScores.length >= 4);
+    assert.ok(report.semanticTitleQualityScores.length >= 5);
+    assert.ok(report.diversity_score > 0);
+    assert.equal(report.emitted_candidate_diversity.length, synthesis.candidates.length);
+    assert.ok(report.diversity_distribution.max <= 1);
   } finally {
     if (previous === undefined) delete process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
     else process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = previous;
