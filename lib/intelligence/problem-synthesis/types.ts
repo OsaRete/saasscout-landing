@@ -126,6 +126,11 @@ export type ProblemSynthesisCandidateCollapseReport = {
   weakEvidenceRejectionCount: number;
   genericTitleRejectionCount: number;
   semanticTitleQualityScores: Array<{ title: string; score: number }>;
+  diversity_score: number;
+  emitted_candidate_diversity: Array<{ title: string; businessProcess: string; operationalDomain: string; affectedAudience: string; workflowCategory: string; businessProblemKey: string; diversity_score: number }>;
+  suppressed_duplicate_clusters: Array<{ cluster: string; count: number; titles: string[] }>;
+  candidate_selection_rejections: Array<{ title: string; reasons: string[]; diversity_score: number }>;
+  diversity_distribution: { min: number; max: number; average: number };
   refined_titles_generated: number;
   refined_titles_selected: number;
   title_specificity_distribution: { min: number; max: number; average: number };

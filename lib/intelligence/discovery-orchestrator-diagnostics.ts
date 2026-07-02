@@ -108,6 +108,11 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       ...(problemSynthesisCollapseReport.weakEvidenceRejectionCount !== undefined ? { weak_evidence_rejection_count: problemSynthesisCollapseReport.weakEvidenceRejectionCount } : {}),
       ...(problemSynthesisCollapseReport.genericTitleRejectionCount !== undefined ? { generic_title_rejection_count: problemSynthesisCollapseReport.genericTitleRejectionCount } : {}),
       ...(problemSynthesisCollapseReport.semanticTitleQualityScores !== undefined ? { semantic_title_quality_scores: problemSynthesisCollapseReport.semanticTitleQualityScores } : {}),
+      ...(problemSynthesisCollapseReport.diversity_score !== undefined ? { diversity_score: problemSynthesisCollapseReport.diversity_score } : {}),
+      ...(problemSynthesisCollapseReport.emitted_candidate_diversity !== undefined ? { emitted_candidate_diversity: problemSynthesisCollapseReport.emitted_candidate_diversity } : {}),
+      ...(problemSynthesisCollapseReport.suppressed_duplicate_clusters !== undefined ? { suppressed_duplicate_clusters: problemSynthesisCollapseReport.suppressed_duplicate_clusters } : {}),
+      ...(problemSynthesisCollapseReport.candidate_selection_rejections !== undefined ? { candidate_selection_rejections: problemSynthesisCollapseReport.candidate_selection_rejections } : {}),
+      ...(problemSynthesisCollapseReport.diversity_distribution !== undefined ? { diversity_distribution: problemSynthesisCollapseReport.diversity_distribution } : {}),
       collapse_explanation: problemSynthesisCollapseReport.collapseExplanation,
     } : null,
     solution_intelligence_stage: {
