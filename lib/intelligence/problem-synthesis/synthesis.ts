@@ -60,9 +60,16 @@ type RankedSynthesisSeed = SynthesisSeed & {
   semanticSummaryScore: number;
   semanticSummaryRejectionReasons: string[];
   semanticSummaryWarnings: string[];
+  titleRefinementGenerated: number;
+  titleSpecificityScoreRefined: number;
+  titleRefinementRejectionReasons: string[];
+  genericTitlePenaltyApplied: boolean;
+  canonicalTitleBonusApplied: boolean;
+  businessContextBonusApplied: boolean;
+  duplicateTitlePenaltyApplied: boolean;
 };
 
-const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service"]);
+const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service", "operations", "process", "management", "bottlenecks", "fragmentation"]);
 const MIN_EVIDENCE_FOR_STRONG_SEED = 2;
 const MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES = 3;
 const MIN_SYNTHESIS_CONFIDENCE = 5;
@@ -72,21 +79,23 @@ const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signa
 const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "workflows", "onboarding", "billing", "follow", "up", "approval", "automation", "operations", "operational", "process", "reporting", "spreadsheet", "spreadsheets", "customer", "lead", "leads", "handoff", "handoffs"]);
 const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs"]);
 const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
-const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays"]);
+const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays", "operations bottlenecks", "workflow bottlenecks", "operations fragmentation", "lead automation", "manual lead management", "operational process bottlenecks"]);
 const SUMMARY_BLOCKED_PHRASES = ["evidence", "multiple sources", "weekly intelligence", "data moat"];
 const SUMMARY_IMPACT_TERMS = ["delays", "errors", "reduced visibility", "administrative workload", "revenue leakage", "inconsistent customer engagement", "operational inefficiency"];
 
 const CANONICAL_TITLE_RULES: Array<{ title: string; terms: string[]; any?: string[] }> = [
-  { title: "CRM Workflow Fragmentation", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs", "follow"] },
-  { title: "Sales Follow-up Automation", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer"] },
-  { title: "Manual Workflow Automation", terms: ["manual", "workflow"], any: ["automation", "errors", "delays", "operations"] },
-  { title: "Manual Lead Management", terms: ["lead"], any: ["manual", "errors", "delays", "follow", "management"] },
-  { title: "Spreadsheet Dependency", terms: ["spreadsheet"], any: ["spreadsheets", "dependency", "workflow", "manual", "reporting"] },
-  { title: "Client Onboarding Friction", terms: ["client", "onboarding"], any: ["friction", "handoff", "handoffs", "scattered", "workflow"] },
-  { title: "Client Operations Fragmentation", terms: ["client", "operations"], any: ["fragmentation", "fragmented", "scattered", "disconnected"] },
-  { title: "Billing Workflow Automation", terms: ["billing"], any: ["workflow", "automation", "approval", "invoice"] },
+  { title: "Fragmented CRM Operations", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs"] },
+  { title: "Manual Sales Follow-up Processes", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer", "manual"] },
+  { title: "Manual Lead Qualification", terms: ["lead"], any: ["qualification", "qualify", "manual"] },
+  { title: "Manual Customer Follow-up", terms: ["customer"], any: ["follow", "up", "manual"] },
+  { title: "Manual and Fragmented Workflow Automation", terms: ["manual", "workflow"], any: ["automation", "errors", "delays", "operations", "fragmented", "fragmentation"] },
+  { title: "Spreadsheet-Based Workflow Management", terms: ["spreadsheet"], any: ["spreadsheets", "dependency", "workflow", "manual", "reporting"] },
+  { title: "Client Onboarding Workflow Friction", terms: ["client", "onboarding"], any: ["friction", "handoff", "handoffs", "scattered", "workflow"] },
+  { title: "Fragmented Client Operations", terms: ["client"], any: ["fragmentation", "fragmented", "scattered", "disconnected", "operations"] },
+  { title: "Billing Approval Workflow Delays", terms: ["billing"], any: ["workflow", "automation", "approval", "invoice", "delay", "delays"] },
   { title: "Invoice Approval Bottlenecks", terms: ["invoice", "approval"], any: ["bottleneck", "bottlenecks", "delay", "delays"] },
-  { title: "Operational Process Bottlenecks", terms: ["operations"], any: ["bottleneck", "bottlenecks", "delay", "delays", "process", "manual"] },
+  { title: "Operational Process Fragmentation", terms: ["operations"], any: ["fragmentation", "fragmented", "disconnected", "process", "manual"] },
+  { title: "Manual Operational Process Bottlenecks", terms: ["operations"], any: ["bottleneck", "bottlenecks", "delay", "delays", "process", "manual"] },
 ];
 
 function safeLogTitle(value: string) {
@@ -178,6 +187,122 @@ function semanticTitleForSeed(seed: SynthesisSeed) {
   return canonicalTitleKey(title) === "crm workflow fragmentation" ? "CRM Workflow Fragmentation" : title;
 }
 
+
+type TitleRefinement = {
+  title: string;
+  generatedCount: number;
+  specificityScore: number;
+  rejectionReasons: string[];
+  genericPenaltyApplied: boolean;
+  canonicalBonusApplied: boolean;
+  businessContextBonusApplied: boolean;
+};
+
+function hasAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(term));
+}
+
+function inferTitleBusinessContext(seed: SynthesisSeed) {
+  const text = normalize([seed.title, seed.problemCluster, seed.market, seed.audience].join(" "));
+  if (hasAny(text, ["crm"])) return "CRM operations";
+  if (hasAny(text, ["agency", "agencies"]) && hasAny(text, ["workflow", "workflows", "automation"])) return "agency workflow automation";
+  if (hasAny(text, ["sales", "lead", "leads"])) return hasAny(text, ["qualify", "qualification"]) ? "lead qualification" : "sales follow-up";
+  if (hasAny(text, ["customer", "follow up", "follow"])) return "customer follow-up";
+  if (hasAny(text, ["spreadsheet", "spreadsheets"])) return "spreadsheet-based workflow";
+  if (hasAny(text, ["invoice", "billing", "approval"])) return "billing approval workflow";
+  if (hasAny(text, ["client", "onboarding"])) return "client onboarding workflow";
+  if (hasAny(text, ["client"])) return "client operations";
+  if (hasAny(text, ["workflow", "workflows"])) return "workflow automation";
+  return "operational process";
+}
+
+function inferTitleProblemContext(seed: SynthesisSeed) {
+  const text = normalize([seed.title, seed.problemCluster, seed.market, seed.audience].join(" "));
+  if (hasAny(text, ["fragmented", "fragmentation", "disconnected", "scattered"])) return "fragmentation";
+  if (hasAny(text, ["manual"]) && hasAny(text, ["workflow", "automation", "process", "operations"])) return "manual fragmentation";
+  if (hasAny(text, ["dependency", "dependencies", "spreadsheet", "spreadsheets"])) return "dependency";
+  if (hasAny(text, ["delay", "delays", "bottleneck", "bottlenecks"])) return "bottlenecks";
+  if (hasAny(text, ["friction", "handoff", "handoffs"])) return "friction";
+  if (hasAny(text, ["manual"])) return "manual processes";
+  return "fragmentation";
+}
+
+function refinedTitleCandidates(seed: SynthesisSeed) {
+  const semantic = semanticTitleForSeed(seed);
+  const businessContext = inferTitleBusinessContext(seed);
+  const problemContext = inferTitleProblemContext(seed);
+  const candidates = [semantic];
+
+  if (businessContext === "agency workflow automation") candidates.push("Agency Workflow Automation Gaps", "Manual Agency Workflow Automation");
+  if (businessContext === "sales follow-up") candidates.push("Manual Sales Follow-up Processes", "Sales Follow-up Process Gaps");
+  if (businessContext === "lead qualification") candidates.push("Manual Lead Qualification", "Manual Lead Qualification Processes");
+  if (businessContext === "customer follow-up") candidates.push("Manual Customer Follow-up", "Customer Follow-up Process Gaps");
+  if (businessContext === "CRM operations") candidates.push("Fragmented CRM Operations", "Disconnected CRM Workflow Operations");
+  if (businessContext === "spreadsheet-based workflow") candidates.push("Spreadsheet-Based Workflow Management", "Spreadsheet-Driven Business Operations");
+  if (businessContext === "billing approval workflow") candidates.push("Billing Approval Workflow Delays", "Invoice Approval Bottlenecks");
+  if (businessContext === "client onboarding workflow") candidates.push("Client Onboarding Workflow Friction", "Client Onboarding Handoff Friction");
+  if (businessContext === "client operations") candidates.push("Fragmented Client Operations", "Client Operations Fragmentation");
+  if (businessContext === "workflow automation" && problemContext === "manual fragmentation") candidates.push("Manual and Fragmented Workflow Automation");
+  if (businessContext === "operational process") candidates.push(problemContext === "fragmentation" ? "Operational Process Fragmentation" : "Manual Operational Process Bottlenecks");
+
+  return unique(candidates.map(titleCase));
+}
+
+function refinedTitleRejectionReasons(title: string) {
+  const normalizedTitle = normalize(title);
+  const words = normalizedTitle.split(" ").filter(Boolean);
+  const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
+  const problemContext = words.filter((word) => PROBLEM_CONTEXT_TERMS.has(word) || ["fragmentation", "dependency", "bottlenecks"].includes(word)).length;
+  return [
+    ...semanticTitleRejectionReasons(title),
+    words.length < 3 ? "refined_title_too_short" : "",
+    words.length > 6 ? "refined_title_too_long" : "",
+    businessContext < 1 ? "refined_title_missing_business_context" : "",
+    problemContext < 1 ? "refined_title_missing_problem_context" : "",
+  ].filter(Boolean);
+}
+
+function titleSpecificityMetric(title: string) {
+  const tokens = normalize(title).split(" ").filter(Boolean);
+  const uniqueTokens = new Set(tokens);
+  if (tokens.length === 0) return 0;
+  const lengthScore = Math.min(1, tokens.length / 5);
+  const uniquenessScore = uniqueTokens.size / tokens.length;
+  const contextScore = Math.min(1, tokens.filter((token) => BUSINESS_CONTEXT_TERMS.has(token) || PROBLEM_CONTEXT_TERMS.has(token) || ["fragmentation", "dependency", "bottlenecks"].includes(token)).length / 3);
+  const genericPenalty = GENERIC_SEMANTIC_TITLES.has(normalize(title)) || isGenericTitle(title) || tokens.length <= 2 ? 0.65 : 1;
+  return Math.round(((lengthScore * 0.5 + uniquenessScore * 0.25 + contextScore * 0.25) * 100) * genericPenalty * 100) / 100;
+}
+
+function refineSemanticTitle(seed: SynthesisSeed, engineSupport: string[], rawRejected: boolean): TitleRefinement {
+  const candidates = refinedTitleCandidates(seed).map((title) => {
+    const normalizedTitle = normalize(title);
+    const words = normalizedTitle.split(" ").filter(Boolean);
+    const rejectionReasons = refinedTitleRejectionReasons(title);
+    const genericPenaltyApplied = GENERIC_SEMANTIC_TITLES.has(normalizedTitle) || isGenericTitle(title, normalizedTitle) || words.length <= 2;
+    const canonicalBonusApplied = CANONICAL_TITLE_RULES.some((rule) => normalize(rule.title) === normalizedTitle);
+    const businessContextBonusApplied = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length >= 2 || normalizedTitle.includes("follow up") || normalizedTitle.includes("spreadsheet based");
+    const score = titleSpecificityMetric(title)
+      + (canonicalBonusApplied ? 8 : 0)
+      + (businessContextBonusApplied ? 6 : 0)
+      + Math.min(8, engineSupport.length * 2)
+      + (rawRejected ? 3 : 0)
+      - (genericPenaltyApplied ? 25 : 0)
+      - (rejectionReasons.length * 6);
+    return { title, score, rejectionReasons, genericPenaltyApplied, canonicalBonusApplied, businessContextBonusApplied };
+  }).sort((a, b) => b.score - a.score || b.title.length - a.title.length || a.title.localeCompare(b.title));
+
+  const selected = candidates.find((candidate) => candidate.rejectionReasons.length === 0) || candidates[0] || { title: semanticTitleForSeed(seed), rejectionReasons: [], genericPenaltyApplied: false, canonicalBonusApplied: false, businessContextBonusApplied: false };
+  return {
+    title: selected.title,
+    generatedCount: candidates.length,
+    specificityScore: titleSpecificityMetric(selected.title),
+    rejectionReasons: selected.rejectionReasons,
+    genericPenaltyApplied: selected.genericPenaltyApplied,
+    canonicalBonusApplied: selected.canonicalBonusApplied,
+    businessContextBonusApplied: selected.businessContextBonusApplied,
+  };
+}
+
 function semanticTitleRejectionReasons(title: string) {
   const normalizedTitle = normalize(title);
   const words = normalizedTitle.split(" ").filter(Boolean);
@@ -198,7 +323,7 @@ function semanticTitleRejectionReasons(title: string) {
 }
 
 function semanticTitleScore(seed: SynthesisSeed, engineSupport: string[], rawRejected: boolean) {
-  const title = semanticTitleForSeed(seed);
+  const title = seed.title;
   const normalizedTitle = normalize(title);
   const words = normalizedTitle.split(" ").filter(Boolean);
   const businessContext = words.filter((word) => BUSINESS_CONTEXT_TERMS.has(word)).length;
@@ -370,8 +495,9 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
     const downrankedGeneric = genericTitle && (!hasContext || evidenceCount < MIN_EVIDENCE_FOR_STRONG_SEED);
     const rawRejectionReasons = rawTitleRejectionReasons(representative.title);
     const rawTitleRejected = rawRejectionReasons.length > 0;
-    const semanticTitle = semanticTitleForSeed(representative);
-    const semanticScore = semanticTitleScore(representative, engineSupport, rawTitleRejected);
+    const titleRefinement = refineSemanticTitle(representative, engineSupport, rawTitleRejected);
+    const semanticTitle = titleRefinement.title;
+    const semanticScore = semanticTitleScore({ ...representative, title: semanticTitle, normalizedTitle: normalize(semanticTitle) }, engineSupport, rawTitleRejected);
     const semanticSummary = semanticSummaryForSeed(representative, semanticTitle, group.flatMap((seed) => [seed.title, seed.problemCluster]));
     const semanticSummaryRejections = semanticSummaryRejectionReasons(semanticSummary);
     const semanticSummaryQuality = summaryQualityScore(semanticSummary);
@@ -389,11 +515,15 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
       + representative.claimSpecificityScore * 0.1
       + Math.min(10, engineSupport.length * 2) * 0.14
       + semanticScore * 0.08
+      + Math.min(10, titleRefinement.specificityScore / 10) * 0.08
+      + (titleRefinement.canonicalBonusApplied ? 0.4 : 0)
+      + (titleRefinement.businessContextBonusApplied ? 0.3 : 0)
+      - (titleRefinement.genericPenaltyApplied ? 1.2 : 0)
       - (downrankedGeneric ? 3 : 0),
       0
     ) * 100) / 100;
 
-    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric, semanticTitle, semanticTitleScore: semanticScore, rawTitleRejected, rawTitleRejectionReasons: rawRejectionReasons, semanticSummary, semanticSummaryScore: semanticSummaryQuality, semanticSummaryRejectionReasons: semanticSummaryRejections, semanticSummaryWarnings: semanticSummaryWarnings(semanticSummary) };
+    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric, semanticTitle, semanticTitleScore: semanticScore, rawTitleRejected, rawTitleRejectionReasons: rawRejectionReasons, semanticSummary, semanticSummaryScore: semanticSummaryQuality, semanticSummaryRejectionReasons: semanticSummaryRejections, semanticSummaryWarnings: semanticSummaryWarnings(semanticSummary), titleRefinementGenerated: titleRefinement.generatedCount, titleSpecificityScoreRefined: titleRefinement.specificityScore, titleRefinementRejectionReasons: titleRefinement.rejectionReasons, genericTitlePenaltyApplied: titleRefinement.genericPenaltyApplied, canonicalTitleBonusApplied: titleRefinement.canonicalBonusApplied, businessContextBonusApplied: titleRefinement.businessContextBonusApplied, duplicateTitlePenaltyApplied: false };
   }).sort((a, b) => b.score - a.score || b.semanticTitleScore - a.semanticTitleScore || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
 }
 
@@ -538,6 +668,7 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
   const canonicalTitleCountsReport = [...canonicalTitleCounts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([title, count]) => ({ title, count }));
+  const duplicateCanonicalTitleCount = Math.max(0, rankedSeeds.length - canonicalTitleCounts.size);
 
   return {
     upstreamCandidateCounts: {
@@ -575,7 +706,7 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     semanticTitleCanonicalization: {
       generatedCount: rankedSeeds.length,
       uniqueCanonicalTitleCount: canonicalTitleCounts.size,
-      duplicateCanonicalTitleCount: Math.max(0, rankedSeeds.length - canonicalTitleCounts.size),
+      duplicateCanonicalTitleCount,
       canonicalTitleCounts: canonicalTitleCountsReport.slice(0, 10),
     },
     rawTitlesRejected: rankedSeeds.filter((seed) => seed.rawTitleRejected).length,
@@ -590,8 +721,16 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     rejectedCandidateTitles: selection.rejectedSeeds.map((item) => safeLogTitle(item.seed.semanticTitle)),
     duplicateRejectionCount: rejectionReasons.filter((item) => item.reason.includes("duplicate")).reduce((sum, item) => sum + item.count, 0),
     weakEvidenceRejectionCount: rejectionReasonCounts.get("weak_evidence_support") || 0,
-    genericTitleRejectionCount: rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0,
+    genericTitleRejectionCount: (rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0) + selection.rejectedSeeds.filter((item) => item.seed.genericTitle || item.seed.genericTitlePenaltyApplied).length,
     semanticTitleQualityScores: rankedSeeds.map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore })),
+    refined_titles_generated: rankedSeeds.reduce((sum, seed) => sum + seed.titleRefinementGenerated, 0),
+    refined_titles_selected: selection.emittedSeeds.length,
+    title_specificity_distribution: scoreDistribution(rankedSeeds.map((seed) => seed.titleSpecificityScoreRefined)),
+    generic_title_penalty_count: rankedSeeds.filter((seed) => seed.genericTitlePenaltyApplied).length,
+    canonical_title_bonus_count: rankedSeeds.filter((seed) => seed.canonicalTitleBonusApplied).length,
+    business_context_bonus_count: rankedSeeds.filter((seed) => seed.businessContextBonusApplied).length,
+    duplicate_title_penalty_count: duplicateCanonicalTitleCount,
+    title_refinement_rejections: countItems(rankedSeeds.flatMap((seed) => seed.titleRefinementRejectionReasons), "reason"),
     semantic_summaries_generated: rankedSeeds.length,
     semantic_summaries_selected: selection.emittedSeeds.filter((seed) => seed.semanticSummaryRejectionReasons.length === 0).length,
     average_summary_length: Math.round(average(rankedSeeds.map((seed) => normalize(seed.semanticSummary).split(" ").filter(Boolean).length), 0) * 100) / 100,
