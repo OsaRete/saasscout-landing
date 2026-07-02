@@ -87,22 +87,24 @@ const RAW_EVIDENCE_PREFIXES = ["evidence", "reddit", "linkedin", "multiple signa
 const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "agency", "workflow", "workflows", "onboarding", "billing", "follow", "up", "approval", "automation", "operations", "operational", "process", "reporting", "spreadsheet", "spreadsheets", "customer", "lead", "leads", "handoff", "handoffs", "gap", "gaps", "management"]);
 const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs", "gap", "gaps", "management"]);
 const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
-const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays", "operations bottlenecks", "workflow bottlenecks", "operations fragmentation", "lead automation", "manual lead management", "operational process bottlenecks"]);
+const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays", "operations bottlenecks", "workflow bottlenecks", "operations fragmentation", "operational process fragmentation", "lead automation", "manual lead management", "operational process bottlenecks"]);
+const BROAD_DIAGNOSTIC_TITLES = new Set(["operational process fragmentation", "workflow automation", "operations bottlenecks", "operations automation", "business automation", "process automation"]);
+const MIN_EMITTED_TITLE_SPECIFICITY = 80;
 const SUMMARY_BLOCKED_PHRASES = ["evidence", "multiple sources", "weekly intelligence", "data moat"];
 const SUMMARY_IMPACT_TERMS = ["delays", "errors", "reduced visibility", "administrative workload", "revenue leakage", "inconsistent customer engagement", "operational inefficiency"];
 
 const CANONICAL_TITLE_RULES: Array<{ title: string; terms: string[]; any?: string[] }> = [
   { title: "Fragmented CRM Operations", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs"] },
-  { title: "Manual Sales Follow-up Processes", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer", "manual"] },
+  { title: "Manual Sales Follow-up Automation", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer", "manual"] },
   { title: "Manual Lead Qualification", terms: ["lead"], any: ["qualification", "qualify", "manual"] },
   { title: "Manual Customer Follow-up", terms: ["customer"], any: ["follow", "up", "manual"] },
-  { title: "Manual and Fragmented Workflow Automation", terms: ["manual", "workflow"], any: ["automation", "errors", "delays", "operations", "fragmented", "fragmentation"] },
+  { title: "Manual Workflow Fragmentation", terms: ["manual", "workflow"], any: ["automation", "errors", "delays", "operations", "fragmented", "fragmentation"] },
   { title: "Spreadsheet-Based Workflow Management", terms: ["spreadsheet"], any: ["spreadsheets", "dependency", "workflow", "manual", "reporting"] },
   { title: "Client Onboarding Workflow Friction", terms: ["client", "onboarding"], any: ["friction", "handoff", "handoffs", "scattered", "workflow"] },
   { title: "Fragmented Client Operations", terms: ["client"], any: ["fragmentation", "fragmented", "scattered", "disconnected", "operations"] },
-  { title: "Billing Approval Workflow Delays", terms: ["billing"], any: ["workflow", "automation", "approval", "invoice", "delay", "delays"] },
+  { title: "Billing Approval Delays", terms: ["billing"], any: ["workflow", "automation", "approval", "invoice", "delay", "delays"] },
   { title: "Invoice Approval Bottlenecks", terms: ["invoice", "approval"], any: ["bottleneck", "bottlenecks", "delay", "delays"] },
-  { title: "Operational Process Fragmentation", terms: ["operations"], any: ["fragmentation", "fragmented", "disconnected", "process", "manual"] },
+  { title: "Operational Workflow Fragmentation", terms: ["operations"], any: ["fragmentation", "fragmented", "disconnected", "process", "manual"] },
   { title: "Manual Operational Process Bottlenecks", terms: ["operations"], any: ["bottleneck", "bottlenecks", "delay", "delays", "process", "manual"] },
 ];
 
@@ -133,9 +135,13 @@ function isGenericTitle(title: string, normalizedTitle = normalize(title)) {
 }
 
 function titleCase(value: string) {
-  return normalize(value).split(" ").filter(Boolean).map((word) => (
+  const title = normalize(value).split(" ").filter(Boolean).map((word) => (
     word.length <= 3 && ["crm", "smb", "api"].includes(word) ? word.toUpperCase() : `${word[0].toUpperCase()}${word.slice(1)}`
   )).join(" ");
+  return title
+    .replace(/Follow Up/g, "Follow-up")
+    .replace(/Spreadsheet Based/g, "Spreadsheet-Based")
+    .replace(/ And /g, " and ");
 }
 
 function canonicalTitleKey(title: string) {
@@ -242,16 +248,16 @@ function refinedTitleCandidates(seed: SynthesisSeed) {
   const candidates = [semantic];
 
   if (businessContext === "agency workflow automation") candidates.push("Agency Workflow Automation Gaps", "Manual Agency Workflow Automation");
-  if (businessContext === "sales follow-up") candidates.push("Manual Sales Follow-up Processes", "Sales Follow-up Process Gaps");
+  if (businessContext === "sales follow-up") candidates.push("Manual Sales Follow-up Automation", "Sales Follow-up Process Gaps");
   if (businessContext === "lead qualification") candidates.push("Manual Lead Qualification", "Manual Lead Qualification Processes");
   if (businessContext === "customer follow-up") candidates.push("Manual Customer Follow-up", "Customer Follow-up Process Gaps");
   if (businessContext === "CRM operations") candidates.push("Fragmented CRM Operations", "Disconnected CRM Workflow Operations");
   if (businessContext === "spreadsheet-based workflow") candidates.push("Spreadsheet-Based Workflow Management", "Spreadsheet-Driven Business Operations");
-  if (businessContext === "billing approval workflow") candidates.push("Billing Approval Workflow Delays", "Invoice Approval Bottlenecks");
+  if (businessContext === "billing approval workflow") candidates.push("Billing Approval Delays", "Invoice Approval Bottlenecks");
   if (businessContext === "client onboarding workflow") candidates.push("Client Onboarding Workflow Friction", "Client Onboarding Handoff Friction");
   if (businessContext === "client operations") candidates.push("Fragmented Client Operations", "Client Operations Fragmentation");
-  if (businessContext === "workflow automation" && problemContext === "manual fragmentation") candidates.push("Manual and Fragmented Workflow Automation");
-  if (businessContext === "operational process") candidates.push(problemContext === "fragmentation" ? "Operational Process Fragmentation" : "Manual Operational Process Bottlenecks");
+  if (businessContext === "workflow automation" && problemContext === "manual fragmentation") candidates.push("Manual Workflow Fragmentation", "Disconnected Operations Workflows");
+  if (businessContext === "operational process") candidates.push(problemContext === "fragmentation" ? "Operational Workflow Fragmentation" : "Manual Operational Bottlenecks");
 
   return unique(candidates.map(titleCase));
 }
@@ -279,6 +285,38 @@ function titleSpecificityMetric(title: string) {
   const contextScore = Math.min(1, tokens.filter((token) => BUSINESS_CONTEXT_TERMS.has(token) || PROBLEM_CONTEXT_TERMS.has(token) || ["fragmentation", "dependency", "bottlenecks", "gaps", "management"].includes(token)).length / 3);
   const genericPenalty = GENERIC_SEMANTIC_TITLES.has(normalize(title)) || isGenericTitle(title) || tokens.length <= 2 ? 0.65 : 1;
   return Math.round(((lengthScore * 0.5 + uniquenessScore * 0.25 + contextScore * 0.25) * 100) * genericPenalty * 100) / 100;
+}
+
+
+function meaningfulTitleDimensionCount(title: string) {
+  const tokens = normalize(title).split(" ").filter(Boolean);
+  const hasBusinessProcess = tokens.some((token) => BUSINESS_CONTEXT_TERMS.has(token)) || /follow up|spreadsheet based/.test(normalize(title));
+  const hasPainMechanism = tokens.some((token) => PROBLEM_CONTEXT_TERMS.has(token) || ["fragmentation", "dependency", "bottlenecks", "gaps"].includes(token));
+  const hasToolContext = tokens.some((token) => ["crm", "spreadsheet", "spreadsheets", "billing", "invoice", "sales", "client"].includes(token));
+  const hasWorkflowContext = tokens.some((token) => ["workflow", "workflows", "automation", "approval", "follow", "onboarding"].includes(token));
+  const hasAudienceOrDomain = tokens.some((token) => ["agency", "agencies", "sales", "billing", "client", "customer", "operations", "operational"].includes(token));
+  return [hasBusinessProcess, hasPainMechanism, hasToolContext, hasWorkflowContext, hasAudienceOrDomain].filter(Boolean).length;
+}
+
+function emittedTitleQualityScore(title: string) {
+  const normalizedTitle = normalize(title);
+  const specificity = titleSpecificityMetric(title);
+  const dimensions = meaningfulTitleDimensionCount(title);
+  const broadPenalty = BROAD_DIAGNOSTIC_TITLES.has(normalizedTitle) ? 18 : 0;
+  const genericPenalty = GENERIC_SEMANTIC_TITLES.has(normalizedTitle) || isGenericTitle(title, normalizedTitle) ? 18 : 0;
+  return Math.max(0, Math.min(100, Math.round((specificity + Math.min(3, dimensions) * 4 - broadPenalty - genericPenalty) * 100) / 100));
+}
+
+function finalTitleQualityGateRejectionReasons(seed: RankedSynthesisSeed) {
+  const normalizedTitle = normalize(seed.semanticTitle);
+  const specificity = titleSpecificityMetric(seed.semanticTitle);
+  const quality = emittedTitleQualityScore(seed.semanticTitle);
+  return [
+    BROAD_DIAGNOSTIC_TITLES.has(normalizedTitle) ? "broad_emitted_title" : "",
+    meaningfulTitleDimensionCount(seed.semanticTitle) < 2 ? "missing_two_business_dimensions" : "",
+    specificity < MIN_EMITTED_TITLE_SPECIFICITY ? "low_emitted_title_specificity" : "",
+    quality < MIN_EMITTED_TITLE_SPECIFICITY ? "low_emitted_title_quality" : "",
+  ].filter(Boolean);
 }
 
 function refineSemanticTitle(seed: SynthesisSeed, engineSupport: string[], rawRejected: boolean): TitleRefinement {
@@ -687,6 +725,7 @@ function isHighQualitySelectable(seed: RankedSynthesisSeed, confidence: number, 
     !hasMeaningfulSummary ? "weak_summary" : "",
     confidence < MIN_SYNTHESIS_CONFIDENCE ? "confidence_below_threshold" : "",
     semanticRejectionReasons.length > 0 ? "semantic_title_quality_rejected" : "",
+    ...finalTitleQualityGateRejectionReasons(seed),
   ].filter(Boolean);
 }
 
@@ -697,6 +736,7 @@ type CandidateSelection = {
   multiCandidateModeEnabled: boolean;
   domainFillAttempts: Array<{ pass: string; seed: RankedSynthesisSeed; accepted: boolean; reasons: string[] }>;
   availableHighQualityDomainCount: number;
+  replacementCandidateAttempts: number;
 };
 
 function selectionRejectionReasons(seed: RankedSynthesisSeed, emittedSeeds: RankedSynthesisSeed[], confidence: number, hasMeaningfulSummary: boolean) {
@@ -733,7 +773,7 @@ function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, 
       if (emittedSeeds.length < 1) emittedSeeds.push(seed);
       else rejectSeed(seed, ["single_candidate_mode_retains_only_top_ranked_cluster"]);
     }
-    return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount: new Set(rankedSeeds.map(candidateDomain)).size };
+    return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount: new Set(rankedSeeds.map(candidateDomain)).size, replacementCandidateAttempts: 0 };
   }
 
   const qualityEligibleSeeds = rankedSeeds.filter((seed) => isHighQualitySelectable(seed, confidence, hasMeaningfulSummary).length === 0);
@@ -769,7 +809,7 @@ function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, 
     rejectSeed(seed, reasons.length > 0 ? reasons : ["max_candidate_count_reached"]);
   }
 
-  return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount };
+  return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled, domainFillAttempts, availableHighQualityDomainCount, replacementCandidateAttempts: domainFillAttempts.filter((attempt) => !attempt.accepted).length };
 }
 
 function candidateSelectionRejections(selection: CandidateSelection) {
@@ -911,6 +951,16 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     weakEvidenceRejectionCount: rejectionReasonCounts.get("weak_evidence_support") || 0,
     genericTitleRejectionCount: (rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0) + selection.rejectedSeeds.filter((item) => item.seed.genericTitle || item.seed.genericTitlePenaltyApplied).length,
     semanticTitleQualityScores: rankedSeeds.map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore })),
+    emitted_title_quality_scores: selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), score: emittedTitleQualityScore(seed.semanticTitle) })),
+    emitted_title_specificity_scores: selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), score: titleSpecificityMetric(seed.semanticTitle) })),
+    title_quality_gate_rejections: selection.rejectedSeeds
+      .filter((item) => item.reasons.some((reason) => ["broad_emitted_title", "missing_two_business_dimensions", "low_emitted_title_specificity", "low_emitted_title_quality", "generic_or_weak_semantic_title", "semantic_title_quality_rejected"].includes(reason)))
+      .map((item) => ({ title: safeLogTitle(item.seed.semanticTitle), reasons: item.reasons, quality_score: emittedTitleQualityScore(item.seed.semanticTitle), specificity_score: titleSpecificityMetric(item.seed.semanticTitle) }))
+      .slice(0, 50),
+    title_refinement_applied_count: rankedSeeds.filter((seed) => normalize(seed.title) !== normalize(seed.semanticTitle)).length,
+    low_specificity_emitted_count: selection.emittedSeeds.filter((seed) => titleSpecificityMetric(seed.semanticTitle) < MIN_EMITTED_TITLE_SPECIFICITY).length,
+    replacement_candidate_attempts: selection.replacementCandidateAttempts,
+    title_quality_preservation_score: selection.emittedSeeds.length === 0 ? 0 : Math.round(average(selection.emittedSeeds.map((seed) => emittedTitleQualityScore(seed.semanticTitle)), 0) * 100) / 100,
     diversity_score: emittedCandidateDiversity(selection.emittedSeeds),
     emitted_candidate_diversity: selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), ...diversityProfile(seed), diversity_score: diversityScore(seed, selection.emittedSeeds.filter((emittedSeed) => emittedSeed !== seed)) })),
     suppressed_duplicate_clusters: suppressedDuplicateClusters(selection.rejectedSeeds),
@@ -1011,7 +1061,7 @@ export class ProblemIntelligenceSynthesisEngine {
     const conciseEvidenceSummary = claims.length > 0 ? claims.slice(0, 3).map(sentence).join(" ") : "No reusable evidence claims were available for synthesis.";
     const hasMeaningfulSummary = claims.length > 0 && conciseEvidenceSummary.length >= 40;
     const selection = evidence.length === 0
-      ? { emittedSeeds: [], rejectedSeeds: [], maxCandidateCount: isMultiCandidateDiagnosticsEnabled() ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1, multiCandidateModeEnabled: isMultiCandidateDiagnosticsEnabled(), domainFillAttempts: [], availableHighQualityDomainCount: 0 }
+      ? { emittedSeeds: [], rejectedSeeds: [], maxCandidateCount: isMultiCandidateDiagnosticsEnabled() ? MAX_DIAGNOSTIC_SYNTHESIS_CANDIDATES : 1, multiCandidateModeEnabled: isMultiCandidateDiagnosticsEnabled(), domainFillAttempts: [], availableHighQualityDomainCount: 0, replacementCandidateAttempts: 0 }
       : selectSynthesisSeeds(input, confidence, hasMeaningfulSummary);
     const fallbackTitle = primaryTitle(input);
     const emittedTitles = selection.emittedSeeds.length > 0 ? selection.emittedSeeds.map((seed) => seed.semanticTitle) : (evidence.length === 0 || selection.multiCandidateModeEnabled ? [] : [fallbackTitle]);
