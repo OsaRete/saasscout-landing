@@ -126,6 +126,14 @@ export type ProblemSynthesisCandidateCollapseReport = {
   weakEvidenceRejectionCount: number;
   genericTitleRejectionCount: number;
   semanticTitleQualityScores: Array<{ title: string; score: number }>;
+  refined_titles_generated: number;
+  refined_titles_selected: number;
+  title_specificity_distribution: { min: number; max: number; average: number };
+  generic_title_penalty_count: number;
+  canonical_title_bonus_count: number;
+  business_context_bonus_count: number;
+  duplicate_title_penalty_count: number;
+  title_refinement_rejections: Array<{ reason: string; count: number }>;
   semantic_summaries_generated: number;
   semantic_summaries_selected: number;
   average_summary_length: number;
