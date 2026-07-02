@@ -185,6 +185,25 @@ test("semantic naming rejects raw evidence titles and preserves single candidate
   }).candidates[0]);
 });
 
+
+test("semantic summary generation produces analyst-style problem summaries and diagnostics", () => {
+  const synthesis = synthesize();
+  const candidate = synthesis.candidates[0];
+  const report = candidate.diagnostics.candidateCollapseReport;
+
+  assert.match(candidate.synthesizedSummary, /client|agency|business|team/i);
+  assert.match(candidate.synthesizedSummary, /causing|creating|reducing|increasing|slowing|weakening/i);
+  assert.doesNotMatch(candidate.synthesizedSummary, /Evidence|Multiple sources|Weekly Intelligence|Data Moat|supported by/i);
+  assert.ok(candidate.synthesizedSummary.split(/\s+/).length <= 40);
+  assert.ok(report.semantic_summaries_generated >= 1);
+  assert.ok(report.semantic_summaries_selected >= 1);
+  assert.ok(report.average_summary_length >= 12);
+  assert.equal(report.duplicated_summary_count, 0);
+  assert.ok(report.summary_quality_distribution.average > 0);
+  assert.ok(Array.isArray(report.summary_generation_rejections));
+  assert.ok(Array.isArray(report.summary_generation_warnings));
+});
+
 test("problem synthesis multi-candidate diagnostics flag emits up to three quality-gated semantic candidates", () => {
   const previous = process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS;
   process.env.PROBLEM_SYNTHESIS_MULTI_CANDIDATE_DIAGNOSTICS = "1";

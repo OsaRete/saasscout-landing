@@ -56,6 +56,10 @@ type RankedSynthesisSeed = SynthesisSeed & {
   semanticTitleScore: number;
   rawTitleRejected: boolean;
   rawTitleRejectionReasons: string[];
+  semanticSummary: string;
+  semanticSummaryScore: number;
+  semanticSummaryRejectionReasons: string[];
+  semanticSummaryWarnings: string[];
 };
 
 const GENERIC_TITLES = new Set(["manual", "billing", "approval", "workflow", "automation", "software", "tool", "app", "service"]);
@@ -69,6 +73,9 @@ const BUSINESS_CONTEXT_TERMS = new Set(["crm", "invoice", "client", "sales", "ag
 const PROBLEM_CONTEXT_TERMS = new Set(["bottleneck", "bottlenecks", "dependency", "dependencies", "fragmentation", "friction", "delay", "delays", "breakdown", "errors", "mistakes", "disconnected", "fragmented", "manual", "scattered", "follow", "approval", "handoff", "handoffs"]);
 const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
 const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays"]);
+const SUMMARY_BLOCKED_PHRASES = ["evidence", "multiple sources", "weekly intelligence", "data moat"];
+const SUMMARY_IMPACT_TERMS = ["delays", "errors", "reduced visibility", "administrative workload", "revenue leakage", "inconsistent customer engagement", "operational inefficiency"];
+
 const CANONICAL_TITLE_RULES: Array<{ title: string; terms: string[]; any?: string[] }> = [
   { title: "CRM Workflow Fragmentation", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs", "follow"] },
   { title: "Sales Follow-up Automation", terms: ["sales"], any: ["follow", "up", "lead", "leads", "customer"] },
@@ -210,6 +217,103 @@ function semanticTitleScore(seed: SynthesisSeed, engineSupport: string[], rawRej
   ) * 100) / 100;
 }
 
+function readablePhrase(value: string, fallback: string) {
+  const words = normalize(value).split(" ").filter(Boolean);
+  if (words.length === 0 || value === "unknown") return fallback;
+  return words.slice(0, 5).join(" ");
+}
+
+
+function inferBusinessProcess(seed: SynthesisSeed, title: string, claims: string[]) {
+  const text = normalize([title, seed.title, seed.problemCluster, seed.market, seed.audience, ...claims].join(" "));
+  if (text.includes("crm")) return "fragmented CRM processes";
+  if (text.includes("sales") || text.includes("lead") || text.includes("follow")) return "sales follow-up workflows";
+  if (text.includes("spreadsheet")) return "spreadsheet-dependent operations";
+  if (text.includes("invoice") || text.includes("billing") || text.includes("approval")) return "billing and approval workflows";
+  if (text.includes("onboarding")) return "client onboarding workflows";
+  if (text.includes("customer")) return "customer management workflows";
+  if (text.includes("operations") || text.includes("operational")) return "operational workflows";
+  return `${readablePhrase(seed.market, "businesses")} workflows`;
+}
+
+function inferAffectedUsers(seed: SynthesisSeed, claims: string[]) {
+  const text = normalize([seed.audience, seed.market, seed.title, ...claims].join(" "));
+  if (text.includes("sales")) return "sales teams";
+  if (text.includes("agency") || text.includes("agencies")) return "agencies";
+  if (text.includes("small business") || text.includes("smb")) return "small businesses";
+  if (text.includes("client")) return "client-facing teams";
+  if (text.includes("operations") || text.includes("operational")) return "operations teams";
+  return readablePhrase(seed.audience, readablePhrase(seed.market, "business teams"));
+}
+
+function inferOperationalConsequence(seed: SynthesisSeed, title: string, claims: string[]) {
+  const text = normalize([title, seed.title, seed.problemCluster, ...claims].join(" "));
+  if (text.includes("crm") || text.includes("sales") || text.includes("lead") || text.includes("follow")) return "inconsistent follow-up and missed revenue opportunities";
+  if (text.includes("spreadsheet")) return "administrative workload and limited cross-process visibility";
+  if (text.includes("invoice") || text.includes("billing") || text.includes("approval")) return "approval delays and slower cash collection";
+  if (text.includes("onboarding")) return "handoff friction and slower customer activation";
+  if (text.includes("error") || text.includes("mistake")) return "avoidable errors and rework";
+  if (text.includes("delay") || text.includes("bottleneck")) return "process delays and operational bottlenecks";
+  return "delays, errors and reduced operational efficiency";
+}
+
+function inferBusinessImpact(seed: SynthesisSeed, title: string, claims: string[]) {
+  const consequence = inferOperationalConsequence(seed, title, claims);
+  if (consequence.includes("revenue")) return "creating revenue leakage";
+  if (consequence.includes("visibility")) return "reducing visibility across business processes";
+  if (consequence.includes("cash")) return "weakening financial control";
+  if (consequence.includes("activation")) return "slowing time to value for customers";
+  if (consequence.includes("errors")) return "increasing rework and operational risk";
+  return "reducing operational efficiency";
+}
+
+function cleanSummary(summary: string) {
+  const deduped = summary.replace(/\b(\w+)(\s+\1\b)+/gi, "$1").replace(/\s+/g, " ").trim();
+  return sentence(deduped.charAt(0).toUpperCase() + deduped.slice(1));
+}
+
+function summaryQualityScore(summary: string) {
+  const normalizedSummary = normalize(summary);
+  const words = normalizedSummary.split(" ").filter(Boolean);
+  const blocked = SUMMARY_BLOCKED_PHRASES.some((phrase) => normalizedSummary.includes(normalize(phrase)));
+  const repeated = words.some((word, index) => words.indexOf(word) !== index && !TITLE_STOP_WORDS.has(word));
+  const hasImpact = SUMMARY_IMPACT_TERMS.some((term) => normalizedSummary.includes(normalize(term))) || /revenue|visibility|efficiency|workload|risk|cash|rework/.test(normalizedSummary);
+  const lengthScore = words.length >= 16 && words.length <= 34 ? 3 : words.length >= 12 && words.length <= 40 ? 2 : 0;
+  const businessScore = Array.from(BUSINESS_CONTEXT_TERMS).some((term) => normalizedSummary.includes(term)) ? 2 : 0;
+  const problemScore = Array.from(PROBLEM_CONTEXT_TERMS).some((term) => normalizedSummary.includes(term)) || /fragmentation|dependency|bottleneck|manual/.test(normalizedSummary) ? 2 : 0;
+  return clampScore(lengthScore + businessScore + problemScore + (hasImpact ? 2 : 0) - (blocked ? 3 : 0) - (repeated ? 1 : 0), 0);
+}
+
+function semanticSummaryRejectionReasons(summary: string) {
+  const normalizedSummary = normalize(summary);
+  const words = normalizedSummary.split(" ").filter(Boolean);
+  const uniqueWords = new Set(words.filter((word) => !TITLE_STOP_WORDS.has(word)));
+  return [
+    words.length < 12 ? "summary_too_short" : "",
+    words.length > 40 ? "summary_too_long" : "",
+    SUMMARY_BLOCKED_PHRASES.some((phrase) => normalizedSummary.includes(normalize(phrase))) ? "blocked_source_language" : "",
+    uniqueWords.size < Math.max(6, words.filter((word) => !TITLE_STOP_WORDS.has(word)).length * 0.7) ? "duplicated_summary_terms" : "",
+    !/[.!?]$/.test(summary.trim()) ? "missing_sentence_ending" : "",
+    !/because|causing|creating|reducing|increasing|slowing|weakening/.test(normalizedSummary) ? "missing_business_causality" : "",
+  ].filter(Boolean);
+}
+
+function semanticSummaryWarnings(summary: string) {
+  const normalizedSummary = normalize(summary);
+  return [
+    !/users|teams|businesses|agencies/.test(normalizedSummary) ? "affected_users_inferred_generically" : "",
+    !/revenue|visibility|efficiency|workload|risk|cash|rework|delays|errors/.test(normalizedSummary) ? "business_impact_inferred_generically" : "",
+  ].filter(Boolean);
+}
+
+function semanticSummaryForSeed(seed: SynthesisSeed, title: string, claims: string[]) {
+  const users = inferAffectedUsers(seed, claims);
+  const process = inferBusinessProcess(seed, title, claims);
+  const consequence = inferOperationalConsequence(seed, title, claims);
+  const impact = inferBusinessImpact(seed, title, claims);
+  return cleanSummary(`${users} rely on ${process}, causing ${consequence} and ${impact}`);
+}
+
 function candidateSeeds(input: ProblemSynthesisInput): SynthesisSeed[] {
   const toSeed = (engine: string, candidate: { title?: string; normalizedTitle?: string; score?: { totalScore?: number; confidenceScore?: number; evidenceScore?: number }; rank?: number; context?: Record<string, unknown>; marketContext?: Record<string, unknown>; evidence?: Array<{ sourceQualityScore?: number; claim?: string }> }): SynthesisSeed => {
     const context = candidate.context || {};
@@ -268,6 +372,9 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
     const rawTitleRejected = rawRejectionReasons.length > 0;
     const semanticTitle = semanticTitleForSeed(representative);
     const semanticScore = semanticTitleScore(representative, engineSupport, rawTitleRejected);
+    const semanticSummary = semanticSummaryForSeed(representative, semanticTitle, group.flatMap((seed) => [seed.title, seed.problemCluster]));
+    const semanticSummaryRejections = semanticSummaryRejectionReasons(semanticSummary);
+    const semanticSummaryQuality = summaryQualityScore(semanticSummary);
     const rejectionReasons = [
       downrankedGeneric ? "generic_title_without_enough_context" : "",
       rawTitleRejected ? "raw_title_replaced_by_semantic_title" : "",
@@ -286,7 +393,7 @@ function rankSeeds(seeds: SynthesisSeed[]): RankedSynthesisSeed[] {
       0
     ) * 100) / 100;
 
-    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric, semanticTitle, semanticTitleScore: semanticScore, rawTitleRejected, rawTitleRejectionReasons: rawRejectionReasons };
+    return { ...representative, evidenceCount, score, engineSupport, rejectionReasons, genericTitle, downrankedGeneric, semanticTitle, semanticTitleScore: semanticScore, rawTitleRejected, rawTitleRejectionReasons: rawRejectionReasons, semanticSummary, semanticSummaryScore: semanticSummaryQuality, semanticSummaryRejectionReasons: semanticSummaryRejections, semanticSummaryWarnings: semanticSummaryWarnings(semanticSummary) };
   }).sort((a, b) => b.score - a.score || b.semanticTitleScore - a.semanticTitleScore || a.rank - b.rank || a.normalizedTitle.localeCompare(b.normalizedTitle));
 }
 
@@ -393,6 +500,12 @@ function selectSynthesisSeeds(input: ProblemSynthesisInput, confidence: number, 
   return { emittedSeeds, rejectedSeeds, maxCandidateCount, multiCandidateModeEnabled };
 }
 
+function countItems(items: string[], label: "reason" | "warning") {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item, (counts.get(item) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([item, count]) => ({ [label]: item, count })) as Array<{ reason: string; count: number }> & Array<{ warning: string; count: number }>;
+}
+
 function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: CandidateSelection): ProblemSynthesisCandidateCollapseReport {
   const seeds = candidateSeeds(input);
   const rankedSeeds = rankSeeds(seeds);
@@ -409,6 +522,9 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
   const rejectionReasons = [...rejectionReasonCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([reason, count]) => ({ reason, count }));
   const seedRejectionReasons = countReasons(rejectedSeeds);
   const semanticScores = rankedSeeds.map((seed) => seed.semanticTitleScore);
+  const summaryScores = rankedSeeds.map((seed) => seed.semanticSummaryScore);
+  const selectedSummaryKeys = selection.emittedSeeds.map((seed) => normalize(seed.semanticSummary));
+  const duplicatedSummaryCount = selectedSummaryKeys.length - new Set(selectedSummaryKeys).size;
   const semanticRejected = rankedSeeds.filter((seed) => semanticTitleRejectionReasons(seed.semanticTitle).length > 0);
   const semanticReasonCounts = new Map<string, number>();
   for (const seed of semanticRejected) {
@@ -476,6 +592,13 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     weakEvidenceRejectionCount: rejectionReasonCounts.get("weak_evidence_support") || 0,
     genericTitleRejectionCount: rejectionReasonCounts.get("generic_or_weak_semantic_title") || 0,
     semanticTitleQualityScores: rankedSeeds.map((seed) => ({ title: seed.semanticTitle, score: seed.semanticTitleScore })),
+    semantic_summaries_generated: rankedSeeds.length,
+    semantic_summaries_selected: selection.emittedSeeds.filter((seed) => seed.semanticSummaryRejectionReasons.length === 0).length,
+    average_summary_length: Math.round(average(rankedSeeds.map((seed) => normalize(seed.semanticSummary).split(" ").filter(Boolean).length), 0) * 100) / 100,
+    duplicated_summary_count: duplicatedSummaryCount,
+    summary_quality_distribution: scoreDistribution(summaryScores),
+    summary_generation_rejections: countItems(rankedSeeds.flatMap((seed) => seed.semanticSummaryRejectionReasons), "reason"),
+    summary_generation_warnings: countItems(rankedSeeds.flatMap((seed) => seed.semanticSummaryWarnings), "warning"),
     collapseExplanation: selection.multiCandidateModeEnabled
       ? `Problem synthesis is operating in diagnostic-only multi-candidate mode, so up to ${selection.maxCandidateCount} quality-gated semantic candidates are emitted only inside modular diagnostics.`
       : emittedCandidateCount > 0
@@ -566,7 +689,8 @@ export class ProblemIntelligenceSynthesisEngine {
     };
 
     const diagnostics: ProblemSynthesisDiagnostics[] = emittedTitles.map((title) => {
-      const synthesizedSummary = sentence(`${title} is supported by ${evidence.length} evidence item${evidence.length === 1 ? "" : "s"}${markets.length ? ` across ${markets.slice(0, 3).join(", ")}` : ""}${audiences.length ? ` for ${audiences.slice(0, 3).join(", ")}` : ""}`);
+      const selectedSeed = selection.emittedSeeds.find((seed) => seed.semanticTitle === title);
+      const synthesizedSummary = selectedSeed?.semanticSummary || semanticSummaryForSeed({ title, normalizedTitle: normalize(title), market: normalize(markets[0] || "unknown") || "unknown", audience: normalize(audiences[0] || "unknown") || "unknown", problemCluster: normalize(canonicalCluster(title, input)), engine: "fallback", baseScore: 0, rank: 999, evidenceCount: evidence.length, sourceQualityScore: 0, titleSpecificityScore: specificityScore(title), claimSpecificityScore: 0, genericTitle: false }, title, claims);
       return {
         synthesizedTitle: title,
         synthesizedSummary,
