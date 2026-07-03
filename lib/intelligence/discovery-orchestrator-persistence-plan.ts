@@ -68,7 +68,7 @@ type BuildDifficultyDiagnostic = {
   confidence: number;
   matchReason: string;
   fallbackAvoided: boolean;
-  attribution: "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unavailable" | "ambiguous";
+  attribution: "explicit_id_match" | "synthesis_cluster_seed_match" | "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unavailable" | "ambiguous";
 };
 
 export type PersistencePlanDiagnostics = {
@@ -236,6 +236,62 @@ function overlapAny(left: string[], right: string[]) {
   return left.map(normalizedMatchValue).filter(Boolean).some((value) => normalizedRight.has(value));
 }
 
+function collectPossibleIds(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const ids = new Set<string>();
+  const visit = (item: unknown) => {
+    if (!item) return;
+    if (typeof item === "string") {
+      if (item.trim()) ids.add(item.trim());
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (typeof item !== "object") return;
+    for (const [key, nested] of Object.entries(item as Record<string, unknown>)) {
+      if (/(^id$|Id$|Ids$|_id$|_ids$)/.test(key)) visit(nested);
+    }
+  };
+  visit(value);
+  return [...ids];
+}
+
+type SynthesisSeedMatch = {
+  seed: NonNullable<ProblemSynthesisCandidate["diagnostics"]>["candidateCollapseReport"]["rankedSeeds"][number];
+  opportunity: OpportunityCandidate;
+};
+
+function findSynthesisSeedOpportunityMatch(candidate: ProblemSynthesisCandidate, opportunities: OpportunityCandidate[]): SynthesisSeedMatch | null {
+  const rankedSeeds = candidate.diagnostics?.candidateCollapseReport?.rankedSeeds || [];
+  const candidateTitle = normalizedMatchValue(candidate.synthesizedProblemTitle);
+  const matchingSeeds = rankedSeeds.filter((seed) => normalizedMatchValue(seed.semanticTitle || "") === candidateTitle || normalizedMatchValue(seed.title || "") === candidateTitle);
+  const seedMatches = matchingSeeds.flatMap((seed) => {
+    const seedTitles = [seed.normalizedTitle, seed.title, seed.semanticTitle, seed.problemCluster].map((value) => normalizedMatchValue(value || "")).filter(Boolean);
+    const seedMarkets = [seed.market].filter(Boolean);
+    const seedAudiences = [seed.audience].filter(Boolean);
+    return opportunities.map((opportunity) => {
+      const opportunityTitles = [opportunity.normalizedTitle, opportunity.title, opportunity.context?.primaryTheme, opportunity.marketContext?.primaryProblem]
+        .map((value) => normalizedMatchValue(value || ""))
+        .filter(Boolean);
+      const exactTitle = opportunityTitles.some((title) => seedTitles.includes(title));
+      const tokenOverlap = Math.max(...seedTitles.flatMap((seedTitle) => opportunityTitles.map((title) => tokenOverlapScore(seedTitle, title))), 0);
+      const marketOverlap = overlapAny(seedMarkets, [opportunity.context?.market, opportunity.marketContext?.market, opportunity.context?.nicheCategory].filter(Boolean) as string[]);
+      const audienceOverlap = overlapAny(seedAudiences, [opportunity.context?.audience, opportunity.marketContext?.audience, opportunity.context?.nicheCategory].filter(Boolean) as string[]);
+      const supportScore = opportunitySupportScore(opportunity);
+      const deterministic = exactTitle || (tokenOverlap >= 0.6 && (marketOverlap || audienceOverlap));
+      return { seed, opportunity, exactTitle, tokenOverlap, marketOverlap, audienceOverlap, deterministic, supportScore };
+    });
+  }).filter((match) => match.deterministic && Number.isFinite(Number(match.opportunity.score.buildSimplicityScore)));
+
+  seedMatches.sort((a, b) => Number(b.exactTitle) - Number(a.exactTitle) || b.tokenOverlap - a.tokenOverlap || Number(b.marketOverlap) - Number(a.marketOverlap) || Number(b.audienceOverlap) - Number(a.audienceOverlap) || b.supportScore - a.supportScore);
+  const best = seedMatches[0];
+  if (!best) return null;
+  const tied = seedMatches.filter((match) => match.exactTitle === best.exactTitle && match.tokenOverlap === best.tokenOverlap && match.marketOverlap === best.marketOverlap && match.audienceOverlap === best.audienceOverlap && match.supportScore === best.supportScore);
+  return tied.length === 1 ? { seed: best.seed, opportunity: best.opportunity } : null;
+}
+
 function opportunitySupportScore(opportunity: OpportunityCandidate) {
   const total = Number(opportunity.score.totalScore);
   const evidence = Number(opportunity.score.evidenceScore);
@@ -252,6 +308,39 @@ function resolveBuildDifficultyForSynthesisCandidate(
   const synthesisTitleSet = new Set(synthesisTitles);
   const synthesisMarkets = candidate.affectedMarkets || [];
   const synthesisAudiences = candidate.affectedAudiences || [];
+  const explicitIds = new Set(collectPossibleIds(candidate));
+  const explicitIdMatch = opportunities.find((opportunity) => explicitIds.has(opportunity.id) && Number.isFinite(Number(opportunity.score.buildSimplicityScore)));
+
+  if (explicitIdMatch) {
+    const rawBuildSimplicityScore = Number(explicitIdMatch.score.buildSimplicityScore);
+    return {
+      source: "mapped_opportunity_signal",
+      opportunityCandidateId: explicitIdMatch.id,
+      opportunityCandidateTitle: explicitIdMatch.title,
+      rawBuildSimplicityScore,
+      persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
+      confidence: 1,
+      matchReason: "explicit linked opportunity/source id matched synthesis row",
+      fallbackAvoided: true,
+      attribution: "explicit_id_match",
+    };
+  }
+
+  const synthesisSeedMatch = findSynthesisSeedOpportunityMatch(candidate, opportunities);
+  if (synthesisSeedMatch) {
+    const rawBuildSimplicityScore = Number(synthesisSeedMatch.opportunity.score.buildSimplicityScore);
+    return {
+      source: "mapped_opportunity_signal",
+      opportunityCandidateId: synthesisSeedMatch.opportunity.id,
+      opportunityCandidateTitle: synthesisSeedMatch.opportunity.title,
+      rawBuildSimplicityScore,
+      persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
+      confidence: 0.95,
+      matchReason: `same synthesis cluster seed matched opportunity candidate via ranked seed "${synthesisSeedMatch.seed.title}"`,
+      fallbackAvoided: true,
+      attribution: "synthesis_cluster_seed_match",
+    };
+  }
 
   const scoredMatches = opportunities.map((opportunity) => {
     const opportunityTitles = [opportunity.normalizedTitle, opportunity.title, opportunity.context?.primaryTheme, opportunity.marketContext?.primaryProblem].map((value) => normalizedMatchValue(value || "")).filter(Boolean);
@@ -548,7 +637,7 @@ export function buildDiscoveryPersistencePlan(
     mark("source_quality_score", scoreMappings.source_quality_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.sourceQualityScore_or_confidence" : "fallback:source_quality_score");
     mark("opportunity_score", scoreMappings.opportunity_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.opportunityScore" : "fallback:opportunity_score");
     mark("problem_cluster", row.problem_cluster === "General Workflow" ? "fallback:problem_cluster" : "orchestrator:problem_synthesis.canonicalProblemCluster");
-    mark("build_difficulty", buildDifficultyDiagnostic.source === "mapped_opportunity_signal" ? "orchestrator:opportunity.score.buildSimplicityScore:mapped_by_normalized_title" : "fallback:build_difficulty");
+    mark("build_difficulty", buildDifficultyDiagnostic.source === "mapped_opportunity_signal" ? `orchestrator:opportunity.score.buildSimplicityScore:${buildDifficultyDiagnostic.attribution}` : "fallback:build_difficulty");
     mark("source_evidence", evidence === DEFAULT_EVIDENCE ? "fallback:source_evidence" : "orchestrator:problem_synthesis.conciseEvidenceSummary");
     const uniqueFallbackFields = [...new Set(fallbackFields)];
     return { row, sources, scoreMappings, buildDifficultyDiagnostic, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "problem_synthesis") };

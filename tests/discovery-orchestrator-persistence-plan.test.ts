@@ -13,6 +13,7 @@ import {
 } from "../lib/intelligence/discovery-orchestrator-persistence-plan.ts";
 import { evaluateDiscoveryPersistenceQuality } from "../lib/intelligence/discovery-persistence-quality-gates.ts";
 import type { DiscoveryModularPipelineResult } from "../lib/intelligence/types.ts";
+import type { ProblemSynthesisCandidate } from "../lib/intelligence/problem-synthesis/types.ts";
 
 function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
   return {
@@ -433,4 +434,98 @@ test("buildDiscoveryPersistencePlan maps synthesis build difficulty from related
   assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.rawBuildSimplicityScore, 3);
   assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.fallbackAvoided, true);
   assert.match(plan.diagnostics.build_difficulty_by_row[0].diagnostic.matchReason, /token overlap/);
+});
+
+test("buildDiscoveryPersistencePlan maps synthesis build difficulty through selected synthesis cluster seed", () => {
+  const base = createResult();
+  const plan = buildDiscoveryPersistencePlan(createResult({
+    outputs: {
+      ...base.outputs,
+      problemIntelligenceSynthesis: {
+        runId: "planner-run",
+        synthesizedAt: "2026-06-27T00:00:00.000Z",
+        candidates: [
+          {
+            id: "synthesis-seed-match",
+            synthesizedProblemTitle: "Invoice Approval Bottlenecks",
+            synthesizedSummary: "Construction subcontractors lose payment visibility when invoice approvals move through scattered manual handoffs.",
+            affectedMarkets: ["Construction"],
+            affectedAudiences: ["Subcontractors"],
+            suggestedSolutions: ["Approval tracking workflow"],
+            conciseEvidenceSummary: "Construction teams need payment approval tracking.",
+            canonicalProblemCluster: "Billing approval workflow",
+            scoreBreakdown: { painScore: 8, urgencyScore: 8, frequencyScore: 8, trendScore: 7, opportunityScore: 8, revenueScore: 8, buyingSignalScore: 8, sourceQualityScore: 8, confidenceScore: 8, totalScore: 8 },
+            supportingEvidenceReferences: [],
+            confidence: 8,
+            narrative: { title: "Invoice Approval Bottlenecks", summary: "summary", primaryTheme: "Billing approval workflow", rationale: [] },
+            evidenceSummary: { evidenceCount: 2, sourceCount: 1, sourceNames: ["Review"], markets: ["Construction"], audiences: ["Subcontractors"], claims: [], references: [], summary: "summary" },
+            diagnostics: {
+              synthesizedTitle: "Invoice Approval Bottlenecks",
+              synthesizedSummary: "summary",
+              evidenceCount: 2,
+              evidenceReferences: [],
+              confidence: 8,
+              synthesisCompleteness: 1,
+              candidateCollapseReport: {
+                rankedSeeds: [
+                  {
+                    title: "Construction subcontractor payment tracking",
+                    normalizedTitle: "construction subcontractor payment tracking",
+                    market: "construction",
+                    audience: "subcontractors",
+                    problemCluster: "billing approval workflow",
+                    score: 8,
+                    rejectionReasons: [],
+                    engineSupport: ["opportunity", "pain"],
+                    evidenceCount: 2,
+                    genericTitle: false,
+                    downrankedGeneric: false,
+                    semanticTitle: "Invoice Approval Bottlenecks",
+                    semanticTitleScore: 9,
+                    rawTitleRejected: false,
+                    rawTitleRejectionReasons: [],
+                  },
+                ],
+              },
+              engineCandidateCounts: { pain: 1, pattern: 0, trend: 0, opportunity: 1, monetization: 0, confidence: 0, feedback: 0 },
+              warnings: [],
+            } as unknown as ProblemSynthesisCandidate["diagnostics"],
+          },
+        ],
+        diagnostics: [],
+        warnings: [],
+        summary: { evidenceCount: 2, candidateCount: 1, averageConfidence: 8, averageCompleteness: 1 },
+      },
+      opportunityDetection: {
+        candidates: [
+          {
+            ...base.outputs.opportunityDetection!.candidates[0],
+            id: "opp-invoice",
+            title: "Construction subcontractor payment tracking",
+            normalizedTitle: "construction subcontractor payment tracking",
+            context: {
+              ...base.outputs.opportunityDetection!.candidates[0].context,
+              market: "Construction",
+              audience: "Subcontractors",
+              nicheCategory: "Invoice approvals",
+              primaryTheme: "Billing approval workflow",
+            },
+            marketContext: {
+              ...base.outputs.opportunityDetection!.candidates[0].marketContext,
+              primaryProblem: "Construction subcontractors cannot track invoice approvals.",
+            },
+            score: { ...base.outputs.opportunityDetection!.candidates[0].score, buildSimplicityScore: 3 },
+          },
+        ],
+      },
+    },
+  } as unknown as Partial<DiscoveryModularPipelineResult>));
+
+  assert.equal(plan.rows[0].build_difficulty, "Hard");
+  assert.deepEqual(plan.diagnostics.fallback_fields_by_row[0].fields, []);
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.source, "mapped_opportunity_signal");
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.opportunityCandidateId, "opp-invoice");
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.rawBuildSimplicityScore, 3);
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.fallbackAvoided, true);
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.attribution, "synthesis_cluster_seed_match");
 });
