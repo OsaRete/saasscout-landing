@@ -220,9 +220,13 @@ function completeness(row: ComparableProblem) {
   return clampScore(((populated / 5) * 0.55 + (validScores / 8) * 0.45) * 100);
 }
 
+function affectedNicheTokens(rows: ComparableProblem[]) {
+  return [...new Set(rows.flatMap((row) => row.affected_niches.split("|").map((item) => item.trim().toLowerCase()).filter(Boolean)))].sort();
+}
+
 function marketCoverage(rows: ComparableProblem[]) {
-  const niches = new Set(rows.flatMap((row) => row.affected_niches.split("|").map((item) => item.trim().toLowerCase()).filter(Boolean)));
-  return clampScore(Math.min(1, niches.size / 5) * 100);
+  const niches = affectedNicheTokens(rows);
+  return clampScore(Math.min(1, niches.length / 5) * 100);
 }
 
 function metricsForRows(rows: ComparableProblem[], synthesisCompletenessScore: number, fallbackUsageScore: number, qualityGateScore: number): LegacyQualityMetrics {
@@ -287,6 +291,10 @@ export function buildDiscoveryQualityComparison({
   const modularCandidateCount = orchestratorResult.outputs.opportunityDetection?.candidates.length || plan.rows.length;
   const legacyMetrics = metricsForRows(legacyProblems, legacyProblems.length > 0 ? 100 : 0, 100, legacyProblems.length > 0 ? 100 : 0);
   const fallbackFieldCount = plan.diagnostics.fallback_fields_by_row.reduce((sum, row) => sum + row.fields.length, 0);
+  const fallbackFieldsCounted = [...new Set(plan.diagnostics.fallback_fields_by_row.flatMap((row) => row.fields))].sort();
+  const buildDifficultyFallbackOnlyRows = plan.diagnostics.fallback_fields_by_row
+    .filter((row) => row.fields.length === 1 && row.fields[0] === "build_difficulty")
+    .map((row) => row.rowIndex);
   const modularFallbackScore = plan.rows.length === 0 ? 0 : clampScore(100 - (fallbackFieldCount / Math.max(1, plan.rows.length * 5)) * 100);
   const modularSynthesisScore = modularCandidateCount === 0 ? 0 : clampScore((synthesisCandidateCount / Math.max(1, modularCandidateCount)) * 100);
   const modularQualityGateScore = plan.rows.length === 0 ? 0 : clampScore((quality.summary.accepted_row_count / plan.rows.length) * 100 - quality.summary.issue_count * 5);
@@ -318,10 +326,30 @@ export function buildDiscoveryQualityComparison({
       modularPlannedRowCount: plan.rows.length,
       modularSynthesisCandidateCount: synthesisCandidateCount,
       fallbackFieldCount,
+      fallbackFieldsCounted,
+      fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row,
+      buildDifficultyFallbackOnlyRowCount: buildDifficultyFallbackOnlyRows.length,
+      buildDifficultyFallbackOnlyRows,
       qualityGateIssueCount: quality.summary.issue_count,
+      marketCoverage: {
+        legacyUniqueAffectedNicheTokens: affectedNicheTokens(legacyProblems),
+        modularUniqueAffectedNicheTokens: affectedNicheTokens(plan.rows),
+        denominator: 5,
+        calculation: "min(1, unique affected_niches token count / 5) * 100",
+      },
+      synthesisCompleteness: {
+        modularCandidateCount,
+        modularSynthesisCandidateCount: synthesisCandidateCount,
+        formula: "modularCandidateCount === 0 ? 0 : (modularSynthesisCandidateCount / max(1, modularCandidateCount)) * 100",
+        representsCandidateCompressionRatio: true,
+        representsTrueRowQuality: false,
+        explanation: "This diagnostic currently measures candidate compression from upstream opportunity candidates into problem synthesis candidates, not persisted row quality. Lower percentages can be expected when many engine candidates collapse into fewer high-quality problem candidates.",
+      },
       notes: [
         "Quality comparison is diagnostic-only and has no production persistence side effects.",
         "Scores are deterministic heuristics intended to measure migration parity before replacing the legacy pipeline.",
+        "fallback_usage counts every planned persistence field whose source is marked fallback:*; build_difficulty may be the only fallback when synthesis rows intentionally use the safe Medium attribution.",
+        "synthesis_completeness currently represents candidate compression ratio, not true row quality; compression is expected when many engine candidates collapse into fewer high-quality problem candidates.",
       ],
     },
   };

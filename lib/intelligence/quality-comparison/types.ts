@@ -50,7 +50,25 @@ export type QualityComparisonDiagnostics = {
   modularPlannedRowCount: number;
   modularSynthesisCandidateCount: number;
   fallbackFieldCount: number;
+  fallbackFieldsCounted: string[];
+  fallbackFieldsByRow: Array<{ rowIndex: number; fields: string[] }>;
+  buildDifficultyFallbackOnlyRowCount: number;
+  buildDifficultyFallbackOnlyRows: number[];
   qualityGateIssueCount: number;
+  marketCoverage: {
+    legacyUniqueAffectedNicheTokens: string[];
+    modularUniqueAffectedNicheTokens: string[];
+    denominator: number;
+    calculation: string;
+  };
+  synthesisCompleteness: {
+    modularCandidateCount: number;
+    modularSynthesisCandidateCount: number;
+    formula: string;
+    representsCandidateCompressionRatio: boolean;
+    representsTrueRowQuality: boolean;
+    explanation: string;
+  };
   notes: string[];
 };
 
