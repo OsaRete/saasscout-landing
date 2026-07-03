@@ -52,16 +52,104 @@ function average(values: number[]) {
 }
 
 function words(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  return value.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9\s-]/g, " ").replace(/-/g, " ").split(/\s+/).filter(Boolean);
+}
+
+const BUSINESS_DOMAIN_TERMS = new Set([
+  "accounting",
+  "approval",
+  "billing",
+  "client",
+  "crm",
+  "customer",
+  "finance",
+  "follow",
+  "invoice",
+  "lead",
+  "onboarding",
+  "operational",
+  "operations",
+  "reporting",
+  "sales",
+  "spreadsheet",
+  "spreadsheets",
+  "workflow",
+  "workflows",
+]);
+
+const PROBLEM_MECHANISM_TERMS = new Set([
+  "backlog",
+  "bottleneck",
+  "bottlenecks",
+  "breakdown",
+  "delays",
+  "error",
+  "errors",
+  "follow",
+  "fragmentation",
+  "friction",
+  "gap",
+  "gaps",
+  "handoff",
+  "handoffs",
+  "management",
+  "manual",
+  "scattered",
+]);
+
+const GENERIC_TITLE_TERMS = new Set([
+  "automation",
+  "business",
+  "manual",
+  "management",
+  "operations",
+  "process",
+  "problems",
+  "software",
+  "tool",
+  "tools",
+  "workflow",
+]);
+
+const GENERIC_TITLE_PHRASES = new Set([
+  "automation tools",
+  "business problems",
+  "manual",
+  "operations",
+  "operations bottlenecks",
+  "workflow automation",
+]);
+
+function normalizedTitlePhrase(tokens: string[]) {
+  return tokens.join(" ");
 }
 
 function titleSpecificity(row: ComparableProblem) {
   const tokens = words(row.problem_title || "");
+  if (tokens.length === 0) return 0;
+
   const unique = new Set(tokens);
-  const lengthScore = Math.min(1, tokens.length / 5);
-  const uniquenessScore = tokens.length === 0 ? 0 : unique.size / tokens.length;
-  const genericPenalty = tokens.length <= 2 ? 0.65 : 1;
-  return clampScore(((lengthScore * 0.65 + uniquenessScore * 0.35) * 100) * genericPenalty);
+  const phrase = normalizedTitlePhrase(tokens);
+  const businessTermCount = tokens.filter((token) => BUSINESS_DOMAIN_TERMS.has(token)).length;
+  const problemMechanismCount = tokens.filter((token) => PROBLEM_MECHANISM_TERMS.has(token)).length;
+  const lengthScore = Math.min(1, tokens.length / 4) * 20;
+  const uniquenessScore = (unique.size / tokens.length) * 15;
+  const businessContextScore = Math.min(1, businessTermCount / 2) * 25;
+  const problemMechanismScore = Math.min(1, problemMechanismCount / 2) * 25;
+  const compoundContextBonus = /\b(follow-up|spreadsheet-based)\b/i.test(row.problem_title || "") ? 5 : 0;
+  const conciseSpecificTitleBonus = tokens.length === 3 && ((businessTermCount >= 2 && problemMechanismCount >= 1) || (businessTermCount >= 1 && problemMechanismCount >= 2)) ? 10 : 0;
+  let score = lengthScore + uniquenessScore + businessContextScore + problemMechanismScore + compoundContextBonus + conciseSpecificTitleBonus;
+
+  const isExplicitlyGeneric = GENERIC_TITLE_PHRASES.has(phrase);
+  const isShortGeneric = tokens.length <= 2 && tokens.every((token) => GENERIC_TITLE_TERMS.has(token) || BUSINESS_DOMAIN_TERMS.has(token));
+  const isBroadProblemOnly = tokens.length <= 2 && problemMechanismCount >= 1 && businessTermCount <= 1;
+
+  if (isExplicitlyGeneric) score *= 0.45;
+  else if (isShortGeneric) score *= 0.6;
+  else if (isBroadProblemOnly) score *= 0.75;
+
+  if (isExplicitlyGeneric || isShortGeneric) return Math.min(clampScore(score), 55);
+  return clampScore(score);
 }
 
 function summaryQuality(row: ComparableProblem) {
