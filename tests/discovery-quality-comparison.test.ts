@@ -205,3 +205,20 @@ test("title specificity keeps generic titles lower than semantic problem titles"
   assert.ok(legacyTitleSpecificity("Manual Lead Qualification") > legacyTitleSpecificity("Manual"));
   assert.ok(legacyTitleSpecificity("Manual Workflow Fragmentation") > legacyTitleSpecificity("Manual"));
 });
+
+test("quality comparison diagnostics explain market coverage fallback fields and synthesis compression", () => {
+  const comparison = buildDiscoveryQualityComparison({ legacyProblems, orchestratorResult: createResult() });
+
+  assert.deepEqual(comparison.diagnostics.marketCoverage.legacyUniqueAffectedNicheTokens, ["agencies", "b2b consultants", "client services"]);
+  assert.deepEqual(comparison.diagnostics.marketCoverage.modularUniqueAffectedNicheTokens, ["agency services", "small agencies"]);
+  assert.equal(comparison.diagnostics.marketCoverage.calculation, "min(1, unique affected_niches token count / 5) * 100");
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, ["build_difficulty"]);
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: ["build_difficulty"] }]);
+  assert.equal(comparison.diagnostics.buildDifficultyFallbackOnlyRowCount, 1);
+  assert.deepEqual(comparison.diagnostics.buildDifficultyFallbackOnlyRows, [0]);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.modularCandidateCount, 1);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.modularSynthesisCandidateCount, 1);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.representsCandidateCompressionRatio, true);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.representsTrueRowQuality, false);
+  assert.match(comparison.diagnostics.synthesisCompleteness.explanation, /candidate compression/);
+});
