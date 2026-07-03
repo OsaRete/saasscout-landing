@@ -171,6 +171,11 @@ test("title specificity rewards concise business-domain problem titles", () => {
   const strongTitles = [
     "Manual Sales Follow-up Automation",
     "Spreadsheet-Based Workflow Management",
+    "Automated client reporting for agencies",
+    "Disconnected CRM Workflow Operations",
+    "Fragmented CRM Operations",
+    "Manual Lead Qualification",
+    "Client Onboarding Workflow Friction",
     "Invoice Approval Bottlenecks",
     "Operational Workflow Fragmentation",
     "Manual Workflow Fragmentation",
@@ -188,6 +193,7 @@ test("title specificity keeps generic titles lower than semantic problem titles"
     "Manual",
     "Business Problems",
     "Automation Tools",
+    "Operations",
   ];
 
   for (const title of genericTitles) {
@@ -195,5 +201,7 @@ test("title specificity keeps generic titles lower than semantic problem titles"
   }
 
   assert.ok(legacyTitleSpecificity("Invoice Approval Bottlenecks") > legacyTitleSpecificity("Operations Bottlenecks"));
+  assert.ok(legacyTitleSpecificity("Fragmented CRM Operations") > legacyTitleSpecificity("Operations Bottlenecks"));
+  assert.ok(legacyTitleSpecificity("Manual Lead Qualification") > legacyTitleSpecificity("Manual"));
   assert.ok(legacyTitleSpecificity("Manual Workflow Fragmentation") > legacyTitleSpecificity("Manual"));
 });
