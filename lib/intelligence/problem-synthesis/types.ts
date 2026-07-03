@@ -157,6 +157,12 @@ export type ProblemSynthesisCandidateCollapseReport = {
   semantic_summaries_selected: number;
   average_summary_length: number;
   duplicated_summary_count: number;
+  emitted_summary_quality_scores: Array<{ title: string; score: number }>;
+  emitted_summary_lengths: Array<{ title: string; length: number }>;
+  emitted_summary_title_overlap_scores: Array<{ title: string; score: number }>;
+  emitted_summary_generation_warnings: Array<{ title: string; warnings: string[] }>;
+  low_quality_emitted_summary_count: number;
+  summary_refinement_applied_count: number;
   summary_quality_distribution: { min: number; max: number; average: number };
   summary_generation_rejections: Array<{ reason: string; count: number }>;
   summary_generation_warnings: Array<{ warning: string; count: number }>;

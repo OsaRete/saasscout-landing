@@ -127,6 +127,12 @@ export function buildDiscoveryOrchestratorDiagnosticMetrics(
       ...(problemSynthesisCollapseReport.domain_fill_attempts !== undefined ? { domain_fill_attempts: problemSynthesisCollapseReport.domain_fill_attempts } : {}),
       ...(problemSynthesisCollapseReport.available_high_quality_domain_count !== undefined ? { available_high_quality_domain_count: problemSynthesisCollapseReport.available_high_quality_domain_count } : {}),
       ...(problemSynthesisCollapseReport.underfilled_candidate_slots_reason !== undefined ? { underfilled_candidate_slots_reason: problemSynthesisCollapseReport.underfilled_candidate_slots_reason } : {}),
+      ...(problemSynthesisCollapseReport.emitted_summary_quality_scores !== undefined ? { emitted_summary_quality_scores: problemSynthesisCollapseReport.emitted_summary_quality_scores } : {}),
+      ...(problemSynthesisCollapseReport.emitted_summary_lengths !== undefined ? { emitted_summary_lengths: problemSynthesisCollapseReport.emitted_summary_lengths } : {}),
+      ...(problemSynthesisCollapseReport.emitted_summary_title_overlap_scores !== undefined ? { emitted_summary_title_overlap_scores: problemSynthesisCollapseReport.emitted_summary_title_overlap_scores } : {}),
+      ...(problemSynthesisCollapseReport.emitted_summary_generation_warnings !== undefined ? { emitted_summary_generation_warnings: problemSynthesisCollapseReport.emitted_summary_generation_warnings } : {}),
+      ...(problemSynthesisCollapseReport.low_quality_emitted_summary_count !== undefined ? { low_quality_emitted_summary_count: problemSynthesisCollapseReport.low_quality_emitted_summary_count } : {}),
+      ...(problemSynthesisCollapseReport.summary_refinement_applied_count !== undefined ? { summary_refinement_applied_count: problemSynthesisCollapseReport.summary_refinement_applied_count } : {}),
       collapse_explanation: problemSynthesisCollapseReport.collapseExplanation,
     } : null,
     solution_intelligence_stage: {
