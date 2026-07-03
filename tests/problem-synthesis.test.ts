@@ -202,6 +202,14 @@ test("semantic summary generation produces analyst-style problem summaries and d
   assert.ok(report.summary_quality_distribution.average > 0);
   assert.ok(Array.isArray(report.summary_generation_rejections));
   assert.ok(Array.isArray(report.summary_generation_warnings));
+  assert.equal(report.emitted_summary_quality_scores.length, synthesis.candidates.length);
+  assert.equal(report.emitted_summary_lengths.length, synthesis.candidates.length);
+  assert.equal(report.emitted_summary_title_overlap_scores.length, synthesis.candidates.length);
+  assert.equal(report.emitted_summary_generation_warnings.length, synthesis.candidates.length);
+  assert.ok(report.emitted_summary_lengths.every((item) => item.length >= 20 && item.length <= 30));
+  assert.ok(report.emitted_summary_title_overlap_scores.every((item) => item.score < 0.92));
+  assert.equal(report.low_quality_emitted_summary_count, 0);
+  assert.ok(report.summary_refinement_applied_count >= 1);
 });
 
 test("problem synthesis multi-candidate diagnostics flag emits up to five quality-gated semantic candidates", () => {

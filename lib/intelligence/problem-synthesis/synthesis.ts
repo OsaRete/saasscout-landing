@@ -90,8 +90,8 @@ const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "because", "by"
 const GENERIC_SEMANTIC_TITLES = new Set(["workflow automation", "manual workflow automation", "operations automation", "business automation", "process automation", "manual errors", "workflow errors", "manual delays", "operations bottlenecks", "workflow bottlenecks", "operations fragmentation", "operational process fragmentation", "lead automation", "manual lead management", "operational process bottlenecks"]);
 const BROAD_DIAGNOSTIC_TITLES = new Set(["operational process fragmentation", "workflow automation", "operations bottlenecks", "operations automation", "business automation", "process automation"]);
 const MIN_EMITTED_TITLE_SPECIFICITY = 80;
-const SUMMARY_BLOCKED_PHRASES = ["evidence", "multiple sources", "weekly intelligence", "data moat"];
-const SUMMARY_IMPACT_TERMS = ["delays", "errors", "reduced visibility", "administrative workload", "revenue leakage", "inconsistent customer engagement", "operational inefficiency"];
+const SUMMARY_BLOCKED_PHRASES = ["evidence shows", "multiple sources", "weekly intelligence", "data moat", "internal signals", "external posts", "evidence"];
+const SUMMARY_IMPACT_TERMS = ["delays", "errors", "reduced visibility", "administrative workload", "revenue leakage", "missed revenue opportunities", "inconsistent customer engagement", "operational inefficiency", "cash collection", "rework", "pipeline visibility", "payment status", "operational decisions"];
 
 const CANONICAL_TITLE_RULES: Array<{ title: string; terms: string[]; any?: string[] }> = [
   { title: "Fragmented CRM Operations", terms: ["crm"], any: ["fragmentation", "fragmented", "disconnected", "handoff", "handoffs"] },
@@ -455,12 +455,24 @@ function summaryQualityScore(summary: string) {
   return clampScore(lengthScore + businessScore + problemScore + (hasImpact ? 2 : 0) - (blocked ? 3 : 0) - (repeated ? 1 : 0), 0);
 }
 
+function summaryLength(summary: string) {
+  return normalize(summary).split(" ").filter(Boolean).length;
+}
+
+function titleOverlapScore(summary: string, title: string) {
+  const summaryTokens = new Set(normalize(summary).split(" ").filter((token) => token && !TITLE_STOP_WORDS.has(token)));
+  const titleTokens = new Set(normalize(title).split(" ").filter((token) => token && !TITLE_STOP_WORDS.has(token)));
+  if (summaryTokens.size === 0 || titleTokens.size === 0) return 0;
+  const overlap = [...titleTokens].filter((token) => summaryTokens.has(token)).length;
+  return Math.round((overlap / titleTokens.size) * 100) / 100;
+}
+
 function semanticSummaryRejectionReasons(summary: string) {
   const normalizedSummary = normalize(summary);
   const words = normalizedSummary.split(" ").filter(Boolean);
   const uniqueWords = new Set(words.filter((word) => !TITLE_STOP_WORDS.has(word)));
   return [
-    words.length < 12 ? "summary_too_short" : "",
+    words.length < 20 ? "summary_too_short" : "",
     words.length > 40 ? "summary_too_long" : "",
     SUMMARY_BLOCKED_PHRASES.some((phrase) => normalizedSummary.includes(normalize(phrase))) ? "blocked_source_language" : "",
     uniqueWords.size < Math.max(6, words.filter((word) => !TITLE_STOP_WORDS.has(word)).length * 0.7) ? "duplicated_summary_terms" : "",
@@ -474,15 +486,59 @@ function semanticSummaryWarnings(summary: string) {
   return [
     !/users|teams|businesses|agencies/.test(normalizedSummary) ? "affected_users_inferred_generically" : "",
     !/revenue|visibility|efficiency|workload|risk|cash|rework|delays|errors/.test(normalizedSummary) ? "business_impact_inferred_generically" : "",
+    summaryLength(summary) < 20 || summaryLength(summary) > 30 ? "outside_target_summary_length" : "",
   ].filter(Boolean);
 }
 
+function inferFailureMode(seed: SynthesisSeed, title: string, claims: string[]) {
+  const text = normalize([title, seed.title, seed.problemCluster, ...claims].join(" "));
+  if (hasAny(text, ["fragmented", "fragmentation", "disconnected", "scattered"])) return "fragmented handoffs";
+  if (hasAny(text, ["spreadsheet", "spreadsheets"])) return "manual file dependencies";
+  if (hasAny(text, ["approval", "invoice", "billing"])) return "slow approval routing";
+  if (hasAny(text, ["delay", "delays", "bottleneck", "bottlenecks"])) return "process bottlenecks";
+  if (hasAny(text, ["error", "errors", "mistake", "mistakes"])) return "error-prone execution";
+  if (hasAny(text, ["manual"])) return "manual coordination gaps";
+  return "fragmented manual coordination";
+}
+
+function domainSpecificSummary(seed: SynthesisSeed, title: string, claims: string[]) {
+  const text = normalize([title, seed.title, seed.problemCluster, seed.market, seed.audience, ...claims].join(" "));
+  if (hasAny(text, ["sales", "lead", "leads", "follow"])) {
+    return "Sales teams coordinate follow-up across CRM updates and manual handoffs, causing inconsistent lead engagement, missed revenue opportunities, and reduced pipeline visibility.";
+  }
+  if (hasAny(text, ["crm"])) {
+    return "Revenue teams manage customer workflows across disconnected CRM processes, creating handoff gaps, stale account context, and limited visibility into pipeline execution.";
+  }
+  if (hasAny(text, ["spreadsheet", "spreadsheets"])) {
+    return "Spreadsheet-dependent teams manage invoices, reports, and project updates through manual files, increasing administrative workload, reporting delays, and error-prone operational decisions.";
+  }
+  if (hasAny(text, ["invoice", "billing", "invoicing", "approval"])) {
+    return "Billing teams route invoice approvals through fragmented manual workflows, creating delayed cash collection, avoidable rework, and limited visibility into payment status.";
+  }
+  if (hasAny(text, ["client", "onboarding", "handoff", "customer"])) {
+    return "Client-facing teams coordinate onboarding and service updates across scattered workflows, causing handoff friction, slower customer activation, and avoidable delivery rework.";
+  }
+  if (hasAny(text, ["ai", "artificial intelligence", "llm", "model"])) {
+    return "Operations teams adopt AI automation inside fragmented workflows, creating inconsistent execution, unclear ownership, and limited confidence in business-critical outputs.";
+  }
+  if (hasAny(text, ["bottleneck", "bottlenecks", "delay", "delays", "operations", "operational"])) {
+    return "Operations teams depend on manual process coordination across disconnected tools, causing bottlenecks, delayed decisions, and reduced visibility into business execution.";
+  }
+  if (hasAny(text, ["workflow", "workflows", "automation", "manual", "process"])) {
+    return "Business teams coordinate recurring workflows through manual handoffs and disconnected tools, creating fragmented execution, avoidable rework, and reduced operational visibility.";
+  }
+  return null;
+}
+
 function semanticSummaryForSeed(seed: SynthesisSeed, title: string, claims: string[]) {
+  const domainSummary = domainSpecificSummary(seed, title, claims);
+  if (domainSummary) return cleanSummary(domainSummary);
   const users = inferAffectedUsers(seed, claims);
   const process = inferBusinessProcess(seed, title, claims);
-  const consequence = inferOperationalConsequence(seed, title, claims);
+  const failureMode = inferFailureMode(seed, title, claims);
   const impact = inferBusinessImpact(seed, title, claims);
-  return cleanSummary(`${users} rely on ${process}, causing ${consequence} and ${impact}`);
+  const consequence = inferOperationalConsequence(seed, title, claims);
+  return cleanSummary(`${users} rely on ${process} across manual handoffs, creating ${failureMode}, ${consequence}, and ${impact}`);
 }
 
 
@@ -845,6 +901,13 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
   const summaryScores = rankedSeeds.map((seed) => seed.semanticSummaryScore);
   const selectedSummaryKeys = selection.emittedSeeds.map((seed) => normalize(seed.semanticSummary));
   const duplicatedSummaryCount = selectedSummaryKeys.length - new Set(selectedSummaryKeys).size;
+  const emittedSummaryQualityScores = selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), score: seed.semanticSummaryScore }));
+  const emittedSummaryLengths = selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), length: summaryLength(seed.semanticSummary) }));
+  const emittedSummaryTitleOverlapScores = selection.emittedSeeds.map((seed) => ({ title: safeLogTitle(seed.semanticTitle), score: titleOverlapScore(seed.semanticSummary, seed.semanticTitle) }));
+  const emittedSummaryGenerationWarnings = selection.emittedSeeds.map((seed) => ({
+    title: safeLogTitle(seed.semanticTitle),
+    warnings: seed.semanticSummaryWarnings,
+  }));
   const semanticRejected = rankedSeeds.filter((seed) => semanticTitleRejectionReasons(seed.semanticTitle).length > 0);
   const semanticReasonCounts = new Map<string, number>();
   for (const seed of semanticRejected) {
@@ -985,6 +1048,12 @@ function buildCandidateCollapseReport(input: ProblemSynthesisInput, selection: C
     semantic_summaries_selected: selection.emittedSeeds.filter((seed) => seed.semanticSummaryRejectionReasons.length === 0).length,
     average_summary_length: Math.round(average(rankedSeeds.map((seed) => normalize(seed.semanticSummary).split(" ").filter(Boolean).length), 0) * 100) / 100,
     duplicated_summary_count: duplicatedSummaryCount,
+    emitted_summary_quality_scores: emittedSummaryQualityScores,
+    emitted_summary_lengths: emittedSummaryLengths,
+    emitted_summary_title_overlap_scores: emittedSummaryTitleOverlapScores,
+    emitted_summary_generation_warnings: emittedSummaryGenerationWarnings,
+    low_quality_emitted_summary_count: selection.emittedSeeds.filter((seed) => seed.semanticSummaryScore < 7 || seed.semanticSummaryRejectionReasons.length > 0).length,
+    summary_refinement_applied_count: rankedSeeds.filter((seed) => domainSpecificSummary(seed, seed.semanticTitle, [seed.title, seed.problemCluster]) !== null).length,
     summary_quality_distribution: scoreDistribution(summaryScores),
     summary_generation_rejections: countItems(rankedSeeds.flatMap((seed) => seed.semanticSummaryRejectionReasons), "reason"),
     summary_generation_warnings: countItems(rankedSeeds.flatMap((seed) => seed.semanticSummaryWarnings), "warning"),
