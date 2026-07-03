@@ -62,9 +62,13 @@ type ScoreMappingDiagnostics = Partial<Record<ScoreField, ScoreMappingDiagnostic
 type BuildDifficultyDiagnostic = {
   source: "mapped_opportunity_signal" | "fallback";
   opportunityCandidateId: string | null;
+  opportunityCandidateTitle: string | null;
   rawBuildSimplicityScore: number | null;
   persistedValue: string;
-  attribution: "normalized_title_match" | "unavailable" | "ambiguous";
+  confidence: number;
+  matchReason: string;
+  fallbackAvoided: boolean;
+  attribution: "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unavailable" | "ambiguous";
 };
 
 export type PersistencePlanDiagnostics = {
@@ -213,22 +217,81 @@ function normalizedMatchValue(value: string) {
     .join(" ");
 }
 
+const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "at", "for", "from", "in", "into", "of", "on", "or", "the", "to", "with"]);
+
+function normalizedTokenSet(value: string) {
+  return new Set(normalizedMatchValue(value).split(" ").filter((token) => token.length > 2 && !TITLE_STOP_WORDS.has(token)));
+}
+
+function tokenOverlapScore(left: string, right: string) {
+  const leftTokens = normalizedTokenSet(left);
+  const rightTokens = normalizedTokenSet(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function overlapAny(left: string[], right: string[]) {
+  const normalizedRight = new Set(right.map(normalizedMatchValue).filter(Boolean));
+  return left.map(normalizedMatchValue).filter(Boolean).some((value) => normalizedRight.has(value));
+}
+
+function opportunitySupportScore(opportunity: OpportunityCandidate) {
+  const total = Number(opportunity.score.totalScore);
+  const evidence = Number(opportunity.score.evidenceScore);
+  const confidence = Number(opportunity.score.confidenceScore);
+  const evidenceCount = opportunity.evidence?.length || 0;
+  return [total, evidence, confidence].filter(Number.isFinite).reduce((sum, value) => sum + value, 0) + evidenceCount / 10;
+}
+
 function resolveBuildDifficultyForSynthesisCandidate(
   candidate: ProblemSynthesisCandidate,
   opportunities: OpportunityCandidate[]
 ): BuildDifficultyDiagnostic {
-  const title = normalizedMatchValue(candidate.synthesizedProblemTitle);
-  const matches = opportunities.filter((opportunity) => normalizedMatchValue(opportunity.normalizedTitle || opportunity.title) === title);
+  const synthesisTitles = [candidate.synthesizedProblemTitle, candidate.narrative?.title, candidate.diagnostics?.synthesizedTitle].map(normalizedMatchValue).filter(Boolean);
+  const synthesisTitleSet = new Set(synthesisTitles);
+  const synthesisMarkets = candidate.affectedMarkets || [];
+  const synthesisAudiences = candidate.affectedAudiences || [];
 
-  if (matches.length === 1) {
-    const rawBuildSimplicityScore = Number(matches[0].score.buildSimplicityScore);
-    if (Number.isFinite(rawBuildSimplicityScore)) {
+  const scoredMatches = opportunities.map((opportunity) => {
+    const opportunityTitles = [opportunity.normalizedTitle, opportunity.title, opportunity.context?.primaryTheme, opportunity.marketContext?.primaryProblem].map((value) => normalizedMatchValue(value || "")).filter(Boolean);
+    const canonicalOrSemanticMatch = opportunityTitles.some((title) => synthesisTitleSet.has(title));
+    const bestTokenOverlap = Math.max(...opportunityTitles.map((title) => tokenOverlapScore(candidate.synthesizedProblemTitle, title)), 0);
+    const marketOverlap = overlapAny(synthesisMarkets, [opportunity.context?.market, opportunity.marketContext?.market].filter(Boolean) as string[]);
+    const audienceOverlap = overlapAny(synthesisAudiences, [opportunity.context?.audience, opportunity.marketContext?.audience].filter(Boolean) as string[]);
+    const contextOverlapCount = Number(marketOverlap) + Number(audienceOverlap);
+    const confidence = canonicalOrSemanticMatch ? 1 : Math.min(0.99, bestTokenOverlap * 0.7 + contextOverlapCount * 0.15);
+    const deterministic = canonicalOrSemanticMatch || (bestTokenOverlap >= 0.6 && contextOverlapCount > 0);
+    const matchReason = canonicalOrSemanticMatch
+      ? "shared canonical/semantic normalized title"
+      : deterministic
+        ? `normalized title token overlap ${(bestTokenOverlap * 100).toFixed(0)}% with ${marketOverlap ? "market" : "no market"} and ${audienceOverlap ? "audience" : "no audience"} overlap`
+        : `insufficient deterministic relation: token overlap ${(bestTokenOverlap * 100).toFixed(0)}%, marketOverlap=${marketOverlap}, audienceOverlap=${audienceOverlap}`;
+    return { opportunity, canonicalOrSemanticMatch, bestTokenOverlap, contextOverlapCount, deterministic, confidence, matchReason, supportScore: opportunitySupportScore(opportunity) };
+  }).filter((match) => match.deterministic && Number.isFinite(Number(match.opportunity.score.buildSimplicityScore)));
+
+  scoredMatches.sort((a, b) => {
+    if (Number(b.canonicalOrSemanticMatch) !== Number(a.canonicalOrSemanticMatch)) return Number(b.canonicalOrSemanticMatch) - Number(a.canonicalOrSemanticMatch);
+    if (b.bestTokenOverlap !== a.bestTokenOverlap) return b.bestTokenOverlap - a.bestTokenOverlap;
+    if (b.contextOverlapCount !== a.contextOverlapCount) return b.contextOverlapCount - a.contextOverlapCount;
+    return b.supportScore - a.supportScore;
+  });
+
+  const best = scoredMatches[0];
+  if (best) {
+    const tiedBest = scoredMatches.filter((match) => match.canonicalOrSemanticMatch === best.canonicalOrSemanticMatch && match.bestTokenOverlap === best.bestTokenOverlap && match.contextOverlapCount === best.contextOverlapCount && match.supportScore === best.supportScore);
+    if (tiedBest.length === 1) {
+      const rawBuildSimplicityScore = Number(best.opportunity.score.buildSimplicityScore);
       return {
         source: "mapped_opportunity_signal",
-        opportunityCandidateId: matches[0].id,
+        opportunityCandidateId: best.opportunity.id,
+        opportunityCandidateTitle: best.opportunity.title,
         rawBuildSimplicityScore,
         persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
-        attribution: "normalized_title_match",
+        confidence: Number(best.confidence.toFixed(2)),
+        matchReason: best.matchReason,
+        fallbackAvoided: true,
+        attribution: best.canonicalOrSemanticMatch ? "canonical_or_semantic_title_match" : best.bestTokenOverlap === 1 ? "normalized_title_match" : "token_market_audience_match",
       };
     }
   }
@@ -236,9 +299,13 @@ function resolveBuildDifficultyForSynthesisCandidate(
   return {
     source: "fallback",
     opportunityCandidateId: null,
+    opportunityCandidateTitle: null,
     rawBuildSimplicityScore: null,
     persistedValue: "Medium",
-    attribution: matches.length > 1 ? "ambiguous" : "unavailable",
+    confidence: 0,
+    matchReason: scoredMatches.length > 1 ? "multiple equally supported opportunity candidates matched the synthesis row" : "no confident related opportunity build simplicity signal",
+    fallbackAvoided: false,
+    attribution: scoredMatches.length > 1 ? "ambiguous" : "unavailable",
   };
 }
 
@@ -346,8 +413,12 @@ export function buildDiscoveryPersistencePlan(
       const buildDifficultyDiagnostic: BuildDifficultyDiagnostic = {
         source: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "mapped_opportunity_signal" : "fallback",
         opportunityCandidateId: opportunity?.id || null,
+        opportunityCandidateTitle: opportunity?.title || null,
         rawBuildSimplicityScore: Number.isFinite(rawBuildSimplicityScore) ? rawBuildSimplicityScore : null,
         persistedValue: buildDifficulty(opportunity),
+        confidence: opportunity && Number.isFinite(rawBuildSimplicityScore) ? 1 : 0,
+        matchReason: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "seed row directly uses its own opportunity build simplicity score" : "no opportunity build simplicity score available for seed row",
+        fallbackAvoided: Boolean(opportunity && Number.isFinite(rawBuildSimplicityScore)),
         attribution: opportunity ? "normalized_title_match" : "unavailable",
       };
       const useFallback = (field: keyof PlannedDiscoveredProblem, source: string) => {

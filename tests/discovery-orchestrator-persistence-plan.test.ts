@@ -375,3 +375,62 @@ test("quality gates still reject weak synthesis-planned rows", () => {
   assert.equal(quality.issues.some((issue) => issue.code === "title_too_short"), true);
   assert.equal(quality.issues.some((issue) => issue.code === "opportunity_score_too_low"), true);
 });
+
+test("buildDiscoveryPersistencePlan maps synthesis build difficulty from related opportunity token and audience signals", () => {
+  const base = createResult();
+  const plan = buildDiscoveryPersistencePlan(createResult({
+    outputs: {
+      ...base.outputs,
+      problemIntelligenceSynthesis: {
+        runId: "planner-run",
+        synthesizedAt: "2026-06-27T00:00:00.000Z",
+        candidates: [
+          {
+            id: "synthesis-token-match",
+            synthesizedProblemTitle: "Automated client reporting bottleneck",
+            synthesizedSummary: "Small agencies repeatedly lose delivery time assembling client reports from scattered systems.",
+            affectedMarkets: ["Agency services"],
+            affectedAudiences: ["Small agencies"],
+            suggestedSolutions: ["Automated report assembly"],
+            conciseEvidenceSummary: "Agencies still copy weekly updates into spreadsheets.",
+            canonicalProblemCluster: "Client reporting automation",
+            scoreBreakdown: { painScore: 8, urgencyScore: 8, frequencyScore: 8, trendScore: 7, opportunityScore: 8, revenueScore: 8, buyingSignalScore: 8, sourceQualityScore: 8, confidenceScore: 8, totalScore: 8 },
+            supportingEvidenceReferences: [],
+            confidence: 8,
+            narrative: { title: "Automated client reporting bottleneck", summary: "summary", primaryTheme: "Client reporting automation", rationale: [] },
+            evidenceSummary: { evidenceCount: 1, sourceCount: 1, sourceNames: ["Google Search"], markets: ["Agency services"], audiences: ["Small agencies"], claims: [], references: [], summary: "summary" },
+            diagnostics: { synthesizedTitle: "Automated client reporting bottleneck", synthesizedSummary: "summary", evidenceCount: 1, evidenceReferences: [], confidence: 8, synthesisCompleteness: 1, engineCandidateCounts: { pain: 1, pattern: 1, trend: 1, opportunity: 1, monetization: 1, confidence: 1, feedback: 0 }, warnings: [] },
+          },
+        ],
+        diagnostics: [],
+        warnings: [],
+        summary: { evidenceCount: 1, candidateCount: 1, averageConfidence: 8, averageCompleteness: 1 },
+      },
+      opportunityDetection: {
+        candidates: [
+          {
+            ...base.outputs.opportunityDetection!.candidates[0],
+            title: "Automated client reporting for agencies",
+            normalizedTitle: "automated client reporting for agencies",
+            score: { ...base.outputs.opportunityDetection!.candidates[0].score, buildSimplicityScore: 3 },
+          },
+          {
+            ...base.outputs.opportunityDetection!.candidates[0],
+            id: "opp-weaker-support",
+            title: "Client reporting training for agencies",
+            normalizedTitle: "client reporting training for agencies",
+            score: { ...base.outputs.opportunityDetection!.candidates[0].score, buildSimplicityScore: 9, totalScore: 2, evidenceScore: 2, confidenceScore: 2 },
+          },
+        ],
+      },
+    },
+  } as unknown as Partial<DiscoveryModularPipelineResult>));
+
+  assert.equal(plan.rows[0].build_difficulty, "Hard");
+  assert.deepEqual(plan.diagnostics.fallback_fields_by_row[0].fields, []);
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.source, "mapped_opportunity_signal");
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.opportunityCandidateId, "opp-1");
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.rawBuildSimplicityScore, 3);
+  assert.equal(plan.diagnostics.build_difficulty_by_row[0].diagnostic.fallbackAvoided, true);
+  assert.match(plan.diagnostics.build_difficulty_by_row[0].diagnostic.matchReason, /token overlap/);
+});
