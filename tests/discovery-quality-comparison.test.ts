@@ -86,6 +86,33 @@ function createResult(overrides: Partial<DiscoveryModularPipelineResult> = {}) {
   } as unknown as DiscoveryModularPipelineResult;
 }
 
+
+const titleSpecificityBaseProblem = {
+  problem_summary: "Teams lose time because recurring operational work breaks down across manual tools and unclear handoffs.",
+  affected_niches: "Operations | Sales | Finance",
+  suggested_solutions: "Diagnostic-only fixture",
+  pain_score: 8,
+  revenue_score: 8,
+  urgency_score: 8,
+  trend_score: 8,
+  buying_signal_score: 8,
+  frequency_score: 8,
+  source_quality_score: 8,
+  opportunity_score: 80,
+  problem_cluster: "Operations",
+  build_difficulty: "Medium",
+  source_evidence: "Fixture evidence mentions recurring manual workflow issues in business operations.",
+} satisfies Omit<DiscoveredProblem, "problem_title">;
+
+function legacyTitleSpecificity(title: string) {
+  const comparison = buildDiscoveryQualityComparison({
+    legacyProblems: [{ ...titleSpecificityBaseProblem, problem_title: title }],
+    orchestratorResult: createResult({ outputs: { opportunityDetection: { candidates: [] }, painDetection: { candidates: [] } } } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+
+  return comparison.legacyMetrics.averageTitleSpecificity;
+}
+
 test("quality comparison scoring is deterministic for identical inputs", () => {
   assert.deepEqual(
     buildDiscoveryQualityComparison({ legacyProblems, orchestratorResult: createResult() }),
@@ -138,4 +165,35 @@ test("quality gate issues influence modular quality gate score", () => {
 
   assert.ok(comparison.diagnostics.qualityGateIssueCount > 0);
   assert.ok(comparison.modularMetrics.qualityGateScore < 100);
+});
+
+test("title specificity rewards concise business-domain problem titles", () => {
+  const strongTitles = [
+    "Manual Sales Follow-up Automation",
+    "Spreadsheet-Based Workflow Management",
+    "Invoice Approval Bottlenecks",
+    "Operational Workflow Fragmentation",
+    "Manual Workflow Fragmentation",
+  ];
+
+  for (const title of strongTitles) {
+    assert.ok(legacyTitleSpecificity(title) >= 75, `${title} should score as semantically specific`);
+  }
+});
+
+test("title specificity keeps generic titles lower than semantic problem titles", () => {
+  const genericTitles = [
+    "Workflow Automation",
+    "Operations Bottlenecks",
+    "Manual",
+    "Business Problems",
+    "Automation Tools",
+  ];
+
+  for (const title of genericTitles) {
+    assert.ok(legacyTitleSpecificity(title) <= 55, `${title} should remain a low-specificity diagnostic title`);
+  }
+
+  assert.ok(legacyTitleSpecificity("Invoice Approval Bottlenecks") > legacyTitleSpecificity("Operations Bottlenecks"));
+  assert.ok(legacyTitleSpecificity("Manual Workflow Fragmentation") > legacyTitleSpecificity("Manual"));
 });
