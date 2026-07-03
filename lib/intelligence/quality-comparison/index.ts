@@ -51,12 +51,36 @@ function average(values: number[]) {
   return clampScore(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
+const TITLE_STOP_WORDS = new Set(["a", "an", "and", "are", "as", "by", "for", "from", "in", "into", "is", "of", "on", "or", "that", "the", "to", "with"]);
+
+function normalizeTitleToken(token: string) {
+  if (token === "automated") return "automation";
+  if (token === "agencies") return "agency";
+  if (["fragmented", "disconnected", "scattered"].includes(token)) return "fragmentation";
+  if (token === "delay") return "delays";
+  if (token === "dependencies") return "dependency";
+  if (token === "leads") return "lead";
+  if (token === "workflows") return "workflow";
+  if (token === "spreadsheets") return "spreadsheet";
+  return token;
+}
+
 function words(value: string) {
-  return value.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9\s-]/g, " ").replace(/-/g, " ").split(/\s+/).filter(Boolean);
+  return value
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !TITLE_STOP_WORDS.has(token))
+    .map(normalizeTitleToken);
 }
 
 const BUSINESS_DOMAIN_TERMS = new Set([
   "accounting",
+  "agency",
+  "automation",
   "approval",
   "billing",
   "client",
@@ -64,17 +88,21 @@ const BUSINESS_DOMAIN_TERMS = new Set([
   "customer",
   "finance",
   "follow",
+  "gap",
+  "gaps",
+  "handoff",
+  "handoffs",
   "invoice",
   "lead",
   "onboarding",
+  "process",
+  "qualification",
   "operational",
   "operations",
   "reporting",
   "sales",
   "spreadsheet",
-  "spreadsheets",
   "workflow",
-  "workflows",
 ]);
 
 const PROBLEM_MECHANISM_TERMS = new Set([
@@ -83,6 +111,7 @@ const PROBLEM_MECHANISM_TERMS = new Set([
   "bottlenecks",
   "breakdown",
   "delays",
+  "dependency",
   "error",
   "errors",
   "follow",
@@ -93,8 +122,11 @@ const PROBLEM_MECHANISM_TERMS = new Set([
   "handoff",
   "handoffs",
   "management",
+  "leakage",
+  "loss",
   "manual",
-  "scattered",
+  "missed",
+  "mistakes",
 ]);
 
 const GENERIC_TITLE_TERMS = new Set([
@@ -138,7 +170,9 @@ function titleSpecificity(row: ComparableProblem) {
   const problemMechanismScore = Math.min(1, problemMechanismCount / 2) * 25;
   const compoundContextBonus = /\b(follow-up|spreadsheet-based)\b/i.test(row.problem_title || "") ? 5 : 0;
   const conciseSpecificTitleBonus = tokens.length === 3 && ((businessTermCount >= 2 && problemMechanismCount >= 1) || (businessTermCount >= 1 && problemMechanismCount >= 2)) ? 10 : 0;
-  let score = lengthScore + uniquenessScore + businessContextScore + problemMechanismScore + compoundContextBonus + conciseSpecificTitleBonus;
+  const multiContextTitleBonus = tokens.length >= 4 && tokens.length <= 5 && businessTermCount >= 2 && problemMechanismCount >= 1 ? 5 : 0;
+  const domainSpecificityBonus = tokens.length >= 3 && tokens.length <= 5 && businessTermCount >= 3 && problemMechanismCount === 0 ? 15 : 0;
+  let score = lengthScore + uniquenessScore + businessContextScore + problemMechanismScore + compoundContextBonus + conciseSpecificTitleBonus + multiContextTitleBonus + domainSpecificityBonus;
 
   const isExplicitlyGeneric = GENERIC_TITLE_PHRASES.has(phrase);
   const isShortGeneric = tokens.length <= 2 && tokens.every((token) => GENERIC_TITLE_TERMS.has(token) || BUSINESS_DOMAIN_TERMS.has(token));
