@@ -59,6 +59,14 @@ type ScoreMappingDiagnostic = {
 
 type ScoreMappingDiagnostics = Partial<Record<ScoreField, ScoreMappingDiagnostic>>;
 
+type BuildDifficultyDiagnostic = {
+  source: "mapped_opportunity_signal" | "fallback";
+  opportunityCandidateId: string | null;
+  rawBuildSimplicityScore: number | null;
+  persistedValue: string;
+  attribution: "normalized_title_match" | "unavailable" | "ambiguous";
+};
+
 export type PersistencePlanDiagnostics = {
   dry_run: true;
   planned_row_count: number;
@@ -78,6 +86,7 @@ export type PersistencePlanDiagnostics = {
   fallback_fields_by_row: Array<{ rowIndex: number; fields: Array<keyof PlannedDiscoveredProblem> }>;
   field_sources_by_row: Array<{ rowIndex: number; sources: PlannedProblemFieldSource }>;
   score_mappings_by_row: Array<{ rowIndex: number; mappings: ScoreMappingDiagnostics }>;
+  build_difficulty_by_row: Array<{ rowIndex: number; diagnostic: BuildDifficultyDiagnostic }>;
   warnings: PersistencePlanWarning[];
 };
 
@@ -182,12 +191,55 @@ function sourceForRow(fallbackFields: Array<keyof PlannedDiscoveredProblem>, pri
   return fallbackFields.length > 0 ? "mixed_fallback" : "problem_synthesis";
 }
 
-function buildDifficulty(opportunity?: OpportunityCandidate) {
-  const simplicity = Number(opportunity?.score.buildSimplicityScore);
+function buildDifficultyFromSimplicityScore(value: unknown) {
+  const simplicity = Number(value);
   if (!Number.isFinite(simplicity)) return "Medium";
   if (simplicity >= 7.5) return "Easy";
   if (simplicity <= 4) return "Hard";
   return "Medium";
+}
+
+function buildDifficulty(opportunity?: OpportunityCandidate) {
+  return buildDifficultyFromSimplicityScore(opportunity?.score.buildSimplicityScore);
+}
+
+function normalizedMatchValue(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function resolveBuildDifficultyForSynthesisCandidate(
+  candidate: ProblemSynthesisCandidate,
+  opportunities: OpportunityCandidate[]
+): BuildDifficultyDiagnostic {
+  const title = normalizedMatchValue(candidate.synthesizedProblemTitle);
+  const matches = opportunities.filter((opportunity) => normalizedMatchValue(opportunity.normalizedTitle || opportunity.title) === title);
+
+  if (matches.length === 1) {
+    const rawBuildSimplicityScore = Number(matches[0].score.buildSimplicityScore);
+    if (Number.isFinite(rawBuildSimplicityScore)) {
+      return {
+        source: "mapped_opportunity_signal",
+        opportunityCandidateId: matches[0].id,
+        rawBuildSimplicityScore,
+        persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
+        attribution: "normalized_title_match",
+      };
+    }
+  }
+
+  return {
+    source: "fallback",
+    opportunityCandidateId: null,
+    rawBuildSimplicityScore: null,
+    persistedValue: "Medium",
+    attribution: matches.length > 1 ? "ambiguous" : "unavailable",
+  };
 }
 
 function validatePlannedDiscoveredProblem(row: PlannedDiscoveredProblem, rowIndex = 0): ValidationResult {
@@ -290,6 +342,14 @@ export function buildDiscoveryPersistencePlan(
         return persistedValue;
       };
       const fallbackFields: Array<keyof PlannedDiscoveredProblem> = [];
+      const rawBuildSimplicityScore = Number(opportunity?.score.buildSimplicityScore);
+      const buildDifficultyDiagnostic: BuildDifficultyDiagnostic = {
+        source: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "mapped_opportunity_signal" : "fallback",
+        opportunityCandidateId: opportunity?.id || null,
+        rawBuildSimplicityScore: Number.isFinite(rawBuildSimplicityScore) ? rawBuildSimplicityScore : null,
+        persistedValue: buildDifficulty(opportunity),
+        attribution: opportunity ? "normalized_title_match" : "unavailable",
+      };
       const useFallback = (field: keyof PlannedDiscoveredProblem, source: string) => {
         fallbackFields.push(field);
         sources[field] = source;
@@ -343,7 +403,7 @@ export function buildDiscoveryPersistencePlan(
       sources.source_quality_score = scoreMappings.source_quality_score?.source === "engine" ? "orchestrator:engine.0-10:confidence_or_evidence_score" : "fallback:source_quality_score";
       sources.opportunity_score = scoreMappings.opportunity_score?.source === "engine" ? "orchestrator:engine.0-10:opportunity.score.totalScore" : "fallback:opportunity_score";
       sources.problem_cluster = row.problem_cluster === "General Workflow" ? "fallback:problem_cluster" : "orchestrator:theme_or_deduplication";
-      sources.build_difficulty = opportunity ? "orchestrator:opportunity.score.buildSimplicityScore" : "fallback:build_difficulty";
+      sources.build_difficulty = buildDifficultyDiagnostic.source === "mapped_opportunity_signal" ? "orchestrator:opportunity.score.buildSimplicityScore" : "fallback:build_difficulty";
       sources.source_evidence = evidenceClaims.length > 0 ? "orchestrator:candidate.evidence" : "fallback:source_evidence";
 
       for (const [field, source] of Object.entries(sources) as Array<[keyof PlannedDiscoveredProblem, string]>) {
@@ -351,7 +411,7 @@ export function buildDiscoveryPersistencePlan(
       }
 
       const uniqueFallbackFields = [...new Set(fallbackFields)];
-      return { row, sources, scoreMappings, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "seed_fallback") };
+      return { row, sources, scoreMappings, buildDifficultyDiagnostic, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "seed_fallback") };
     });
   };
 
@@ -377,6 +437,7 @@ export function buildDiscoveryPersistencePlan(
       sources[field] = source;
       if (source.startsWith("fallback:")) fallbackFields.push(field);
     };
+    const buildDifficultyDiagnostic = resolveBuildDifficultyForSynthesisCandidate(candidate, opportunities);
     const title = text(candidate.synthesizedProblemTitle, `Synthesized Market Problem ${rowIndex + 1}`);
     const summary = text(candidate.synthesizedSummary, `${title} appears in problem synthesis signals and needs validation before persistence.`);
     const affected = joinUnique([...candidate.affectedMarkets, ...candidate.affectedAudiences], DEFAULT_NICHES);
@@ -398,7 +459,7 @@ export function buildDiscoveryPersistencePlan(
       source_quality_score: mapSynthesisScore("source_quality_score", candidate.scoreBreakdown?.sourceQualityScore ?? candidate.confidence, 7),
       opportunity_score: mapSynthesisOpportunityScore(candidate.scoreBreakdown?.opportunityScore ?? candidate.scoreBreakdown?.totalScore, 70),
       problem_cluster: text(candidate.canonicalProblemCluster, "General Workflow"),
-      build_difficulty: "Medium",
+      build_difficulty: buildDifficultyDiagnostic.persistedValue,
       source_evidence: evidence,
     };
     mark("discovery_id", discoveryId ? "planner:provided_placeholder" : "fallback:discovery_id_placeholder");
@@ -416,10 +477,10 @@ export function buildDiscoveryPersistencePlan(
     mark("source_quality_score", scoreMappings.source_quality_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.sourceQualityScore_or_confidence" : "fallback:source_quality_score");
     mark("opportunity_score", scoreMappings.opportunity_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.opportunityScore" : "fallback:opportunity_score");
     mark("problem_cluster", row.problem_cluster === "General Workflow" ? "fallback:problem_cluster" : "orchestrator:problem_synthesis.canonicalProblemCluster");
-    mark("build_difficulty", "fallback:build_difficulty");
+    mark("build_difficulty", buildDifficultyDiagnostic.source === "mapped_opportunity_signal" ? "orchestrator:opportunity.score.buildSimplicityScore:mapped_by_normalized_title" : "fallback:build_difficulty");
     mark("source_evidence", evidence === DEFAULT_EVIDENCE ? "fallback:source_evidence" : "orchestrator:problem_synthesis.conciseEvidenceSummary");
     const uniqueFallbackFields = [...new Set(fallbackFields)];
-    return { row, sources, scoreMappings, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "problem_synthesis") };
+    return { row, sources, scoreMappings, buildDifficultyDiagnostic, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "problem_synthesis") };
   });
 
   const rows = synthesisCandidates.length > 0 ? buildSynthesisRows() : buildSeedRows();
@@ -453,6 +514,7 @@ export function buildDiscoveryPersistencePlan(
       fallback_fields_by_row: rows.map(({ fallbackFields }, rowIndex) => ({ rowIndex, fields: fallbackFields })),
       field_sources_by_row: rows.map(({ sources }, rowIndex) => ({ rowIndex, sources })),
       score_mappings_by_row: rows.map(({ scoreMappings }, rowIndex) => ({ rowIndex, mappings: scoreMappings })),
+      build_difficulty_by_row: rows.map(({ buildDifficultyDiagnostic }, rowIndex) => ({ rowIndex, diagnostic: buildDifficultyDiagnostic })),
       warnings,
     },
   };
