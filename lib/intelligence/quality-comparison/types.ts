@@ -55,6 +55,7 @@ export type QualityComparisonDiagnostics = {
   buildDifficultyFallbackOnlyRowCount: number;
   buildDifficultyFallbackOnlyRows: number[];
   qualityGateIssueCount: number;
+  buildDifficultyMappingByRow: Array<{ rowIndex: number; diagnostic: { source: string; opportunityCandidateId: string | null; rawBuildSimplicityScore: number | null; persistedValue: string; attribution: string } }>;
   marketCoverage: {
     legacyUniqueAffectedNicheTokens: string[];
     modularUniqueAffectedNicheTokens: string[];
@@ -67,6 +68,20 @@ export type QualityComparisonDiagnostics = {
     formula: string;
     representsCandidateCompressionRatio: boolean;
     representsTrueRowQuality: boolean;
+    explanation: string;
+  };
+  synthesisCompressionRatio: {
+    score: number;
+    formula: string;
+    explanation: string;
+  };
+  rowLevelSynthesisReadiness: {
+    score: number;
+    plannedRowCount: number;
+    acceptedRowCount: number;
+    rejectedRowCount: number;
+    issueCount: number;
+    formula: string;
     explanation: string;
   };
   notes: string[];

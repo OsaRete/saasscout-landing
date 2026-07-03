@@ -331,6 +331,7 @@ export function buildDiscoveryQualityComparison({
       buildDifficultyFallbackOnlyRowCount: buildDifficultyFallbackOnlyRows.length,
       buildDifficultyFallbackOnlyRows,
       qualityGateIssueCount: quality.summary.issue_count,
+      buildDifficultyMappingByRow: plan.diagnostics.build_difficulty_by_row,
       marketCoverage: {
         legacyUniqueAffectedNicheTokens: affectedNicheTokens(legacyProblems),
         modularUniqueAffectedNicheTokens: affectedNicheTokens(plan.rows),
@@ -343,13 +344,27 @@ export function buildDiscoveryQualityComparison({
         formula: "modularCandidateCount === 0 ? 0 : (modularSynthesisCandidateCount / max(1, modularCandidateCount)) * 100",
         representsCandidateCompressionRatio: true,
         representsTrueRowQuality: false,
-        explanation: "This diagnostic currently measures candidate compression from upstream opportunity candidates into problem synthesis candidates, not persisted row quality. Lower percentages can be expected when many engine candidates collapse into fewer high-quality problem candidates.",
+        explanation: "Legacy diagnostic retained for continuity: this value is the synthesis compression ratio, not persisted row quality. Lower percentages can be expected when many engine candidates collapse into fewer high-quality problem candidates.",
+      },
+      synthesisCompressionRatio: {
+        score: modularSynthesisScore,
+        formula: "modularCandidateCount === 0 ? 0 : (modularSynthesisCandidateCount / max(1, modularCandidateCount)) * 100",
+        explanation: "Clear name for the legacy synthesis_completeness value: percentage of upstream opportunity candidates represented by problem synthesis candidates.",
+      },
+      rowLevelSynthesisReadiness: {
+        score: modularQualityGateScore,
+        plannedRowCount: plan.rows.length,
+        acceptedRowCount: quality.summary.accepted_row_count,
+        rejectedRowCount: quality.summary.rejected_row_count,
+        issueCount: quality.summary.issue_count,
+        formula: "plannedRowCount === 0 ? 0 : (acceptedRowCount / plannedRowCount) * 100 - issueCount * 5",
+        explanation: "Diagnostic-only row readiness derived from planned rows and persistence quality gates; it does not control production persistence.",
       },
       notes: [
         "Quality comparison is diagnostic-only and has no production persistence side effects.",
         "Scores are deterministic heuristics intended to measure migration parity before replacing the legacy pipeline.",
-        "fallback_usage counts every planned persistence field whose source is marked fallback:*; build_difficulty may be the only fallback when synthesis rows intentionally use the safe Medium attribution.",
-        "synthesis_completeness currently represents candidate compression ratio, not true row quality; compression is expected when many engine candidates collapse into fewer high-quality problem candidates.",
+        "fallback_usage counts only planned persistence fields whose source remains fallback:* after deterministic mapping; mapped build_difficulty signals are not counted as missing information.",
+        "synthesis_completeness is retained for continuity, while synthesisCompressionRatio names the same compression metric more clearly and rowLevelSynthesisReadiness reports row quality-gate readiness.",
       ],
     },
   };

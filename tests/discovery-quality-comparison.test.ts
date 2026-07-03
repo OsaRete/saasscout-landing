@@ -212,13 +212,45 @@ test("quality comparison diagnostics explain market coverage fallback fields and
   assert.deepEqual(comparison.diagnostics.marketCoverage.legacyUniqueAffectedNicheTokens, ["agencies", "b2b consultants", "client services"]);
   assert.deepEqual(comparison.diagnostics.marketCoverage.modularUniqueAffectedNicheTokens, ["agency services", "small agencies"]);
   assert.equal(comparison.diagnostics.marketCoverage.calculation, "min(1, unique affected_niches token count / 5) * 100");
-  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, ["build_difficulty"]);
-  assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: ["build_difficulty"] }]);
-  assert.equal(comparison.diagnostics.buildDifficultyFallbackOnlyRowCount, 1);
-  assert.deepEqual(comparison.diagnostics.buildDifficultyFallbackOnlyRows, [0]);
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, []);
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: [] }]);
+  assert.equal(comparison.diagnostics.buildDifficultyFallbackOnlyRowCount, 0);
+  assert.deepEqual(comparison.diagnostics.buildDifficultyFallbackOnlyRows, []);
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "mapped_opportunity_signal");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.rawBuildSimplicityScore, 8);
   assert.equal(comparison.diagnostics.synthesisCompleteness.modularCandidateCount, 1);
   assert.equal(comparison.diagnostics.synthesisCompleteness.modularSynthesisCandidateCount, 1);
   assert.equal(comparison.diagnostics.synthesisCompleteness.representsCandidateCompressionRatio, true);
   assert.equal(comparison.diagnostics.synthesisCompleteness.representsTrueRowQuality, false);
-  assert.match(comparison.diagnostics.synthesisCompleteness.explanation, /candidate compression/);
+  assert.match(comparison.diagnostics.synthesisCompleteness.explanation, /compression ratio/);
+  assert.equal(comparison.diagnostics.synthesisCompressionRatio.score, comparison.modularMetrics.synthesisCompletenessScore);
+  assert.equal(comparison.diagnostics.rowLevelSynthesisReadiness.plannedRowCount, 1);
+});
+
+test("quality comparison fallback usage still counts build difficulty when synthesis attribution is unclear", () => {
+  const comparison = buildDiscoveryQualityComparison({
+    legacyProblems,
+    orchestratorResult: createResult({
+      outputs: {
+        ...createResult().outputs,
+        opportunityDetection: {
+          candidates: [
+            {
+              id: "opp-other",
+              title: "Different opportunity title",
+              normalizedTitle: "different opportunity title",
+              context: { market: "Agency services", audience: "Small agencies", nicheCategory: "Client Operations", primaryTheme: "Client Operations", painCandidateIds: ["pain-1"], patternCandidateIds: [], trendCandidateIds: [] },
+              marketContext: { primaryProblem: "Different opportunity signal.", underservedSignals: [], existingSolutionSignals: [] },
+              evidence: [],
+              score: { totalScore: 8.4, problemUrgencyScore: 8, marketPullScore: 7.8, buildSimplicityScore: 8, evidenceScore: 8.6 },
+            },
+          ],
+        },
+      },
+    } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, ["build_difficulty"]);
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: ["build_difficulty"] }]);
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "fallback");
 });
