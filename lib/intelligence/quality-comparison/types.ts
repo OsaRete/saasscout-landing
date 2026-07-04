@@ -56,6 +56,7 @@ export type QualityComparisonDiagnostics = {
   buildDifficultyFallbackOnlyRows: number[];
   qualityGateIssueCount: number;
   buildDifficultyMappingByRow: Array<{ rowIndex: number; diagnostic: { source: string; opportunityCandidateId: string | null; rawBuildSimplicityScore: number | null; persistedValue: string; attribution: string } }>;
+  affectedNicheEnrichmentByRow: Array<{ rowIndex: number; diagnostic: { source: string; baseValueCount: number; enrichedValueCount: number; addedValues: string[]; persistedValue: string; fallbackAvoided: boolean } }>;
   marketCoverage: {
     legacyUniqueAffectedNicheTokens: string[];
     modularUniqueAffectedNicheTokens: string[];
