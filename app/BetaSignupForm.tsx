@@ -53,15 +53,22 @@ export default function BetaSignupForm() {
     <form
       id="join-beta"
       onSubmit={handleSubmit}
-      className="mt-10 max-w-xl mx-auto bg-[#0B1020] border border-white/10 rounded-2xl p-6 text-left shadow-2xl"
+      className="mx-auto mt-10 max-w-xl rounded-[1.75rem] border border-white/10 bg-[#0B1020]/95 p-6 text-left shadow-2xl shadow-black/30"
     >
+      <div className="mb-6">
+        <p className="text-sm font-semibold text-violet-200">Request beta access</p>
+        <p className="mt-2 text-sm leading-6 text-gray-400">
+          Tell us who you are and which market you want to investigate first.
+        </p>
+      </div>
+
       <div className="grid gap-4">
         <input
           type="text"
           placeholder="Your name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
+          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-gray-500 focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -70,7 +77,7 @@ export default function BetaSignupForm() {
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
+          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-gray-500 focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -78,7 +85,7 @@ export default function BetaSignupForm() {
           placeholder="Your role: founder, developer, indie hacker..."
           value={role}
           onChange={(e) => setRole(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
+          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-gray-500 focus:border-violet-500 focus:bg-white/10"
         />
 
         <input
@@ -86,13 +93,13 @@ export default function BetaSignupForm() {
           placeholder="Niche you're interested in"
           value={niche}
           onChange={(e) => setNiche(e.target.value)}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-violet-500 focus:bg-white/10"
+          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-gray-500 focus:border-violet-500 focus:bg-white/10"
         />
 
         <button
           type="submit"
           disabled={loading}
-          className="bg-violet-600 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60 px-6 py-3 rounded-xl font-semibold transition shadow-lg shadow-violet-600/20"
+          className="rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white shadow-lg shadow-violet-600/20 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? "Joining..." : "Join Beta"}
         </button>
