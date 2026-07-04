@@ -64,7 +64,26 @@ export default function AppShell({
           </nav>
         </aside>
 
-        <section className="flex-1 px-6 py-8 lg:px-10">{children}</section>
+        <section className="flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
+          <div className="mb-6 flex items-center justify-between gap-4 lg:hidden">
+            <Link href="/dashboard" className="flex items-center">
+              <Image
+                src="/brand/logo-main.png"
+                alt="SaaSScout"
+                width={154}
+                height={44}
+                className="h-9 w-auto"
+              />
+            </Link>
+            <Link
+              href={active}
+              className="rounded-xl border border-violet-500/25 bg-violet-600/20 px-3 py-2 text-xs font-semibold text-white"
+            >
+              Workspace
+            </Link>
+          </div>
+          {children}
+        </section>
       </div>
     </main>
   );

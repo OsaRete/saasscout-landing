@@ -1,11 +1,19 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../supabase";
-import { Button, EmptyState, LoadingState } from "../../components/ui";
+import AppShell from "../../components/app-shell";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  LoadingState,
+  MetricCard,
+  PageHeader,
+  Panel,
+  TextInput,
+} from "../../components/ui";
 
 type Scan = {
   id: string;
@@ -138,7 +146,7 @@ function SourcesContent() {
 
   if (!scanId || !scan) {
     return (
-      <main className="min-h-screen bg-[#050816] px-6 py-20 text-white">
+      <AppShell active="/results">
         <div className="mx-auto max-w-4xl">
           <EmptyState
             icon="!"
@@ -147,88 +155,38 @@ function SourcesContent() {
             primaryAction={<Button href="/results">Back to Results</Button>}
           />
         </div>
-      </main>
+      </AppShell>
     );
   }
 
   return (
-    <main className="min-h-screen bg-[#050816] text-white">
-      <div className="mx-auto max-w-7xl px-6 py-10">
-        <div className="flex items-center justify-between">
-          <Link href="/dashboard">
-            <Image
-              src="/brand/logo-main.png"
-              alt="SaaSScout"
-              width={170}
-              height={48}
-              className="h-10 w-auto"
-            />
-          </Link>
+    <AppShell active="/results">
+      <div className="mx-auto max-w-7xl">
+        <PageHeader
+          eyebrow="External Source Intelligence"
+          title="Sources used for this scan."
+          description="Review the external market signals SaaSScout collected to support this scan and generate opportunity insights."
+          actions={
+            <>
+              <Button href="/results" variant="secondary">Results</Button>
+              <Button href="/scan">New Scan</Button>
+            </>
+          }
+        />
 
-          <div className="flex gap-3">
-            <Link
-              href="/results"
-              className="rounded-xl border border-white/10 px-4 py-2 text-sm text-gray-300 hover:bg-white/5"
-            >
-              Results
-            </Link>
-
-            <Link
-              href="/scan"
-              className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
-            >
-              New Scan
-            </Link>
-          </div>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Badge tone="neutral">Market: {scan.market || "Evidence-based scan"}</Badge>
+          <Badge tone="neutral">Created {formatDate(scan.created_at)}</Badge>
+          <Badge tone="cyan">{sources.length} sources</Badge>
         </div>
 
-        <section className="mt-14 rounded-[2rem] border border-white/10 bg-gradient-to-br from-white/[0.05] to-cyan-600/[0.08] p-8 shadow-2xl md:p-12">
-          <p className="text-sm uppercase tracking-widest text-cyan-300">
-            External Source Intelligence
-          </p>
-
-          <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
-            Sources used for this scan.
-          </h1>
-
-          <p className="mt-5 max-w-3xl text-gray-400">
-            Review the external market signals SaaSScout collected to support
-            this scan and generate opportunity insights.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs text-gray-300">
-              Market: {scan.market || "Evidence-based scan"}
-            </span>
-
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs text-gray-300">
-              Created {formatDate(scan.created_at)}
-            </span>
-
-            <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs text-cyan-200">
-              {sources.length} sources
-            </span>
-          </div>
-        </section>
-
-        <div className="mt-8 grid gap-5 md:grid-cols-3">
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Total sources</p>
-            <h2 className="mt-3 text-4xl font-bold">{sources.length}</h2>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Average source score</p>
-            <h2 className="mt-3 text-4xl font-bold">{averageScore}</h2>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Source types</p>
-            <h2 className="mt-3 text-4xl font-bold">{sourceTypes.length}</h2>
-          </div>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          <MetricCard label="Total sources" value={sources.length} tone="cyan" />
+          <MetricCard label="Average source score" value={averageScore} tone="cyan" />
+          <MetricCard label="Source types" value={sourceTypes.length} tone="violet" />
         </div>
 
-        <div className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-5">
+        <Panel className="mt-8 p-5">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-bold">Collected sources</h2>
@@ -237,28 +195,23 @@ function SourcesContent() {
               </p>
             </div>
 
-            <input
+            <TextInput
               type="text"
               placeholder="Search sources..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-cyan-500 md:max-w-sm"
+              className="md:max-w-sm"
             />
           </div>
 
           {sourceTypes.length > 0 && (
             <div className="mt-5 flex flex-wrap gap-2">
               {sourceTypes.map((type) => (
-                <span
-                  key={type}
-                  className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-200"
-                >
-                  {type}
-                </span>
+                <Badge key={type} tone="cyan">{type}</Badge>
               ))}
             </div>
           )}
-        </div>
+        </Panel>
 
         <section className="mt-6">
           {sources.length === 0 ? (
@@ -306,16 +259,14 @@ function SourcesContent() {
                   </p>
 
                   <div className="mt-6 flex flex-wrap gap-3">
-                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-300">
-                      {source.source_type}
-                    </span>
+                    <Badge tone="neutral">{source.source_type}</Badge>
 
                     {source.url && (
                       <a
                         href={source.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500"
+                        className="inline-flex items-center justify-center rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050816]"
                       >
                         Open source
                       </a>
@@ -327,7 +278,7 @@ function SourcesContent() {
           )}
         </section>
       </div>
-    </main>
+    </AppShell>
   );
 }
 

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 type Tone = "violet" | "cyan" | "green" | "neutral" | "red";
 
@@ -9,7 +9,8 @@ type ButtonProps = {
   href?: string;
   onClick?: () => void;
   disabled?: boolean;
-  variant?: "primary" | "secondary" | "ghost" | "cyan";
+  variant?: "primary" | "secondary" | "ghost" | "cyan" | "destructive";
+  type?: "button" | "submit" | "reset";
 };
 
 const buttonVariants = {
@@ -20,6 +21,8 @@ const buttonVariants = {
   ghost: "text-violet-300 hover:bg-violet-500/10 hover:text-violet-200",
   cyan:
     "border border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20",
+  destructive:
+    "border border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20",
 };
 
 export function Button({
@@ -29,8 +32,9 @@ export function Button({
   onClick,
   disabled,
   variant = "primary",
+  type = "button",
 }: ButtonProps) {
-  const classes = `inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold transition ${buttonVariants[variant]} disabled:cursor-not-allowed disabled:opacity-60 ${className}`;
+  const classes = `inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050816] ${buttonVariants[variant]} disabled:cursor-not-allowed disabled:opacity-60 ${className}`;
 
   if (href) {
     return (
@@ -41,9 +45,42 @@ export function Button({
   }
 
   return (
-    <button onClick={onClick} disabled={disabled} className={classes}>
+    <button type={type} onClick={onClick} disabled={disabled} className={classes}>
       {children}
     </button>
+  );
+}
+
+export const fieldClasses =
+  "w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-60";
+
+export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return <input {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+}
+
+export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+}
+
+export function SelectInput(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+}
+
+export function Field({
+  label,
+  helper,
+  children,
+}: {
+  label: string;
+  helper?: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-medium text-gray-300">
+      <span>{label}</span>
+      {children}
+      {helper && <span className="text-xs leading-relaxed text-gray-500">{helper}</span>}
+    </label>
   );
 }
 

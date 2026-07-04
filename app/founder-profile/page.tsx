@@ -1,9 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import AppShell from "../../components/app-shell";
+import {
+  Button,
+  Field,
+  LoadingState,
+  Notice,
+  PageHeader,
+  Panel,
+  TextArea,
+  TextInput,
+} from "../../components/ui";
 
 export default function FounderProfilePage() {
   const router = useRouter();
@@ -87,92 +97,75 @@ export default function FounderProfilePage() {
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading founder profile...</p>
-      </main>
+      <LoadingState
+        title="Loading founder profile"
+        description="Preparing your founder matching preferences."
+      />
     );
   }
 
   return (
-    <main className="min-h-screen bg-[#050816] text-white">
-      <div className="mx-auto max-w-4xl px-6 py-10">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Founder Profile</h1>
+    <AppShell active="/dashboard">
+      <div className="mx-auto max-w-4xl">
+        <PageHeader
+          eyebrow="Founder Matching V1"
+          title="Founder Profile"
+          description="Tell SaaSScout what kind of founder you are so opportunity intelligence can be matched to your skills, budget, time, and preferred business model."
+          actions={<Button href="/dashboard" variant="secondary">Dashboard</Button>}
+        />
 
-          <Link
-            href="/dashboard"
-            className="rounded-xl border border-white/10 px-4 py-2 text-sm text-gray-300 hover:bg-white/5"
-          >
-            Dashboard
-          </Link>
-        </div>
+        <Panel className="mt-8">
+          <form onSubmit={handleSave} className="grid gap-5">
+            <Field label="Experience level">
+              <TextInput
+                value={experienceLevel}
+                onChange={(e) => setExperienceLevel(e.target.value)}
+                placeholder="Beginner, intermediate, advanced..."
+              />
+            </Field>
 
-        <section className="mt-10 rounded-[2rem] border border-white/10 bg-[#0B1020] p-8 shadow-2xl">
-          <p className="text-sm uppercase tracking-widest text-violet-400">
-            Founder Matching V1
-          </p>
+            <Field label="Technical skills">
+              <TextArea
+                value={technicalSkills}
+                onChange={(e) => setTechnicalSkills(e.target.value)}
+                placeholder="React, Next.js, Python, no-code, marketing, sales..."
+                className="min-h-[130px]"
+              />
+            </Field>
 
-          <h2 className="mt-4 text-4xl font-bold">
-            Tell SaaSScout what kind of founder you are.
-          </h2>
+            <Field label="Budget level">
+              <TextInput
+                value={budgetLevel}
+                onChange={(e) => setBudgetLevel(e.target.value)}
+                placeholder="No budget, low, medium, high..."
+              />
+            </Field>
 
-          <p className="mt-4 text-gray-400">
-            This profile will help SaaSScout match opportunities to your skills,
-            budget, time, and preferred business model.
-          </p>
+            <Field label="Preferred business model">
+              <TextInput
+                value={businessModel}
+                onChange={(e) => setBusinessModel(e.target.value)}
+                placeholder="SaaS, micro-SaaS, agency, marketplace..."
+              />
+            </Field>
 
-          <form onSubmit={handleSave} className="mt-8 grid gap-5">
-            <input
-              value={experienceLevel}
-              onChange={(e) => setExperienceLevel(e.target.value)}
-              placeholder="Experience level: beginner, intermediate, advanced..."
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 outline-none focus:border-violet-500"
-            />
+            <Field label="Available hours per week">
+              <TextInput
+                type="number"
+                value={hoursPerWeek}
+                onChange={(e) => setHoursPerWeek(e.target.value)}
+                placeholder="Available hours per week"
+              />
+            </Field>
 
-            <textarea
-              value={technicalSkills}
-              onChange={(e) => setTechnicalSkills(e.target.value)}
-              placeholder="Technical skills: React, Next.js, Python, no-code, marketing, sales..."
-              className="min-h-[130px] rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 outline-none focus:border-violet-500"
-            />
-
-            <input
-              value={budgetLevel}
-              onChange={(e) => setBudgetLevel(e.target.value)}
-              placeholder="Budget level: no budget, low, medium, high..."
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 outline-none focus:border-violet-500"
-            />
-
-            <input
-              value={businessModel}
-              onChange={(e) => setBusinessModel(e.target.value)}
-              placeholder="Preferred business model: SaaS, micro-SaaS, agency, marketplace..."
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 outline-none focus:border-violet-500"
-            />
-
-            <input
-              type="number"
-              value={hoursPerWeek}
-              onChange={(e) => setHoursPerWeek(e.target.value)}
-              placeholder="Available hours per week"
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 outline-none focus:border-violet-500"
-            />
-
-            <button
-              disabled={saving}
-              className="rounded-2xl bg-violet-600 px-6 py-4 font-bold text-white hover:bg-violet-500 disabled:opacity-60"
-            >
+            <Button type="submit" disabled={saving} className="rounded-2xl px-6 py-4 font-bold">
               {saving ? "Saving..." : "Save Founder Profile"}
-            </button>
+            </Button>
 
-            {message && (
-              <p className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-200">
-                {message}
-              </p>
-            )}
+            {message && <Notice tone="success">{message}</Notice>}
           </form>
-        </section>
+        </Panel>
       </div>
-    </main>
+    </AppShell>
   );
 }
