@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -66,6 +66,90 @@ function splitByPipe(value: string | null) {
     .split("|")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function getScoreTone(score: number) {
+  if (score >= 80) {
+    return {
+      ring: "border-cyan-300/40 bg-cyan-300/15 text-cyan-100",
+      bar: "from-cyan-300 via-violet-300 to-fuchsia-300",
+      label: "Validated",
+    };
+  }
+
+  if (score >= 65) {
+    return {
+      ring: "border-violet-300/40 bg-violet-400/15 text-violet-100",
+      bar: "from-violet-300 via-cyan-300 to-blue-300",
+      label: "Promising",
+    };
+  }
+
+  return {
+    ring: "border-white/15 bg-white/[0.06] text-gray-100",
+    bar: "from-gray-300 via-violet-300 to-cyan-300",
+    label: "Emerging",
+  };
+}
+
+function normalizeScore(score: number) {
+  return Math.max(0, Math.min(100, Number(score) || 0));
+}
+
+function InfoBadge({
+  label,
+  value,
+  tone = "violet",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "violet" | "cyan" | "slate" | "amber";
+}) {
+  const toneClass = {
+    violet: "border-violet-400/30 bg-violet-400/10 text-violet-100",
+    cyan: "border-cyan-400/30 bg-cyan-400/10 text-cyan-100",
+    slate: "border-white/10 bg-white/[0.05] text-gray-200",
+    amber: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+  }[tone];
+
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold ${toneClass}`}
+    >
+      <span className="text-[10px] uppercase tracking-[0.22em] opacity-70">
+        {label}
+      </span>
+      <span>{value}</span>
+    </span>
+  );
+}
+
+function IntelligencePanel({
+  eyebrow,
+  title,
+  children,
+  accent = "violet",
+}: {
+  eyebrow: string;
+  title: string;
+  children: ReactNode;
+  accent?: "violet" | "cyan";
+}) {
+  const accentClass =
+    accent === "cyan"
+      ? "from-cyan-300/25 to-cyan-300/0 text-cyan-200"
+      : "from-violet-300/25 to-violet-300/0 text-violet-200";
+
+  return (
+    <div className="group rounded-2xl border border-white/10 bg-white/[0.045] p-5 transition hover:border-white/20 hover:bg-white/[0.065]">
+      <div className={`mb-4 h-1 w-16 rounded-full bg-gradient-to-r ${accentClass}`} />
+      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-500">
+        {eyebrow}
+      </p>
+      <h4 className="mt-2 text-base font-semibold text-white">{title}</h4>
+      <div className="mt-3 text-sm leading-relaxed text-gray-300">{children}</div>
+    </div>
+  );
 }
 
 export default function ResultsPage() {
@@ -148,18 +232,18 @@ export default function ResultsPage() {
 
       let sourcesData: ScanSource[] = [];
 
-if (scanIds.length > 0) {
-  const { data, error } = await supabase
-    .from("scan_sources")
-    .select("*")
-    .in("scan_id", scanIds);
+      if (scanIds.length > 0) {
+        const { data, error } = await supabase
+          .from("scan_sources")
+          .select("*")
+          .in("scan_id", scanIds);
 
-  if (error) {
-    console.error(error);
-  } else {
-    sourcesData = data || [];
-  }
-}
+        if (error) {
+          console.error(error);
+        } else {
+          sourcesData = data || [];
+        }
+      }
 
       setScans(scansData || []);
       setOpportunities(opportunitiesData || []);
@@ -191,10 +275,10 @@ if (scanIds.length > 0) {
   function getSourcesForScan(scanId: string) {
     return scanSources.filter((source) => source.scan_id === scanId);
   }
-  
+
   function getSourceTypesForScan(scanId: string) {
     const sources = getSourcesForScan(scanId);
-  
+
     return Array.from(
       new Set(
         sources.map((source) => source.source_name || source.source_type)
@@ -575,96 +659,180 @@ if (scanIds.length > 0) {
                           const saved = isIdeaSaved(opportunity.id);
                           const saving = savingId === opportunity.id;
 
-                          return (
-                            <div
-                              key={opportunity.id}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] p-6"
-                            >
-                              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                                <div>
-                                  <h3 className="text-2xl font-bold">
-                                    {opportunity.title}
-                                  </h3>
+                          const scoreValue = normalizeScore(opportunity.score);
+                          const scoreTone = getScoreTone(scoreValue);
 
-                                  <p className="mt-3 max-w-3xl text-sm leading-relaxed text-gray-400">
+                          return (
+                            <article
+                              key={opportunity.id}
+                              className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.13),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.025))] shadow-2xl shadow-violet-950/30 transition hover:border-cyan-300/30 hover:shadow-cyan-950/30"
+                            >
+                              <div className="border-b border-white/10 p-6 md:p-8">
+                                <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                                  <div className="max-w-4xl">
+                                    <div className="flex flex-wrap gap-2.5">
+                                      <InfoBadge
+                                        label="Score"
+                                        value={scoreTone.label}
+                                        tone="cyan"
+                                      />
+                                      {evidenceAnalysis?.confidence_score && (
+                                        <InfoBadge
+                                          label="Confidence"
+                                          value={evidenceAnalysis.confidence_score}
+                                          tone="violet"
+                                        />
+                                      )}
+                                      <InfoBadge
+                                        label="Difficulty"
+                                        value={opportunity.difficulty}
+                                        tone="amber"
+                                      />
+                                      {(scan.market || evidenceAnalysis?.inferred_market) && (
+                                        <InfoBadge
+                                          label="Market"
+                                          value={
+                                            scan.market ||
+                                            evidenceAnalysis?.inferred_market ||
+                                            "Market"
+                                          }
+                                          tone="slate"
+                                        />
+                                      )}
+                                    </div>
+
+                                    <p className="mt-6 text-sm font-semibold uppercase tracking-[0.28em] text-cyan-300">
+                                      Validated opportunity intelligence
+                                    </p>
+
+                                    <h3 className="mt-3 text-3xl font-bold tracking-tight text-white md:text-4xl">
+                                      {opportunity.title}
+                                    </h3>
+                                  </div>
+
+                                  <div
+                                    className={`shrink-0 rounded-3xl border px-6 py-5 text-center ${scoreTone.ring}`}
+                                  >
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] opacity-75">
+                                      Opportunity Score
+                                    </p>
+                                    <div className="mt-3 flex items-end justify-center gap-1">
+                                      <span className="text-5xl font-black leading-none">
+                                        {scoreValue}
+                                      </span>
+                                      <span className="pb-1 text-sm opacity-70">/100</span>
+                                    </div>
+                                    <div className="mt-4 h-2 w-44 overflow-hidden rounded-full bg-black/30">
+                                      <div
+                                        className={`h-full rounded-full bg-gradient-to-r ${scoreTone.bar}`}
+                                        style={{ width: `${scoreValue}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="p-6 md:p-8">
+                                <section className="rounded-3xl border border-cyan-300/20 bg-cyan-300/[0.07] p-6">
+                                  <p className="text-xs font-semibold uppercase tracking-[0.26em] text-cyan-200">
+                                    Insight summary
+                                  </p>
+                                  <h4 className="mt-3 text-xl font-semibold text-white">
+                                    What problem exists and why it matters
+                                  </h4>
+                                  <p className="mt-4 max-w-5xl text-base leading-8 text-gray-200">
                                     {opportunity.pain}
                                   </p>
-                                </div>
+                                </section>
 
-                                <div className="w-fit rounded-2xl border border-violet-500/30 bg-violet-500/10 px-5 py-3 text-center">
-                                  <p className="text-2xl font-bold">
-                                    {opportunity.score}
-                                  </p>
-                                  <p className="text-xs text-gray-400">
-                                    score
-                                  </p>
+                                <section className="mt-6 grid gap-4 lg:grid-cols-12">
+                                  <div className="lg:col-span-5">
+                                    <IntelligencePanel
+                                      eyebrow="Primary buyer"
+                                      title="Target customer"
+                                      accent="cyan"
+                                    >
+                                      {opportunity.customer}
+                                    </IntelligencePanel>
+                                  </div>
+                                  <div className="lg:col-span-7">
+                                    <IntelligencePanel
+                                      eyebrow="Initial product wedge"
+                                      title="Suggested MVP"
+                                    >
+                                      {opportunity.mvp}
+                                    </IntelligencePanel>
+                                  </div>
+                                  <div className="lg:col-span-7">
+                                    <IntelligencePanel
+                                      eyebrow="Monetization signal"
+                                      title="Pricing direction"
+                                      accent="cyan"
+                                    >
+                                      {opportunity.pricing}
+                                    </IntelligencePanel>
+                                  </div>
+                                  <div className="lg:col-span-5">
+                                    <IntelligencePanel
+                                      eyebrow="Execution load"
+                                      title="Build difficulty"
+                                    >
+                                      {opportunity.difficulty}
+                                    </IntelligencePanel>
+                                  </div>
+                                </section>
+
+                                {sources.length > 0 && (
+                                  <section className="mt-6 rounded-3xl border border-white/10 bg-black/20 p-6">
+                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                      <div>
+                                        <p className="text-xs font-semibold uppercase tracking-[0.26em] text-violet-200">
+                                          Evidence used in this scan
+                                        </p>
+                                        <h4 className="mt-2 text-xl font-semibold text-white">
+                                          {sources.length} collected source
+                                          {sources.length === 1 ? "" : "s"} supporting the opportunity context
+                                        </h4>
+                                      </div>
+                                      <Link
+                                        href={`/sources?scanId=${scan.id}`}
+                                        className="rounded-full border border-cyan-300/30 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/10"
+                                      >
+                                        Review evidence
+                                      </Link>
+                                    </div>
+                                  </section>
+                                )}
+
+                                <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                                  <Link
+                                    href={`/opportunity/${opportunity.id}`}
+                                    className="rounded-2xl bg-gradient-to-r from-violet-600 to-cyan-500 px-5 py-3 text-center font-semibold text-white shadow-lg shadow-violet-950/40 transition hover:from-violet-500 hover:to-cyan-400"
+                                  >
+                                    View Intelligence Report
+                                  </Link>
+
+                                  <Link
+                                    href={`/sources?scanId=${scan.id}`}
+                                    className="rounded-2xl border border-cyan-400/25 px-5 py-3 text-center font-semibold text-cyan-100 transition hover:bg-cyan-400/10"
+                                  >
+                                    External Sources
+                                  </Link>
+
+                                  <button
+                                    onClick={() => handleSaveIdea(opportunity.id)}
+                                    disabled={saving || saved}
+                                    className="rounded-2xl border border-white/10 px-5 py-3 font-semibold text-gray-200 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {saving
+                                      ? "Saving..."
+                                      : saved
+                                      ? "Saved"
+                                      : "Save Idea"}
+                                  </button>
                                 </div>
                               </div>
-
-                              <div className="mt-6 grid gap-4 md:grid-cols-4">
-                                <div className="rounded-xl bg-white/[0.04] p-4">
-                                  <p className="text-xs text-gray-500">
-                                    Customer
-                                  </p>
-                                  <p className="mt-2 text-sm text-gray-200">
-                                    {opportunity.customer}
-                                  </p>
-                                </div>
-
-                                <div className="rounded-xl bg-white/[0.04] p-4">
-                                  <p className="text-xs text-gray-500">MVP</p>
-                                  <p className="mt-2 text-sm text-gray-200">
-                                    {opportunity.mvp}
-                                  </p>
-                                </div>
-
-                                <div className="rounded-xl bg-white/[0.04] p-4">
-                                  <p className="text-xs text-gray-500">
-                                    Pricing
-                                  </p>
-                                  <p className="mt-2 text-sm text-gray-200">
-                                    {opportunity.pricing}
-                                  </p>
-                                </div>
-
-                                <div className="rounded-xl bg-white/[0.04] p-4">
-                                  <p className="text-xs text-gray-500">
-                                    Difficulty
-                                  </p>
-                                  <p className="mt-2 text-sm text-gray-200">
-                                    {opportunity.difficulty}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                                <Link
-                                  href={`/opportunity/${opportunity.id}`}
-                                  className="rounded-xl bg-violet-600 px-5 py-3 text-center font-semibold text-white hover:bg-violet-500"
-                                >
-                                  View Details
-                                </Link>
-
-                                <Link
-  href={`/sources?scanId=${scan.id}`}
-  className="rounded-xl border border-green-500/30 px-5 py-3 text-center font-semibold text-green-200 hover:bg-green-500/10"
->
-  External Sources
-</Link>
-
-                                <button
-                                  onClick={() => handleSaveIdea(opportunity.id)}
-                                  disabled={saving || saved}
-                                  className="rounded-xl border border-white/10 px-5 py-3 font-semibold text-gray-300 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {saving
-                                    ? "Saving..."
-                                    : saved
-                                    ? "Saved"
-                                    : "Save Idea"}
-                                </button>
-                              </div>
-                            </div>
+                            </article>
                           );
                         })
                       )}
