@@ -25,7 +25,7 @@ const CATEGORIES: QualityCategory[] = [
   "opportunity_completeness",
   "market_coverage",
   "fallback_usage",
-  "synthesis_completeness",
+  "row_level_synthesis_readiness",
   "quality_gate_results",
 ];
 
@@ -229,7 +229,7 @@ function marketCoverage(rows: ComparableProblem[]) {
   return clampScore(Math.min(1, niches.length / 5) * 100);
 }
 
-function metricsForRows(rows: ComparableProblem[], synthesisCompletenessScore: number, fallbackUsageScore: number, qualityGateScore: number): LegacyQualityMetrics {
+function metricsForRows(rows: ComparableProblem[], synthesisCompletenessScore: number, fallbackUsageScore: number, rowLevelSynthesisReadinessScore: number, qualityGateScore: number): LegacyQualityMetrics {
   return {
     problemCount: rows.length,
     averageTitleSpecificity: average(rows.map(titleSpecificity)),
@@ -241,6 +241,7 @@ function metricsForRows(rows: ComparableProblem[], synthesisCompletenessScore: n
     marketCoverageScore: marketCoverage(rows),
     fallbackUsageScore,
     synthesisCompletenessScore,
+    rowLevelSynthesisReadinessScore,
     qualityGateScore,
   };
 }
@@ -254,7 +255,7 @@ function pick(metrics: LegacyQualityMetrics, category: QualityCategory) {
   if (category === "opportunity_completeness") return metrics.averageOpportunityCompleteness;
   if (category === "market_coverage") return metrics.marketCoverageScore;
   if (category === "fallback_usage") return metrics.fallbackUsageScore;
-  if (category === "synthesis_completeness") return metrics.synthesisCompletenessScore;
+  if (category === "row_level_synthesis_readiness") return metrics.rowLevelSynthesisReadinessScore;
   return metrics.qualityGateScore;
 }
 
@@ -289,7 +290,7 @@ export function buildDiscoveryQualityComparison({
   const quality = evaluateDiscoveryPersistenceQuality(plan.rows, { fallbackFieldsByRow: plan.diagnostics.fallback_fields_by_row });
   const synthesisCandidateCount = orchestratorResult.outputs.problemIntelligenceSynthesis?.candidates.length || 0;
   const modularCandidateCount = orchestratorResult.outputs.opportunityDetection?.candidates.length || plan.rows.length;
-  const legacyMetrics = metricsForRows(legacyProblems, legacyProblems.length > 0 ? 100 : 0, 100, legacyProblems.length > 0 ? 100 : 0);
+  const legacyMetrics = metricsForRows(legacyProblems, legacyProblems.length > 0 ? 100 : 0, 100, legacyProblems.length > 0 ? 100 : 0, legacyProblems.length > 0 ? 100 : 0);
   const fallbackFieldCount = plan.diagnostics.fallback_fields_by_row.reduce((sum, row) => sum + row.fields.length, 0);
   const fallbackFieldsCounted = [...new Set(plan.diagnostics.fallback_fields_by_row.flatMap((row) => row.fields))].sort();
   const buildDifficultyFallbackOnlyRows = plan.diagnostics.fallback_fields_by_row
@@ -298,7 +299,7 @@ export function buildDiscoveryQualityComparison({
   const modularFallbackScore = plan.rows.length === 0 ? 0 : clampScore(100 - (fallbackFieldCount / Math.max(1, plan.rows.length * 5)) * 100);
   const modularSynthesisScore = modularCandidateCount === 0 ? 0 : clampScore((synthesisCandidateCount / Math.max(1, modularCandidateCount)) * 100);
   const modularQualityGateScore = plan.rows.length === 0 ? 0 : clampScore((quality.summary.accepted_row_count / plan.rows.length) * 100 - quality.summary.issue_count * 5);
-  const baseModularMetrics = metricsForRows(plan.rows, modularSynthesisScore, modularFallbackScore, modularQualityGateScore);
+  const baseModularMetrics = metricsForRows(plan.rows, modularSynthesisScore, modularFallbackScore, modularQualityGateScore, modularQualityGateScore);
   const modularMetrics: ModularQualityMetrics = {
     ...baseModularMetrics,
     plannedRowCount: plan.rows.length,
@@ -359,14 +360,14 @@ export function buildDiscoveryQualityComparison({
         rejectedRowCount: quality.summary.rejected_row_count,
         issueCount: quality.summary.issue_count,
         formula: "plannedRowCount === 0 ? 0 : (acceptedRowCount / plannedRowCount) * 100 - issueCount * 5",
-        explanation: "Diagnostic-only row readiness derived from planned rows and persistence quality gates; it does not control production persistence.",
+        explanation: "Diagnostic-only row readiness derived from planned synthesis rows and persistence quality gates; it is the scored synthesis-quality parity category, while quality_gate_results remains the separate persistence safety gate. It does not control production persistence.",
       },
       notes: [
         "Quality comparison is diagnostic-only and has no production persistence side effects.",
         "Scores are deterministic heuristics intended to measure migration parity before replacing the legacy pipeline.",
         "fallback_usage counts only planned persistence fields whose source remains fallback:* after deterministic mapping; mapped build_difficulty signals are not counted as missing information.",
         "affected_niches for synthesis rows is deterministically enriched from synthesis context and ranked seed market/audience/cluster diagnostics to improve modular market-coverage parity without enabling persistence.",
-        "synthesis_completeness is retained for continuity, while synthesisCompressionRatio names the same compression metric more clearly and rowLevelSynthesisReadiness reports row quality-gate readiness.",
+        "synthesis_completeness is retained for continuity diagnostics, while synthesisCompressionRatio names the same compression metric more clearly and rowLevelSynthesisReadiness replaces compression ratio as the scored synthesis parity category.",
       ],
     },
   };

@@ -67,8 +67,8 @@ function createInput(overrides: Partial<DiscoveryDecisionInput> = {}): Discovery
     },
     qualityComparison: {
       categories: [],
-      legacyMetrics: { problemCount: 1, averageTitleSpecificity: 80, averageSummaryQuality: 80, averageEvidenceQuality: 80, averageEvidenceCompactness: 100, averageScoreConsistency: 80, averageOpportunityCompleteness: 80, marketCoverageScore: 80, fallbackUsageScore: 100, synthesisCompletenessScore: 100, qualityGateScore: 100 },
-      modularMetrics: { problemCount: 3, averageTitleSpecificity: 85, averageSummaryQuality: 86, averageEvidenceQuality: 84, averageEvidenceCompactness: 100, averageScoreConsistency: 82, averageOpportunityCompleteness: 88, marketCoverageScore: 90, fallbackUsageScore: 100, synthesisCompletenessScore: 100, qualityGateScore: 100, plannedRowCount: 3, synthesisCandidateCount: 3, qualityGateAcceptedRows: 3, qualityGateRejectedRows: 0, fallbackFieldCount: 0, orchestratorWarningCount: 0 },
+      legacyMetrics: { problemCount: 1, averageTitleSpecificity: 80, averageSummaryQuality: 80, averageEvidenceQuality: 80, averageEvidenceCompactness: 100, averageScoreConsistency: 80, averageOpportunityCompleteness: 80, marketCoverageScore: 80, fallbackUsageScore: 100, synthesisCompletenessScore: 100, rowLevelSynthesisReadinessScore: 100, qualityGateScore: 100 },
+      modularMetrics: { problemCount: 3, averageTitleSpecificity: 85, averageSummaryQuality: 86, averageEvidenceQuality: 84, averageEvidenceCompactness: 100, averageScoreConsistency: 82, averageOpportunityCompleteness: 88, marketCoverageScore: 90, fallbackUsageScore: 100, synthesisCompletenessScore: 100, rowLevelSynthesisReadinessScore: 100, qualityGateScore: 100, plannedRowCount: 3, synthesisCandidateCount: 3, qualityGateAcceptedRows: 3, qualityGateRejectedRows: 0, fallbackFieldCount: 0, orchestratorWarningCount: 0 },
       overallLegacyScore: 80,
       overallModularScore: 88,
       overallWinner: "modular",
