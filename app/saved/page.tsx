@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import { Button, EmptyState, LoadingState } from "../../components/ui";
 
 type SavedIdea = {
   id: string;
@@ -187,9 +188,7 @@ export default function SavedIdeasPage() {
 
   if (loadingAuth || loadingData) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading saved ideas...</p>
-      </main>
+      <LoadingState title="Loading saved ideas" description="Preparing your validation shortlist." />
     );
   }
 
@@ -283,29 +282,18 @@ export default function SavedIdeasPage() {
 
         <section className="mt-6">
           {savedIdeas.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No saved ideas yet</h2>
-
-              <p className="mt-3 text-gray-400">
-                Save opportunities from the results page to build your
-                validation shortlist.
-              </p>
-
-              <Link
-                href="/results"
-                className="mt-6 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-500"
-              >
-                Explore Opportunities
-              </Link>
-            </div>
+            <EmptyState
+              icon="☆"
+              title="No saved ideas yet"
+              description="Save opportunities from the results page to build your validation shortlist."
+              primaryAction={<Button href="/results">Explore Opportunities</Button>}
+            />
           ) : filteredSavedOpportunities.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No matching ideas</h2>
-
-              <p className="mt-3 text-gray-400">
-                Try a different search term.
-              </p>
-            </div>
+            <EmptyState
+              icon="⌕"
+              title="No matching ideas"
+              description="Try a different search term to find saved opportunities."
+            />
           ) : (
             <div className="space-y-6">
               {filteredSavedOpportunities.map(({ savedIdea, opportunity }) => (
