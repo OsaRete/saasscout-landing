@@ -9,7 +9,7 @@ export type QualityCategory =
   | "opportunity_completeness"
   | "market_coverage"
   | "fallback_usage"
-  | "synthesis_completeness"
+  | "row_level_synthesis_readiness"
   | "quality_gate_results";
 
 export type QualityCategoryScore = {
@@ -31,6 +31,7 @@ export type LegacyQualityMetrics = {
   marketCoverageScore: number;
   fallbackUsageScore: number;
   synthesisCompletenessScore: number;
+  rowLevelSynthesisReadinessScore: number;
   qualityGateScore: number;
 };
 

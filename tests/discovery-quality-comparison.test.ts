@@ -125,6 +125,8 @@ test("quality comparison aggregates categories and selects winners", () => {
 
   assert.equal(comparison.categories.length, 10);
   assert.equal(comparison.diagnostics.categoryCount, 10);
+  assert.ok(comparison.categories.some((category) => category.category === "row_level_synthesis_readiness"));
+  assert.equal(comparison.categories.some((category) => category.category === "synthesis_completeness"), false);
   assert.ok(["legacy", "modular", "tie", "insufficient_data"].includes(comparison.overallWinner));
   assert.ok(comparison.overallLegacyScore > 0);
   assert.ok(comparison.overallModularScore > 0);
@@ -226,7 +228,45 @@ test("quality comparison diagnostics explain market coverage fallback fields and
   assert.equal(comparison.diagnostics.synthesisCompleteness.representsTrueRowQuality, false);
   assert.match(comparison.diagnostics.synthesisCompleteness.explanation, /compression ratio/);
   assert.equal(comparison.diagnostics.synthesisCompressionRatio.score, comparison.modularMetrics.synthesisCompletenessScore);
+  assert.equal(comparison.diagnostics.rowLevelSynthesisReadiness.score, comparison.modularMetrics.rowLevelSynthesisReadinessScore);
   assert.equal(comparison.diagnostics.rowLevelSynthesisReadiness.plannedRowCount, 1);
+  assert.match(comparison.diagnostics.rowLevelSynthesisReadiness.explanation, /scored synthesis-quality parity category/);
+});
+
+
+test("synthesis compression ratio stays diagnostic-only and does not drag down overall modular quality", () => {
+  const base = createResult();
+  const opportunityCandidates = Array.from({ length: 4 }, (_, index) => ({
+    id: `opp-${index + 1}`,
+    title: `Automated client reporting variant ${index + 1}`,
+    normalizedTitle: `automated client reporting variant ${index + 1}`,
+    context: { market: "Agency services", audience: "Small agencies", nicheCategory: "Client Operations", primaryTheme: "Client Operations", painCandidateIds: ["pain-1"], patternCandidateIds: ["pattern-1"], trendCandidateIds: ["trend-1"] },
+    marketContext: { primaryProblem: "Small agencies waste time assembling client reports from scattered tools.", underservedSignals: ["Automated report assembly"], existingSolutionSignals: ["Dashboard connectors"] },
+    evidence: [{ claim: "Repeated reporting friction appears in live sources.", sourceName: "Reddit", sourceUrl: "https://example.com/reporting" }],
+    score: { totalScore: 8.4, problemUrgencyScore: 8, marketPullScore: 7.8, buildSimplicityScore: 8, evidenceScore: 8.6 },
+  }));
+  const comparison = buildDiscoveryQualityComparison({
+    legacyProblems,
+    orchestratorResult: createResult({
+      outputs: {
+        ...base.outputs,
+        opportunityDetection: { candidates: opportunityCandidates },
+      },
+    } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+
+  assert.equal(comparison.diagnostics.synthesisCompressionRatio.score, 25);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.representsCandidateCompressionRatio, true);
+  assert.equal(comparison.diagnostics.synthesisCompleteness.representsTrueRowQuality, false);
+  assert.equal(comparison.categories.some((category) => category.category === "synthesis_completeness"), false);
+  assert.equal(comparison.categories.find((category) => category.category === "row_level_synthesis_readiness")?.modularScore, 100);
+  assert.equal(comparison.modularMetrics.rowLevelSynthesisReadinessScore, 100);
+
+  const scoreIfCompressionWereStillAveraged = Math.round(((comparison.categories
+    .filter((category) => category.category !== "row_level_synthesis_readiness")
+    .reduce((sum, category) => sum + category.modularScore, 0) + comparison.diagnostics.synthesisCompressionRatio.score) / comparison.categories.length) * 100) / 100;
+
+  assert.ok(comparison.overallModularScore > scoreIfCompressionWereStillAveraged);
 });
 
 test("quality comparison fallback usage still counts build difficulty when synthesis attribution is unclear", () => {
