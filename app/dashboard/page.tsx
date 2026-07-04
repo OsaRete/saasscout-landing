@@ -165,95 +165,135 @@ export default function DashboardPage() {
     return savedIdeas
       .map((savedIdea) =>
         opportunities.find(
-          (opportunity) => opportunity.id === savedIdea.opportunity_id
-        )
+          (opportunity) => opportunity.id === savedIdea.opportunity_id,
+        ),
       )
       .filter(Boolean) as Opportunity[];
   }, [savedIdeas, opportunities]);
 
   if (loadingAuth) {
     return (
-      <LoadingState title="Loading SaaSScout" description="Checking your workspace and preparing dashboard intelligence." />
+      <LoadingState
+        title="Loading SaaSScout"
+        description="Checking your workspace and preparing dashboard intelligence."
+      />
     );
   }
 
   return (
     <AppShell active="/dashboard">
       <PageHeader
-        eyebrow="SaaSScout MVP"
-        title="Founder Dashboard"
-        description="Discover real market pain, analyze evidence, and turn repeated complaints into actionable SaaS opportunities."
+        eyebrow="SaaSScout control center"
+        title="Dashboard"
+        description="Monitor scan activity, review opportunity intelligence, and keep your strongest market signals moving toward validation."
         actions={
           <>
             <Button
-              onClick={handleLogout}
+              href="/results"
               variant="secondary"
               className="h-11 px-5 py-0"
             >
-              Logout
+              View Results
             </Button>
-            <Button href="/scan" className="h-11 px-5 py-0">
+            <Button
+              href="/scan"
+              className="h-11 px-5 py-0 shadow-xl shadow-violet-600/25"
+            >
               New Market Scan
+            </Button>
+            <Button
+              onClick={handleLogout}
+              variant="ghost"
+              className="h-11 px-4 py-0 text-gray-400 hover:text-white"
+            >
+              Logout
             </Button>
           </>
         }
       />
 
-      <div className="mt-8 grid gap-5 md:grid-cols-3">
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Total scans"
-          value={scans.length}
-          helper="Real user data"
+          value={loadingData ? "—" : scans.length}
+          helper="Evidence collected from your market searches"
           tone="green"
         />
         <MetricCard
           label="Opportunities"
-          value={opportunities.length}
-          helper="Generated from scans"
+          value={loadingData ? "—" : opportunities.length}
+          helper="Structured ideas generated from scan outputs"
           tone="violet"
         />
         <MetricCard
           label="Saved ideas"
-          value={savedIdeas.length}
-          helper="Ready to validate"
+          value={loadingData ? "—" : savedIdeas.length}
+          helper="Shortlisted opportunities ready for validation"
           tone="cyan"
         />
+        <div className="rounded-[1.5rem] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.14),transparent_34%),rgba(255,255,255,0.045)] p-6 shadow-xl shadow-black/10">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-gray-400">Latest report</p>
+            <Badge tone={weeklyReport ? "green" : "neutral"}>
+              {weeklyReport ? "Ready" : "Pending"}
+            </Badge>
+          </div>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-white">
+            {weeklyReport ? formatDate(weeklyReport.week_start) : "—"}
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-cyan-200/90">
+            Weekly intelligence status for the active workspace.
+          </p>
+        </div>
       </div>
 
-      <Panel accent className="mt-8">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-violet-300">
-              Weekly Intelligence
-            </p>
+      <Panel accent className="mt-8 overflow-hidden p-0">
+        <div className="relative border-b border-white/10 px-6 py-7 md:px-8">
+          <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-cyan-400/10 blur-3xl" />
+          <div className="relative flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-violet-300">
+                  Weekly Intelligence
+                </p>
+                <Badge tone={weeklyReport ? "green" : "neutral"}>
+                  {weeklyReport ? "Latest signal loaded" : "Awaiting report"}
+                </Badge>
+              </div>
 
-            <h2 className="mt-3 text-2xl font-bold tracking-tight">
-              {weeklyReport?.strongest_trend
-                ? `Strongest trend: ${weeklyReport.strongest_trend}`
-                : "Market trend report"}
-            </h2>
+              <h2 className="mt-4 max-w-4xl text-3xl font-bold tracking-tight md:text-4xl">
+                {weeklyReport?.strongest_trend
+                  ? `Strongest trend: ${weeklyReport.strongest_trend}`
+                  : "Market trend report"}
+              </h2>
 
-            <p className="mt-3 max-w-3xl text-sm leading-relaxed text-gray-400">
-              {weeklyReport?.summary ||
-                "Weekly market intelligence will appear here once the first report is generated."}
-            </p>
-
-            {weeklyReport && (
-              <p className="mt-3 text-xs text-gray-500">
-                Latest report: {formatDate(weeklyReport.week_start)} -{" "}
-                {formatDate(weeklyReport.week_end)}
+              <p className="mt-4 max-w-3xl text-base leading-relaxed text-gray-300">
+                {weeklyReport?.summary ||
+                  "Weekly market intelligence will appear here once the first report is generated."}
               </p>
-            )}
-          </div>
 
-          <Button href="/weekly" className="w-fit">
-            Open Weekly Intelligence
-          </Button>
+              {weeklyReport && (
+                <p className="mt-4 text-sm text-gray-500">
+                  Latest report: {formatDate(weeklyReport.week_start)} -{" "}
+                  {formatDate(weeklyReport.week_end)}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-3 lg:justify-end">
+              <Button href="/weekly" className="w-fit">
+                Open Weekly Intelligence
+              </Button>
+              <Button href="/discover" variant="cyan" className="w-fit">
+                Run Discovery
+              </Button>
+            </div>
+          </div>
         </div>
 
         {weeklyReport && weeklyNiches.length > 0 && (
-          <div className="mt-6 grid gap-6 lg:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+          <div className="grid gap-4 px-6 pt-6 md:px-8 lg:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
               <p className="text-sm text-gray-400">Avg trend score</p>
               <h3 className="mt-2 text-3xl font-bold">
                 {weeklyReport.average_trend_score || 0}
@@ -268,7 +308,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
               <p className="text-sm text-gray-400">Avg pain intensity</p>
               <h3 className="mt-2 text-3xl font-bold">
                 {weeklyReport.average_pain_intensity || 0}
@@ -283,7 +323,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
               <p className="text-sm text-gray-400">Sources analyzed</p>
               <h3 className="mt-2 text-3xl font-bold">
                 {weeklyReport.total_sources_analyzed || 0}
@@ -296,7 +336,7 @@ export default function DashboardPage() {
         )}
 
         {weeklyNiches.length > 0 && (
-          <div className="mt-6 rounded-2xl border border-white/10 bg-black/20 p-5">
+          <div className="mx-6 mb-6 mt-6 rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10 md:mx-8">
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <h3 className="font-semibold">Top weekly niches</h3>
@@ -342,13 +382,16 @@ export default function DashboardPage() {
         )}
       </Panel>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-3">
-        <Panel className="lg:col-span-2">
-          <div className="mb-6 flex items-center justify-between">
+      <div className="mt-8 grid gap-6 xl:grid-cols-3">
+        <Panel className="lg:col-span-2 xl:col-span-2">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-bold">Recent scans</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">
+                Recent activity
+              </p>
+              <h2 className="mt-2 text-2xl font-bold">Recent scans</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Latest evidence and market analyses.
+                Latest evidence runs and market analyses in this workspace.
               </p>
             </div>
 
@@ -364,17 +407,19 @@ export default function DashboardPage() {
               icon="⌁"
               title="No scans yet"
               description="Create your first evidence-based market scan to start building reusable opportunity intelligence."
-              primaryAction={<Button href="/scan">Create your first scan</Button>}
+              primaryAction={
+                <Button href="/scan">Create your first scan</Button>
+              }
             />
           ) : (
             <div className="space-y-4">
               {scans.slice(0, 5).map((scan) => (
                 <div
                   key={scan.id}
-                  className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-5 transition hover:border-violet-500/25 hover:bg-white/[0.055] md:flex-row md:items-center md:justify-between"
+                  className="group flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-5 transition hover:-translate-y-0.5 hover:border-violet-500/30 hover:bg-white/[0.06] hover:shadow-xl hover:shadow-violet-950/10 md:flex-row md:items-center md:justify-between"
                 >
                   <div>
-                    <h3 className="font-semibold text-white">
+                    <h3 className="font-semibold text-white transition group-hover:text-violet-100">
                       {scan.market || "Evidence-based scan"}
                     </h3>
                     <p className="mt-1 text-sm text-gray-400">
@@ -400,9 +445,16 @@ export default function DashboardPage() {
           )}
         </Panel>
 
-        <div className="space-y-8">
-          <Panel>
-            <h2 className="text-2xl font-bold">Quick actions</h2>
+        <div className="space-y-6">
+          <Panel className="border-cyan-500/15 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.1),transparent_34%),rgba(11,16,32,0.95)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+              Next best action
+            </p>
+            <h2 className="mt-2 text-2xl font-bold">Quick actions</h2>
+            <p className="mt-2 text-sm leading-relaxed text-gray-500">
+              Start with a new scan, then review generated intelligence and
+              saved validation candidates.
+            </p>
 
             <div className="mt-5 grid gap-3">
               <Button
@@ -447,8 +499,13 @@ export default function DashboardPage() {
           </Panel>
 
           <Panel>
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold">Saved ideas</h2>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+                  Validation shortlist
+                </p>
+                <h2 className="mt-2 text-2xl font-bold">Saved ideas</h2>
+              </div>
               <Button href="/saved" variant="ghost" className="px-3 py-2">
                 View all
               </Button>
@@ -462,7 +519,11 @@ export default function DashboardPage() {
                   icon="☆"
                   title="No saved ideas yet"
                   description="Save promising opportunities from results when you are ready to validate them."
-                  primaryAction={<Button href="/results" variant="cyan">Explore opportunities</Button>}
+                  primaryAction={
+                    <Button href="/results" variant="cyan">
+                      Explore opportunities
+                    </Button>
+                  }
                   className="p-6"
                 />
               ) : (
@@ -470,9 +531,11 @@ export default function DashboardPage() {
                   <Link
                     key={idea.id}
                     href={`/opportunity/${idea.id}`}
-                    className="block rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-cyan-500/25 hover:bg-white/[0.06]"
+                    className="group block rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition hover:-translate-y-0.5 hover:border-cyan-500/30 hover:bg-white/[0.06] hover:shadow-xl hover:shadow-cyan-950/10"
                   >
-                    <p className="font-medium text-white">{idea.title}</p>
+                    <p className="font-medium text-white transition group-hover:text-cyan-100">
+                      {idea.title}
+                    </p>
                     <p className="mt-2 text-sm text-gray-500">
                       Score: {idea.score} · {idea.pricing}
                     </p>
