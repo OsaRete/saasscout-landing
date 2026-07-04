@@ -29,6 +29,16 @@ html {
   scroll-behavior: smooth;
 }
 
+@layer base {
+  a,
+  button,
+  input,
+  select,
+  textarea {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050816];
+  }
+}
+
 @media print {
   @page {
     size: A4;
