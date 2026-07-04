@@ -160,3 +160,106 @@ export function PageHeader({
     </header>
   );
 }
+
+export function LoadingState({
+  title = "Loading SaaSScout",
+  description = "Preparing market intelligence...",
+}: {
+  title?: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#050816] px-6 text-white">
+      <div className="w-full max-w-md rounded-[2rem] border border-white/10 bg-[#0B1020]/95 p-8 text-center shadow-2xl shadow-violet-950/20">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-violet-400/30 bg-violet-500/10">
+          <span className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
+        </div>
+        <h1 className="mt-5 text-xl font-bold tracking-tight text-white">{title}</h1>
+        <p className="mt-2 text-sm leading-relaxed text-gray-400">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+export function CardSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+      <div className="h-4 w-2/5 animate-pulse rounded-full bg-white/10" />
+      <div className="mt-4 space-y-3">
+        {Array.from({ length: rows }).map((_, index) => (
+          <div
+            key={index}
+            className="h-3 animate-pulse rounded-full bg-gradient-to-r from-white/10 via-violet-300/10 to-cyan-300/10"
+            style={{ width: `${92 - index * 14}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function EmptyState({
+  icon = "✦",
+  title,
+  description,
+  primaryAction,
+  secondaryAction,
+  className = "",
+}: {
+  icon?: ReactNode;
+  title: string;
+  description: string;
+  primaryAction?: ReactNode;
+  secondaryAction?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(124,58,237,0.14),transparent_38%),#0B1020] p-10 text-center shadow-2xl shadow-black/20 ${className}`}>
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-400/25 bg-cyan-400/10 text-2xl text-cyan-200">
+        {icon}
+      </div>
+      <h2 className="mt-5 text-2xl font-bold text-white">{title}</h2>
+      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-gray-400">{description}</p>
+      {(primaryAction || secondaryAction) && (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          {primaryAction}
+          {secondaryAction}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Notice({
+  tone = "info",
+  title,
+  children,
+  className = "",
+}: {
+  tone?: "success" | "error" | "warning" | "info";
+  title?: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const tones = {
+    success: "border-green-400/30 bg-green-400/10 text-green-100",
+    error: "border-red-400/30 bg-red-400/10 text-red-100",
+    warning: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+    info: "border-cyan-400/30 bg-cyan-400/10 text-cyan-100",
+  };
+  const icons = { success: "✓", error: "!", warning: "!", info: "i" };
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg shadow-black/10 ${tones[tone]} ${className}`}>
+      <div className="flex gap-3">
+        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current/30 text-[11px] font-bold">
+          {icons[tone]}
+        </span>
+        <div>
+          {title && <p className="font-semibold text-white">{title}</p>}
+          <div className={title ? "mt-1 leading-relaxed" : "leading-relaxed"}>{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}

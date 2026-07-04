@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../supabase";
+import { Button, EmptyState, LoadingState } from "../../components/ui";
 
 type Scan = {
   id: string;
@@ -131,27 +132,20 @@ function SourcesContent() {
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading external sources...</p>
-      </main>
+      <LoadingState title="Loading external sources" description="Retrieving source evidence for this scan." />
     );
   }
 
   if (!scanId || !scan) {
     return (
-      <main className="min-h-screen bg-[#050816] text-white">
-        <div className="mx-auto max-w-4xl px-6 py-20 text-center">
-          <h1 className="text-4xl font-bold">Sources not found</h1>
-          <p className="mt-4 text-gray-400">
-            This scan does not exist or you do not have access to it.
-          </p>
-
-          <Link
-            href="/results"
-            className="mt-8 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-500"
-          >
-            Back to Results
-          </Link>
+      <main className="min-h-screen bg-[#050816] px-6 py-20 text-white">
+        <div className="mx-auto max-w-4xl">
+          <EmptyState
+            icon="!"
+            title="Sources not found"
+            description="This scan does not exist or you do not have access to it."
+            primaryAction={<Button href="/results">Back to Results</Button>}
+          />
         </div>
       </main>
     );
@@ -268,17 +262,17 @@ function SourcesContent() {
 
         <section className="mt-6">
           {sources.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No external sources found</h2>
-              <p className="mt-3 text-gray-400">
-                This scan did not collect external sources.
-              </p>
-            </div>
+            <EmptyState
+              icon="◎"
+              title="No external sources found"
+              description="This scan did not collect external sources."
+            />
           ) : filteredSources.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No matching sources</h2>
-              <p className="mt-3 text-gray-400">Try another search term.</p>
-            </div>
+            <EmptyState
+              icon="⌕"
+              title="No matching sources"
+              description="Try another search term to find collected source evidence."
+            />
           ) : (
             <div className="grid gap-5 lg:grid-cols-2">
               {filteredSources.map((source) => (
@@ -341,9 +335,7 @@ export default function SourcesPage() {
   return (
     <Suspense
       fallback={
-        <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-          <p className="text-gray-400">Loading external sources...</p>
-        </main>
+        <LoadingState title="Loading external sources" description="Preparing source intelligence." />
       }
     >
       <SourcesContent />

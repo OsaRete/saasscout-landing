@@ -8,6 +8,9 @@ import AppShell from "../../components/app-shell";
 import {
   Badge,
   Button,
+  CardSkeleton,
+  EmptyState,
+  LoadingState,
   MetricCard,
   PageHeader,
   Panel,
@@ -170,9 +173,7 @@ export default function DashboardPage() {
 
   if (loadingAuth) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading SaaSScout...</p>
-      </main>
+      <LoadingState title="Loading SaaSScout" description="Checking your workspace and preparing dashboard intelligence." />
     );
   }
 
@@ -357,14 +358,14 @@ export default function DashboardPage() {
           </div>
 
           {loadingData ? (
-            <p className="text-gray-400">Loading scans...</p>
+            <CardSkeleton rows={4} />
           ) : scans.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center">
-              <p className="text-gray-300">No scans yet.</p>
-              <Button href="/scan" className="mt-4">
-                Create your first scan
-              </Button>
-            </div>
+            <EmptyState
+              icon="⌁"
+              title="No scans yet"
+              description="Create your first evidence-based market scan to start building reusable opportunity intelligence."
+              primaryAction={<Button href="/scan">Create your first scan</Button>}
+            />
           ) : (
             <div className="space-y-4">
               {scans.slice(0, 5).map((scan) => (
@@ -455,11 +456,15 @@ export default function DashboardPage() {
 
             <div className="mt-6 space-y-4">
               {loadingData ? (
-                <p className="text-gray-400">Loading saved ideas...</p>
+                <CardSkeleton rows={3} />
               ) : savedOpportunities.length === 0 ? (
-                <p className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-400">
-                  No saved ideas yet.
-                </p>
+                <EmptyState
+                  icon="☆"
+                  title="No saved ideas yet"
+                  description="Save promising opportunities from results when you are ready to validate them."
+                  primaryAction={<Button href="/results" variant="cyan">Explore opportunities</Button>}
+                  className="p-6"
+                />
               ) : (
                 savedOpportunities.slice(0, 3).map((idea) => (
                   <Link

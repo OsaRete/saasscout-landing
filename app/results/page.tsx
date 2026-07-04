@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import { Button, CardSkeleton, EmptyState, LoadingState } from "../../components/ui";
 
 type Scan = {
   id: string;
@@ -321,9 +322,7 @@ export default function ResultsPage() {
 
   if (loadingAuth) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading SaaSScout...</p>
-      </main>
+      <LoadingState title="Loading SaaSScout" description="Checking access before opening scan results." />
     );
   }
 
@@ -392,21 +391,14 @@ export default function ResultsPage() {
 
         <section className="mt-10">
           {loadingData ? (
-            <p className="text-gray-400">Loading results...</p>
+            <div className="grid gap-5"><CardSkeleton rows={4} /><CardSkeleton rows={4} /></div>
           ) : scans.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No scans yet</h2>
-              <p className="mt-3 text-gray-400">
-                Create your first market scan to start discovering opportunities.
-              </p>
-
-              <Link
-                href="/scan"
-                className="mt-6 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-500"
-              >
-                New Market Scan
-              </Link>
-            </div>
+            <EmptyState
+              icon="⌁"
+              title="No scans yet"
+              description="Create your first market scan to start discovering evidence-backed opportunities."
+              primaryAction={<Button href="/scan">New Market Scan</Button>}
+            />
           ) : (
             <div className="space-y-10">
               {scans.map((scan, index) => {

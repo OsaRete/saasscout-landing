@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import { Button, EmptyState, LoadingState } from "../../components/ui";
 
 type Scan = {
   id: string;
@@ -136,9 +137,7 @@ export default function ScansPage() {
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading scan history...</p>
-      </main>
+      <LoadingState title="Loading scan history" description="Retrieving your market intelligence library." />
     );
   }
 
@@ -224,20 +223,12 @@ export default function ScansPage() {
 
         <section className="mt-6">
           {filteredScans.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-              <h2 className="text-2xl font-bold">No scans found</h2>
-
-              <p className="mt-3 text-gray-400">
-                Create a new scan or adjust your search.
-              </p>
-
-              <Link
-                href="/scan"
-                className="mt-6 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-500"
-              >
-                New Market Scan
-              </Link>
-            </div>
+            <EmptyState
+              icon="⌕"
+              title="No scans found"
+              description="Create a new scan or adjust your search to find an existing market intelligence record."
+              primaryAction={<Button href="/scan">New Market Scan</Button>}
+            />
           ) : (
             <div className="space-y-5">
               {filteredScans.map((scan) => {

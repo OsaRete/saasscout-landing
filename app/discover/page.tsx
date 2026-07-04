@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import { Button, EmptyState, LoadingState, Notice } from "../../components/ui";
 
 type UserProfile = {
   id: string;
@@ -442,9 +443,7 @@ ${problem.source_evidence || ""}`);
 
   if (loadingAuth || loadingData) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <p className="text-gray-400">Loading opportunity discovery...</p>
-      </main>
+      <LoadingState title="Loading opportunity discovery" description="Preparing live signals, data moat context, and founder-fit state." />
     );
   }
 
@@ -544,9 +543,12 @@ ${problem.source_evidence || ""}`);
           </div>
 
           {message && (
-            <div className="mt-6 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-200">
+            <Notice
+              tone={message.toLowerCase().includes("could not") || message.toLowerCase().includes("wrong") || message.toLowerCase().includes("expired") ? "error" : "success"}
+              className="mt-6"
+            >
               {message}
-            </div>
+            </Notice>
           )}
         </section>
 
@@ -573,12 +575,13 @@ ${problem.source_evidence || ""}`);
         </section>
 
         {discoveries.length === 0 ? (
-          <section className="mt-10 rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
-            <h2 className="text-2xl font-bold">No discoveries yet</h2>
-            <p className="mt-3 text-gray-400">
-              Run your first discovery to search live market signals and feed the data moat.
-            </p>
-          </section>
+          <EmptyState
+            icon="✦"
+            title="No discoveries yet"
+            description="Run your first discovery to search live market signals and feed the data moat."
+            primaryAction={<Button onClick={handleAnalyzeMarket} disabled={analyzing}>{analyzing ? "Searching live signals..." : "Run Discovery"}</Button>}
+            className="mt-10"
+          />
         ) : (
           <>
             <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-5">
