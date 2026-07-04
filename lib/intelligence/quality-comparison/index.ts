@@ -332,6 +332,7 @@ export function buildDiscoveryQualityComparison({
       buildDifficultyFallbackOnlyRows,
       qualityGateIssueCount: quality.summary.issue_count,
       buildDifficultyMappingByRow: plan.diagnostics.build_difficulty_by_row,
+      affectedNicheEnrichmentByRow: plan.diagnostics.affected_niche_enrichment_by_row,
       marketCoverage: {
         legacyUniqueAffectedNicheTokens: affectedNicheTokens(legacyProblems),
         modularUniqueAffectedNicheTokens: affectedNicheTokens(plan.rows),
@@ -364,6 +365,7 @@ export function buildDiscoveryQualityComparison({
         "Quality comparison is diagnostic-only and has no production persistence side effects.",
         "Scores are deterministic heuristics intended to measure migration parity before replacing the legacy pipeline.",
         "fallback_usage counts only planned persistence fields whose source remains fallback:* after deterministic mapping; mapped build_difficulty signals are not counted as missing information.",
+        "affected_niches for synthesis rows is deterministically enriched from synthesis context and ranked seed market/audience/cluster diagnostics to improve modular market-coverage parity without enabling persistence.",
         "synthesis_completeness is retained for continuity, while synthesisCompressionRatio names the same compression metric more clearly and rowLevelSynthesisReadiness reports row quality-gate readiness.",
       ],
     },

@@ -308,6 +308,7 @@ test("buildDiscoveryPersistencePlan prefers problem synthesis candidates when av
 
   assert.equal(plan.rows[0].problem_title, "Synthesized reporting operations bottleneck");
   assert.equal(plan.rows[0].problem_summary, "Small agencies repeatedly lose delivery time because client reporting evidence is scattered across disconnected systems.");
+  assert.equal(plan.rows[0].affected_niches, "Agency services | Small agencies | Client reporting automation");
   assert.equal(plan.rows[0].source_evidence, "Agencies still copy weekly updates into spreadsheets. Repeated reporting friction appears in live sources.");
   assert.equal(plan.rows[0].pain_score, 8.3);
   assert.equal(plan.rows[0].revenue_score, 7.7);
@@ -320,6 +321,8 @@ test("buildDiscoveryPersistencePlan prefers problem synthesis candidates when av
   assert.equal(plan.diagnostics.source_candidate_counts.problem_synthesis, 1);
   assert.equal(plan.diagnostics.row_sources[0].source, "mixed_fallback");
   assert.equal(plan.diagnostics.field_sources_by_row[0].sources.problem_title, "orchestrator:problem_synthesis.synthesizedProblemTitle");
+  assert.equal(plan.diagnostics.field_sources_by_row[0].sources.affected_niches, "orchestrator:problem_synthesis.affectedMarkets_affectedAudiences_context_enrichment");
+  assert.deepEqual(plan.diagnostics.affected_niche_enrichment_by_row[0].diagnostic.addedValues, ["Client reporting automation"]);
   assert.deepEqual(plan.diagnostics.score_mappings_by_row[0].mappings.opportunity_score, {
     source: "engine",
     inputScale: "0-10",

@@ -71,6 +71,15 @@ type BuildDifficultyDiagnostic = {
   attribution: "explicit_id_match" | "synthesis_cluster_seed_match" | "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unavailable" | "ambiguous";
 };
 
+type AffectedNicheEnrichmentDiagnostic = {
+  source: "problem_synthesis" | "fallback";
+  baseValueCount: number;
+  enrichedValueCount: number;
+  addedValues: string[];
+  persistedValue: string;
+  fallbackAvoided: boolean;
+};
+
 export type PersistencePlanDiagnostics = {
   dry_run: true;
   planned_row_count: number;
@@ -91,6 +100,7 @@ export type PersistencePlanDiagnostics = {
   field_sources_by_row: Array<{ rowIndex: number; sources: PlannedProblemFieldSource }>;
   score_mappings_by_row: Array<{ rowIndex: number; mappings: ScoreMappingDiagnostics }>;
   build_difficulty_by_row: Array<{ rowIndex: number; diagnostic: BuildDifficultyDiagnostic }>;
+  affected_niche_enrichment_by_row: Array<{ rowIndex: number; diagnostic: AffectedNicheEnrichmentDiagnostic }>;
   warnings: PersistencePlanWarning[];
 };
 
@@ -171,6 +181,10 @@ function text(value: unknown, fallback: string) {
 function joinUnique(values: Array<string | null | undefined>, fallback: string) {
   const items = [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
   return items.length > 0 ? items.join(" | ") : fallback;
+}
+
+function collectUniqueValues(values: Array<string | null | undefined>) {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 function hasId(candidate: { id: string }, ids: string[]) {
@@ -398,6 +412,30 @@ function resolveBuildDifficultyForSynthesisCandidate(
   };
 }
 
+function buildSynthesisAffectedNiches(candidate: ProblemSynthesisCandidate): AffectedNicheEnrichmentDiagnostic {
+  const baseValues = collectUniqueValues([...candidate.affectedMarkets, ...candidate.affectedAudiences]);
+  const rankedSeeds = candidate.diagnostics?.candidateCollapseReport?.rankedSeeds || [];
+  const enrichmentValues = collectUniqueValues([
+    candidate.canonicalProblemCluster,
+    candidate.narrative?.primaryTheme,
+    candidate.evidenceSummary?.markets?.[0],
+    candidate.evidenceSummary?.audiences?.[0],
+    ...rankedSeeds.slice(0, 3).flatMap((seed) => [seed.market, seed.audience, seed.problemCluster]),
+  ]);
+  const enrichedValues = collectUniqueValues([...baseValues, ...enrichmentValues]);
+  const addedValues = enrichedValues.filter((value) => !baseValues.includes(value));
+  const persistedValue = enrichedValues.length > 0 ? enrichedValues.join(" | ") : DEFAULT_NICHES;
+
+  return {
+    source: enrichedValues.length > 0 ? "problem_synthesis" : "fallback",
+    baseValueCount: baseValues.length,
+    enrichedValueCount: enrichedValues.length,
+    addedValues,
+    persistedValue,
+    fallbackAvoided: enrichedValues.length > 0,
+  };
+}
+
 function validatePlannedDiscoveredProblem(row: PlannedDiscoveredProblem, rowIndex = 0): ValidationResult {
   const errors: PersistencePlanWarning[] = [];
 
@@ -600,7 +638,8 @@ export function buildDiscoveryPersistencePlan(
     const buildDifficultyDiagnostic = resolveBuildDifficultyForSynthesisCandidate(candidate, opportunities);
     const title = text(candidate.synthesizedProblemTitle, `Synthesized Market Problem ${rowIndex + 1}`);
     const summary = text(candidate.synthesizedSummary, `${title} appears in problem synthesis signals and needs validation before persistence.`);
-    const affected = joinUnique([...candidate.affectedMarkets, ...candidate.affectedAudiences], DEFAULT_NICHES);
+    const affectedNicheDiagnostic = buildSynthesisAffectedNiches(candidate);
+    const affected = affectedNicheDiagnostic.persistedValue;
     const solutions = joinUnique(candidate.suggestedSolutions, DEFAULT_SOLUTIONS);
     const evidence = text(candidate.conciseEvidenceSummary || candidate.supportingEvidenceReferences.slice(0, 3).join(" | "), DEFAULT_EVIDENCE);
     const row: PlannedDiscoveredProblem = {
@@ -626,7 +665,7 @@ export function buildDiscoveryPersistencePlan(
     mark("user_id", userId ? "planner:provided_placeholder" : "fallback:user_id_placeholder");
     mark("problem_title", candidate.synthesizedProblemTitle ? "orchestrator:problem_synthesis.synthesizedProblemTitle" : "fallback:title");
     mark("problem_summary", candidate.synthesizedSummary ? "orchestrator:problem_synthesis.synthesizedSummary" : "fallback:summary");
-    mark("affected_niches", affected === DEFAULT_NICHES ? "fallback:affected_niches" : "orchestrator:problem_synthesis.affectedMarkets_affectedAudiences");
+    mark("affected_niches", affected === DEFAULT_NICHES ? "fallback:affected_niches" : "orchestrator:problem_synthesis.affectedMarkets_affectedAudiences_context_enrichment");
     mark("suggested_solutions", solutions === DEFAULT_SOLUTIONS ? "fallback:suggested_solutions" : "orchestrator:problem_synthesis.suggestedSolutions");
     mark("pain_score", scoreMappings.pain_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.painScore" : "fallback:pain_score");
     mark("revenue_score", scoreMappings.revenue_score?.source === "engine" ? "orchestrator:problem_synthesis.scoreBreakdown.revenueScore" : "fallback:revenue_score");
@@ -640,7 +679,7 @@ export function buildDiscoveryPersistencePlan(
     mark("build_difficulty", buildDifficultyDiagnostic.source === "mapped_opportunity_signal" ? `orchestrator:opportunity.score.buildSimplicityScore:${buildDifficultyDiagnostic.attribution}` : "fallback:build_difficulty");
     mark("source_evidence", evidence === DEFAULT_EVIDENCE ? "fallback:source_evidence" : "orchestrator:problem_synthesis.conciseEvidenceSummary");
     const uniqueFallbackFields = [...new Set(fallbackFields)];
-    return { row, sources, scoreMappings, buildDifficultyDiagnostic, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "problem_synthesis") };
+    return { row, sources, scoreMappings, buildDifficultyDiagnostic, affectedNicheDiagnostic, fallbackFields: uniqueFallbackFields, rowSource: sourceForRow(uniqueFallbackFields, "problem_synthesis") };
   });
 
   const rows = synthesisCandidates.length > 0 ? buildSynthesisRows() : buildSeedRows();
@@ -675,6 +714,21 @@ export function buildDiscoveryPersistencePlan(
       field_sources_by_row: rows.map(({ sources }, rowIndex) => ({ rowIndex, sources })),
       score_mappings_by_row: rows.map(({ scoreMappings }, rowIndex) => ({ rowIndex, mappings: scoreMappings })),
       build_difficulty_by_row: rows.map(({ buildDifficultyDiagnostic }, rowIndex) => ({ rowIndex, diagnostic: buildDifficultyDiagnostic })),
+      affected_niche_enrichment_by_row: rows.map((planned, rowIndex) => {
+        const affectedNicheDiagnostic = "affectedNicheDiagnostic" in planned ? planned.affectedNicheDiagnostic as AffectedNicheEnrichmentDiagnostic : null;
+        const { row } = planned;
+        return {
+          rowIndex,
+          diagnostic: affectedNicheDiagnostic || {
+            source: row.affected_niches === DEFAULT_NICHES ? "fallback" : "problem_synthesis",
+            baseValueCount: row.affected_niches === DEFAULT_NICHES ? 0 : row.affected_niches.split("|").filter((item) => item.trim()).length,
+            enrichedValueCount: row.affected_niches === DEFAULT_NICHES ? 0 : row.affected_niches.split("|").filter((item) => item.trim()).length,
+            addedValues: [],
+            persistedValue: row.affected_niches,
+            fallbackAvoided: row.affected_niches !== DEFAULT_NICHES,
+          },
+        };
+      }),
       warnings,
     },
   };

@@ -210,7 +210,7 @@ test("quality comparison diagnostics explain market coverage fallback fields and
   const comparison = buildDiscoveryQualityComparison({ legacyProblems, orchestratorResult: createResult() });
 
   assert.deepEqual(comparison.diagnostics.marketCoverage.legacyUniqueAffectedNicheTokens, ["agencies", "b2b consultants", "client services"]);
-  assert.deepEqual(comparison.diagnostics.marketCoverage.modularUniqueAffectedNicheTokens, ["agency services", "small agencies"]);
+  assert.deepEqual(comparison.diagnostics.marketCoverage.modularUniqueAffectedNicheTokens, ["agency services", "client operations", "small agencies"]);
   assert.equal(comparison.diagnostics.marketCoverage.calculation, "min(1, unique affected_niches token count / 5) * 100");
   assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, []);
   assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: [] }]);
@@ -218,6 +218,8 @@ test("quality comparison diagnostics explain market coverage fallback fields and
   assert.deepEqual(comparison.diagnostics.buildDifficultyFallbackOnlyRows, []);
   assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "mapped_opportunity_signal");
   assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.rawBuildSimplicityScore, 8);
+  assert.equal(comparison.diagnostics.affectedNicheEnrichmentByRow[0].diagnostic.enrichedValueCount, 3);
+  assert.deepEqual(comparison.diagnostics.affectedNicheEnrichmentByRow[0].diagnostic.addedValues, ["Client Operations"]);
   assert.equal(comparison.diagnostics.synthesisCompleteness.modularCandidateCount, 1);
   assert.equal(comparison.diagnostics.synthesisCompleteness.modularSynthesisCandidateCount, 1);
   assert.equal(comparison.diagnostics.synthesisCompleteness.representsCandidateCompressionRatio, true);
