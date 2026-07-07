@@ -29,6 +29,57 @@ Latest reported Bruno diagnostic run:
 | `persistModular` | `false` |
 | `productionBehaviorChanged` | `false` |
 
+
+## 10-run Bruno stability window outcome
+
+A later 10-run Bruno diagnostic stability window refined the single-run conclusion above. The window did **not** prove modular instability. Instead, it showed a stable modular readiness profile with variance concentrated in the legacy baseline used for the per-run comparison.
+
+Observed stability-window findings:
+
+| Metric | Window outcome | Interpretation |
+| --- | ---: | --- |
+| `modularOverallQualityScore` | ~95.22 | Stable modular quality signal. |
+| `modularCandidateCount` | ~77 | Stable candidate availability. |
+| `modularPlannedRowCount` | 5 | Stable planned persistence-row count. |
+| `modularAcceptedRowCount` | 5 | All planned modular rows stayed acceptable. |
+| `modularRejectedRowCount` | 0 | No modular row was rejected. |
+| `modularRejectedRowRatio` | 0 | No rejection-rate regression. |
+| `modularFallbackUsageRatio` | 0.08 | Stable fallback usage within the healthy range. |
+| `qualityGateIssueCount` | 0 | Quality gates stayed clean. |
+| `orchestratorWarningCount` | 2 | Warning count stayed stable but still deserves follow-up. |
+| `shadowParityStatus` | `partial` | Non-divergent, but not yet full parity. |
+| `persistModular` | `false` | Modular persistence remained disabled. |
+| `productionBehaviorChanged` | `false` | Production behavior remained unchanged. |
+| `legacyOverallQualityScore` | ~88.70 to ~91.25 | Unstable comparison baseline. |
+
+The unstable metric in this window was `legacyOverallQualityScore`, which varied from about 88.70 to 91.25. Because `modularVsLegacyScoreDelta = modularOverallQualityScore - legacyOverallQualityScore`, the same stable modular quality score could produce runs that cleared the existing +5 delta gate and runs that fell below +5.
+
+This should be interpreted as **legacy baseline variance**, not modular instability. The modular safety indicators stayed healthy: planned rows stayed at 5, accepted rows stayed at 5, rejected rows stayed at 0, rejected-row ratio stayed at 0, fallback usage stayed around 0.08, quality-gate issue count stayed at 0, shadow parity stayed non-divergent, and both `persistModular` and `productionBehaviorChanged` stayed `false`.
+
+### Decision-layer interpretation
+
+The per-run decision layer should remain strict. The `minimumModularVsLegacyScoreDelta` threshold should **not** be lowered because a single run that fails the +5 delta gate is still a valid reason for that run to avoid recommending modular ownership.
+
+However, repeated-run readiness should be interpreted separately from the single-run decision. The single-run decision answers whether one diagnostic payload is safe enough to recommend modular. A readiness window answers whether the modular path is stable enough over time to justify the next guarded implementation step.
+
+Future readiness windows should therefore track average, minimum, and maximum delta instead of only requiring every single run to clear +5. Isolated below-5 delta runs may be acceptable for readiness analysis only when all modular safety metrics remain healthy and the below-threshold delta is explainable by legacy baseline variance rather than modular degradation. This does not relax the per-run decision layer.
+
+### Next Bruno window pass criteria
+
+The next Bruno stability window should be considered passing only if all of the following remain true:
+
+1. `modularOverallQualityScore` is >= 90 in every run.
+2. `overallWinner` is usually `modular`.
+3. Average `modularVsLegacyScoreDelta` is >= 5, with >= 6 preferred.
+4. `qualityGateRejectedRows` is 0 in every run.
+5. `rowLevelSynthesisReadinessScore` is 100 in every run.
+6. `fallbackUsageScore` is >= 90 in every run.
+7. `shadowParityStatus` is never `divergent`.
+8. `persistModular` is always `false`.
+9. `productionBehaviorChanged` is always `false`.
+10. Knowledge Evolution dual-write does not fail and continues to preserve legacy row ownership.
+11. Legacy category variance is tracked separately from modular quality and safety metrics.
+
 ## Readiness conclusion
 
 The run is a strong positive signal, but it is **not sufficient by itself** to consider modular ready for persistence activation.
@@ -264,3 +315,15 @@ Rationale:
 - The architecture should not move to persistence ownership until parity, warning stability, fallback attribution, and Knowledge Evolution interactions are measured over time.
 - A readiness report strengthens the Intelligence Moat by making migration evidence structured and comparable without changing production behavior.
 - It creates the evidence base needed for a later feature-flag scaffold while preserving legacy fallback and Data Moat safety.
+
+## Documentation update outcome
+
+This documentation-only update records the 10-run Bruno stability-window outcome and clarifies that the observed below-threshold `modularVsLegacyScoreDelta` runs were caused by legacy baseline variance, not modular quality instability. The documented evidence distinguishes stable modular safety metrics from the volatile legacy comparison score so future reviewers can evaluate readiness without conflating the per-run decision gate with repeated-run readiness interpretation.
+
+No production behavior changed because this audit update modifies documentation only. It does not change backend logic, decision thresholds, quality comparison scoring, prompts, API responses, database schema, UI behavior, modular persistence state, legacy fallback behavior, or Knowledge Evolution dual-write behavior. `persistModular` remains `false`, and `productionBehaviorChanged` remains `false`.
+
+The previous 10-run window did not prove modular instability because the modular-side metrics remained stable and healthy while the legacy score varied. Since the delta is calculated as modular quality minus legacy quality, a higher legacy score can compress the delta even when modular quality is unchanged. That means below-5 delta runs should be reviewed as comparison-baseline variance when modular quality, quality gates, fallback usage, shadow parity, persistence flags, and dual-write diagnostics remain healthy.
+
+To rerun the next Bruno window, execute at least 10 representative Bruno diagnostic runs using the same diagnostic payload fields for each run, record the modular safety metrics, legacy score, delta average/min/max, shadow parity, persistence flags, and Knowledge Evolution dual-write outcome, then compare the collected results against the pass criteria in this audit. Do not infer metrics manually from logs when the diagnostic payload exposes the canonical field.
+
+The next implementation PR after this documentation update should remain the previously recommended diagnostic readiness report only: add or refine a diagnostic-only readiness report that aggregates the readiness-window metrics, keeps `persistModular` false, keeps production behavior unchanged, and preserves legacy row ownership for persistence and Knowledge Evolution dual-write.
