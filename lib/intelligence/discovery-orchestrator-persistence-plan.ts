@@ -61,14 +61,20 @@ type ScoreMappingDiagnostics = Partial<Record<ScoreField, ScoreMappingDiagnostic
 
 type BuildDifficultyDiagnostic = {
   source: "mapped_opportunity_signal" | "fallback";
+  selectedBuildDifficultySource: "opportunity_build_simplicity_score" | "fallback_medium";
   opportunityCandidateId: string | null;
   opportunityCandidateTitle: string | null;
+  matchedOpportunityCandidateId: string | null;
+  matchedOpportunityCandidateTitle: string | null;
   rawBuildSimplicityScore: number | null;
+  buildSimplicityScoreUsed: number | null;
   persistedValue: string;
   confidence: number;
   matchReason: string;
+  ambiguityReason: string | null;
   fallbackAvoided: boolean;
-  attribution: "explicit_id_match" | "synthesis_cluster_seed_match" | "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unavailable" | "ambiguous";
+  attribution: "explicit_id_match" | "synthesis_cluster_seed_match" | "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unique_contextual_opportunity_match" | "unavailable" | "ambiguous";
+  attributionMethod: "explicit_id_match" | "synthesis_cluster_seed_match" | "canonical_or_semantic_title_match" | "normalized_title_match" | "token_market_audience_match" | "unique_contextual_opportunity_match" | "unavailable" | "ambiguous";
 };
 
 type AffectedNicheEnrichmentDiagnostic = {
@@ -323,20 +329,27 @@ function resolveBuildDifficultyForSynthesisCandidate(
   const synthesisMarkets = candidate.affectedMarkets || [];
   const synthesisAudiences = candidate.affectedAudiences || [];
   const explicitIds = new Set(collectPossibleIds(candidate));
-  const explicitIdMatch = opportunities.find((opportunity) => explicitIds.has(opportunity.id) && Number.isFinite(Number(opportunity.score.buildSimplicityScore)));
+  const explicitIdMatches = opportunities.filter((opportunity) => explicitIds.has(opportunity.id) && Number.isFinite(Number(opportunity.score.buildSimplicityScore)));
+  const explicitIdMatch = explicitIdMatches.length === 1 ? explicitIdMatches[0] : null;
 
   if (explicitIdMatch) {
     const rawBuildSimplicityScore = Number(explicitIdMatch.score.buildSimplicityScore);
     return {
       source: "mapped_opportunity_signal",
+      selectedBuildDifficultySource: "opportunity_build_simplicity_score",
       opportunityCandidateId: explicitIdMatch.id,
       opportunityCandidateTitle: explicitIdMatch.title,
+      matchedOpportunityCandidateId: explicitIdMatch.id,
+      matchedOpportunityCandidateTitle: explicitIdMatch.title,
       rawBuildSimplicityScore,
+      buildSimplicityScoreUsed: rawBuildSimplicityScore,
       persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
       confidence: 1,
       matchReason: "explicit linked opportunity/source id matched synthesis row",
+      ambiguityReason: null,
       fallbackAvoided: true,
       attribution: "explicit_id_match",
+      attributionMethod: "explicit_id_match",
     };
   }
 
@@ -345,14 +358,20 @@ function resolveBuildDifficultyForSynthesisCandidate(
     const rawBuildSimplicityScore = Number(synthesisSeedMatch.opportunity.score.buildSimplicityScore);
     return {
       source: "mapped_opportunity_signal",
+      selectedBuildDifficultySource: "opportunity_build_simplicity_score",
       opportunityCandidateId: synthesisSeedMatch.opportunity.id,
       opportunityCandidateTitle: synthesisSeedMatch.opportunity.title,
+      matchedOpportunityCandidateId: synthesisSeedMatch.opportunity.id,
+      matchedOpportunityCandidateTitle: synthesisSeedMatch.opportunity.title,
       rawBuildSimplicityScore,
+      buildSimplicityScoreUsed: rawBuildSimplicityScore,
       persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
       confidence: 0.95,
       matchReason: `same synthesis cluster seed matched opportunity candidate via ranked seed "${synthesisSeedMatch.seed.title}"`,
+      ambiguityReason: null,
       fallbackAvoided: true,
       attribution: "synthesis_cluster_seed_match",
+      attributionMethod: "synthesis_cluster_seed_match",
     };
   }
 
@@ -387,28 +406,88 @@ function resolveBuildDifficultyForSynthesisCandidate(
       const rawBuildSimplicityScore = Number(best.opportunity.score.buildSimplicityScore);
       return {
         source: "mapped_opportunity_signal",
+        selectedBuildDifficultySource: "opportunity_build_simplicity_score",
         opportunityCandidateId: best.opportunity.id,
         opportunityCandidateTitle: best.opportunity.title,
+        matchedOpportunityCandidateId: best.opportunity.id,
+        matchedOpportunityCandidateTitle: best.opportunity.title,
         rawBuildSimplicityScore,
+        buildSimplicityScoreUsed: rawBuildSimplicityScore,
         persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
         confidence: Number(best.confidence.toFixed(2)),
         matchReason: best.matchReason,
+        ambiguityReason: null,
         fallbackAvoided: true,
         attribution: best.canonicalOrSemanticMatch ? "canonical_or_semantic_title_match" : best.bestTokenOverlap === 1 ? "normalized_title_match" : "token_market_audience_match",
+        attributionMethod: best.canonicalOrSemanticMatch ? "canonical_or_semantic_title_match" : best.bestTokenOverlap === 1 ? "normalized_title_match" : "token_market_audience_match",
       };
     }
   }
 
+  const contextualMatches = opportunities.filter((opportunity) => {
+    if (!Number.isFinite(Number(opportunity.score.buildSimplicityScore))) return false;
+    const opportunityTitles = [opportunity.normalizedTitle, opportunity.title, opportunity.context?.primaryTheme, opportunity.marketContext?.primaryProblem]
+      .map((value) => normalizedMatchValue(value || ""))
+      .filter(Boolean);
+    const bestTokenOverlap = Math.max(...opportunityTitles.map((title) => tokenOverlapScore(candidate.synthesizedProblemTitle, title)), 0);
+    const opportunityContext = [
+      opportunity.context?.market,
+      opportunity.marketContext?.market,
+      opportunity.context?.audience,
+      opportunity.marketContext?.audience,
+      opportunity.context?.nicheCategory,
+      opportunity.context?.primaryTheme,
+      opportunity.marketContext?.primaryProblem,
+    ].filter(Boolean) as string[];
+    return bestTokenOverlap >= 0.35 && overlapAny([...synthesisMarkets, ...synthesisAudiences, candidate.canonicalProblemCluster].filter(Boolean), opportunityContext);
+  });
+
+  if (contextualMatches.length === 1) {
+    const contextualMatch = contextualMatches[0];
+    const rawBuildSimplicityScore = Number(contextualMatch.score.buildSimplicityScore);
+    return {
+      source: "mapped_opportunity_signal",
+      selectedBuildDifficultySource: "opportunity_build_simplicity_score",
+      opportunityCandidateId: contextualMatch.id,
+      opportunityCandidateTitle: contextualMatch.title,
+      matchedOpportunityCandidateId: contextualMatch.id,
+      matchedOpportunityCandidateTitle: contextualMatch.title,
+      rawBuildSimplicityScore,
+      buildSimplicityScoreUsed: rawBuildSimplicityScore,
+      persistedValue: buildDifficultyFromSimplicityScore(rawBuildSimplicityScore),
+      confidence: 0.75,
+      matchReason: "only finite-build-simplicity opportunity candidate shares synthesis market, audience, or cluster context",
+      ambiguityReason: null,
+      fallbackAvoided: true,
+      attribution: "unique_contextual_opportunity_match",
+      attributionMethod: "unique_contextual_opportunity_match",
+    };
+  }
+
+  const ambiguityReason = explicitIdMatches.length > 1
+    ? "multiple explicit linked opportunity candidates had finite build simplicity scores"
+    : scoredMatches.length > 1
+      ? "multiple equally supported opportunity candidates matched the synthesis row"
+      : contextualMatches.length > 1
+        ? "multiple opportunity candidates shared synthesis context"
+        : "no confident related opportunity build simplicity signal";
+
   return {
     source: "fallback",
+    selectedBuildDifficultySource: "fallback_medium",
     opportunityCandidateId: null,
     opportunityCandidateTitle: null,
+    matchedOpportunityCandidateId: null,
+    matchedOpportunityCandidateTitle: null,
     rawBuildSimplicityScore: null,
+    buildSimplicityScoreUsed: null,
     persistedValue: "Medium",
     confidence: 0,
-    matchReason: scoredMatches.length > 1 ? "multiple equally supported opportunity candidates matched the synthesis row" : "no confident related opportunity build simplicity signal",
+    matchReason: ambiguityReason,
+    ambiguityReason,
     fallbackAvoided: false,
-    attribution: scoredMatches.length > 1 ? "ambiguous" : "unavailable",
+    attribution: ambiguityReason === "no confident related opportunity build simplicity signal" ? "unavailable" : "ambiguous",
+    attributionMethod: ambiguityReason === "no confident related opportunity build simplicity signal" ? "unavailable" : "ambiguous",
   };
 }
 
@@ -539,14 +618,20 @@ export function buildDiscoveryPersistencePlan(
       const rawBuildSimplicityScore = Number(opportunity?.score.buildSimplicityScore);
       const buildDifficultyDiagnostic: BuildDifficultyDiagnostic = {
         source: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "mapped_opportunity_signal" : "fallback",
+        selectedBuildDifficultySource: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "opportunity_build_simplicity_score" : "fallback_medium",
         opportunityCandidateId: opportunity?.id || null,
         opportunityCandidateTitle: opportunity?.title || null,
+        matchedOpportunityCandidateId: opportunity?.id || null,
+        matchedOpportunityCandidateTitle: opportunity?.title || null,
         rawBuildSimplicityScore: Number.isFinite(rawBuildSimplicityScore) ? rawBuildSimplicityScore : null,
+        buildSimplicityScoreUsed: Number.isFinite(rawBuildSimplicityScore) ? rawBuildSimplicityScore : null,
         persistedValue: buildDifficulty(opportunity),
         confidence: opportunity && Number.isFinite(rawBuildSimplicityScore) ? 1 : 0,
         matchReason: opportunity && Number.isFinite(rawBuildSimplicityScore) ? "seed row directly uses its own opportunity build simplicity score" : "no opportunity build simplicity score available for seed row",
+        ambiguityReason: opportunity && Number.isFinite(rawBuildSimplicityScore) ? null : "no opportunity build simplicity score available for seed row",
         fallbackAvoided: Boolean(opportunity && Number.isFinite(rawBuildSimplicityScore)),
         attribution: opportunity ? "normalized_title_match" : "unavailable",
+        attributionMethod: opportunity ? "normalized_title_match" : "unavailable",
       };
       const useFallback = (field: keyof PlannedDiscoveredProblem, source: string) => {
         fallbackFields.push(field);
