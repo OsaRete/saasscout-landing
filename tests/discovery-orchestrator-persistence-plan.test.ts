@@ -319,7 +319,7 @@ test("buildDiscoveryPersistencePlan prefers problem synthesis candidates when av
   assert.equal(plan.rows[0].source_quality_score, 8.9);
   assert.equal(plan.rows[0].opportunity_score, 86);
   assert.equal(plan.diagnostics.source_candidate_counts.problem_synthesis, 1);
-  assert.equal(plan.diagnostics.row_sources[0].source, "mixed_fallback");
+  assert.equal(plan.diagnostics.row_sources[0].source, "problem_synthesis");
   assert.equal(plan.diagnostics.field_sources_by_row[0].sources.problem_title, "orchestrator:problem_synthesis.synthesizedProblemTitle");
   assert.equal(plan.diagnostics.field_sources_by_row[0].sources.affected_niches, "orchestrator:problem_synthesis.affectedMarkets_affectedAudiences_context_enrichment");
   assert.deepEqual(plan.diagnostics.affected_niche_enrichment_by_row[0].diagnostic.addedValues, ["Client reporting automation"]);

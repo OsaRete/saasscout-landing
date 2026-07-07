@@ -281,7 +281,7 @@ test("quality comparison fallback usage still counts build difficulty when synth
               id: "opp-other",
               title: "Different opportunity title",
               normalizedTitle: "different opportunity title",
-              context: { market: "Agency services", audience: "Small agencies", nicheCategory: "Client Operations", primaryTheme: "Client Operations", painCandidateIds: ["pain-1"], patternCandidateIds: [], trendCandidateIds: [] },
+              context: { market: "Retail", audience: "Store managers", nicheCategory: "Inventory", primaryTheme: "Inventory", painCandidateIds: ["pain-1"], patternCandidateIds: [], trendCandidateIds: [] },
               marketContext: { primaryProblem: "Different opportunity signal.", underservedSignals: [], existingSolutionSignals: [] },
               evidence: [],
               score: { totalScore: 8.4, problemUrgencyScore: 8, marketPullScore: 7.8, buildSimplicityScore: 8, evidenceScore: 8.6 },
@@ -295,4 +295,85 @@ test("quality comparison fallback usage still counts build difficulty when synth
   assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, ["build_difficulty"]);
   assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: ["build_difficulty"] }]);
   assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "fallback");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.selectedBuildDifficultySource, "fallback_medium");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.attributionMethod, "unavailable");
+  assert.match(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.ambiguityReason || "", /no confident related opportunity/);
+});
+
+test("deterministic unique synthesis attribution removes build difficulty fallback", () => {
+  const base = createResult();
+  const comparison = buildDiscoveryQualityComparison({
+    legacyProblems,
+    orchestratorResult: createResult({
+      outputs: {
+        ...base.outputs,
+        opportunityDetection: {
+          candidates: [
+            {
+              id: "opp-unique-context",
+              title: "Back office automation opportunity",
+              normalizedTitle: "back office automation opportunity",
+              context: { market: "Agency services", audience: "Small agencies", nicheCategory: "Client Operations", primaryTheme: "Client Operations", painCandidateIds: ["pain-1"], patternCandidateIds: [], trendCandidateIds: [] },
+              marketContext: { primaryProblem: "Small agencies need automated client reporting from scattered tools.", underservedSignals: [], existingSolutionSignals: [] },
+              evidence: [],
+              score: { totalScore: 8.4, problemUrgencyScore: 8, marketPullScore: 7.8, buildSimplicityScore: 8.2, evidenceScore: 8.6 },
+            },
+          ],
+        },
+      },
+    } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, []);
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsByRow, [{ rowIndex: 0, fields: [] }]);
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "mapped_opportunity_signal");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.matchedOpportunityCandidateId, "opp-unique-context");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.buildSimplicityScoreUsed, 8.2);
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.fallbackAvoided, true);
+});
+
+test("ambiguous synthesis attribution preserves Medium build difficulty fallback", () => {
+  const base = createResult();
+  const ambiguousOpportunity = (id: string) => ({
+    id,
+    title: "Back office automation opportunity",
+    normalizedTitle: "back office automation opportunity",
+    context: { market: "Agency services", audience: "Small agencies", nicheCategory: "Client Operations", primaryTheme: "Client Operations", painCandidateIds: ["pain-1"], patternCandidateIds: [], trendCandidateIds: [] },
+    marketContext: { primaryProblem: "Small agencies need automated client reporting from scattered tools.", underservedSignals: [], existingSolutionSignals: [] },
+    evidence: [],
+    score: { totalScore: 8.4, problemUrgencyScore: 8, marketPullScore: 7.8, buildSimplicityScore: 8.2, evidenceScore: 8.6 },
+  });
+  const comparison = buildDiscoveryQualityComparison({
+    legacyProblems,
+    orchestratorResult: createResult({
+      outputs: {
+        ...base.outputs,
+        opportunityDetection: { candidates: [ambiguousOpportunity("opp-a"), ambiguousOpportunity("opp-b")] },
+      },
+    } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+
+  assert.deepEqual(comparison.diagnostics.fallbackFieldsCounted, ["build_difficulty"]);
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.source, "fallback");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.persistedValue, "Medium");
+  assert.equal(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.attributionMethod, "ambiguous");
+  assert.match(comparison.diagnostics.buildDifficultyMappingByRow[0].diagnostic.ambiguityReason || "", /multiple/);
+});
+
+test("fallback usage score improves when deterministic attribution removes fallback fields", () => {
+  const base = createResult();
+  const withoutAttribution = buildDiscoveryQualityComparison({
+    legacyProblems,
+    orchestratorResult: createResult({
+      outputs: {
+        ...base.outputs,
+        opportunityDetection: { candidates: [] },
+      },
+    } as unknown as Partial<DiscoveryModularPipelineResult>),
+  });
+  const withAttribution = buildDiscoveryQualityComparison({ legacyProblems, orchestratorResult: createResult() });
+
+  assert.ok(withoutAttribution.modularMetrics.fallbackFieldCount > withAttribution.modularMetrics.fallbackFieldCount);
+  assert.ok(withAttribution.modularMetrics.fallbackUsageScore > withoutAttribution.modularMetrics.fallbackUsageScore);
+  assert.deepEqual(withAttribution.diagnostics.fallbackFieldsCounted, []);
 });
