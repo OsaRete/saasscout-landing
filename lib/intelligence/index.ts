@@ -47,13 +47,18 @@ export {
 export type {
   Snapshot,
   SnapshotConfidence,
+  SnapshotConfidenceCalibration,
   SnapshotDiagnostics,
   SnapshotDiscoveryContext,
   SnapshotEvidence,
+  SnapshotExecutionConfiguration,
   SnapshotFounderIntelligence,
   SnapshotMetadata,
   SnapshotOpportunityIntelligence,
   SnapshotProblemIntelligence,
   SnapshotProvenance,
+  SnapshotSectionIdentifier,
+  SnapshotSupportTarget,
+  SnapshotSupportTargetField,
   SnapshotVersions,
 } from "./snapshots";

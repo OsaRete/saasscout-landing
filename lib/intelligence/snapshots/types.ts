@@ -29,6 +29,65 @@ export type SnapshotEvidenceRelationship =
   | "supports_confidence"
   | "supports_diagnostic";
 
+export type SnapshotSectionIdentifier =
+  | "metadata"
+  | "discovery_context"
+  | "problem_intelligence"
+  | "opportunity_intelligence"
+  | "founder_intelligence"
+  | "evidence"
+  | "confidence"
+  | "diagnostics"
+  | "versions"
+  | "provenance";
+
+export type SnapshotSupportTargetField =
+  | "title"
+  | "summary"
+  | "pain_description"
+  | "affected_market"
+  | "affected_audience"
+  | "pain_severity"
+  | "frequency"
+  | "urgency"
+  | "existing_workarounds"
+  | "related_niches"
+  | "opportunity_score"
+  | "market_size_signals"
+  | "competitive_signals"
+  | "build_simplicity"
+  | "willingness_to_pay"
+  | "revenue_potential"
+  | "risk_indicators"
+  | "validation_indicators"
+  | "founder_score"
+  | "founder_fit"
+  | "technical_complexity"
+  | "domain_match"
+  | "distribution_match"
+  | "execution_difficulty"
+  | "founder_advantages"
+  | "founder_risks"
+  | "overall"
+  | "evidence"
+  | "opportunity"
+  | "founder"
+  | "market"
+  | "diagnostic_item"
+  | "processing_step"
+  | "metric";
+
+export type SnapshotSupportTarget = Readonly<{
+  /** Canonical Snapshot section supported by this evidence. */
+  section: SnapshotSectionIdentifier;
+  /** Optional canonical field within the target section. */
+  field?: SnapshotSupportTargetField;
+  /** Optional stable identifier for a specific target item, score, diagnostic, or related artifact. */
+  targetId?: string;
+  /** Optional deterministic explanation of why the evidence supports the target. */
+  rationale?: string;
+}>;
+
 export type SnapshotDiagnosticSeverity = "info" | "warning" | "error";
 
 export type SnapshotDiagnosticCategory =
@@ -40,6 +99,40 @@ export type SnapshotDiagnosticCategory =
   | "scoring";
 
 export type SnapshotProcessingStepStatus = "completed" | "skipped" | "warning" | "failed";
+
+export type SnapshotExecutionConfiguration = Readonly<{
+  /** Requested result cap only; actual provider/runtime pagination details are excluded. */
+  requestedMaxResults?: number;
+  /** Normalized source/provider names selected for this execution; no raw provider configuration. */
+  selectedSourceProviders?: readonly string[];
+  /** Canonical Discovery mode requested for this execution. */
+  discoveryMode?: SnapshotDiscoveryMode;
+  /** Locale hint such as "en-US" when provided by Discovery. */
+  locale?: string | null;
+  /** Language hint such as "en" when provided by Discovery. */
+  language?: string | null;
+  /** Market hint requested by the execution context. */
+  marketHint?: string | null;
+  /** Audience hint requested by the execution context. */
+  audienceHint?: string | null;
+  /** Whether founder context was requested; excludes the founder profile itself. */
+  includeFounderContext?: boolean;
+}>;
+
+export type SnapshotConfidenceCalibration = Readonly<{
+  /** Provider-independent calibration method identifier. */
+  method: "heuristic" | "statistical" | "hybrid" | "manual_review" | "unknown";
+  /** Version of the provider-independent confidence method. */
+  methodVersion?: string;
+  /** Deterministic score scale used by confidence scores. */
+  scoreScale?: Readonly<{
+    min: number;
+    max: number;
+    interpretation?: string;
+  }>;
+  /** Deterministic calibration notes only; no runtime debug objects or provider metadata. */
+  notes?: readonly string[];
+}>;
 
 export type SnapshotScore = Readonly<{
   /** Canonical normalized score. Current convention is 0-1 unless a future version says otherwise. */
@@ -78,7 +171,7 @@ export type SnapshotDiscoveryContext = Readonly<{
   execution: Readonly<{
     requestedAt?: string;
     completedAt?: string;
-    configuration?: Readonly<Record<string, unknown>>;
+    configuration?: SnapshotExecutionConfiguration;
   }>;
 }>;
 
@@ -134,8 +227,8 @@ export type SnapshotEvidence = Readonly<{
   }>;
   /** Provider-independent description of the supporting signal; never raw provider payload. */
   claim: string;
-  /** IDs of Snapshot sections or normalized intelligence artifacts this evidence supports. */
-  supports: readonly string[];
+  /** Canonical Snapshot targets this evidence supports; never arbitrary strings or provider payload paths. */
+  supports: readonly SnapshotSupportTarget[];
   confidence?: SnapshotScore;
   provenanceIds: readonly string[];
 }>;
@@ -146,8 +239,8 @@ export type SnapshotConfidence = Readonly<{
   opportunity?: SnapshotScore;
   founder?: SnapshotScore;
   market?: SnapshotScore;
-  /** Reserved for future confidence calibration metadata without forcing a contract rewrite. */
-  calibration?: Readonly<Record<string, unknown>>;
+  /** Provider-independent confidence calibration metadata. */
+  calibration?: SnapshotConfidenceCalibration;
 }>;
 
 export type SnapshotDiagnostics = Readonly<{

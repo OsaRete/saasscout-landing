@@ -1,6 +1,7 @@
 export type {
   Snapshot,
   SnapshotConfidence,
+  SnapshotConfidenceCalibration,
   SnapshotDiagnostics,
   SnapshotDiagnosticCategory,
   SnapshotDiagnosticSeverity,
@@ -9,6 +10,7 @@ export type {
   SnapshotEvidence,
   SnapshotEvidenceKind,
   SnapshotEvidenceRelationship,
+  SnapshotExecutionConfiguration,
   SnapshotFounderIntelligence,
   SnapshotLifecycleState,
   SnapshotMetadata,
@@ -17,5 +19,8 @@ export type {
   SnapshotProcessingStepStatus,
   SnapshotProvenance,
   SnapshotScore,
+  SnapshotSectionIdentifier,
+  SnapshotSupportTarget,
+  SnapshotSupportTargetField,
   SnapshotVersions,
 } from "./types";
