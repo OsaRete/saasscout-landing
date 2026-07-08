@@ -20,6 +20,10 @@ export default function PrivacyPage() {
           We use this information to provide access to the product, improve the
           experience, and understand what features users need. We do not sell
           your personal data.
+
+          SaaSScout may integrate with third-party services and public data providers. 
+          We use only the information necessary to provide research insights and 
+          comply with the applicable terms governing those services.
         </p>
 
         <p className="mt-5 text-gray-400">
@@ -34,7 +38,7 @@ export default function PrivacyPage() {
 
         <p className="mt-5 text-gray-400">
           To request deletion of your data or contact us about privacy, email us
-          at: <span className="text-violet-300">contact@trysaasscout.com</span>
+          at: <span className="text-violet-300">cedeomartineze@gmail.com</span>
         </p>
 
         <p className="mt-10 text-sm text-gray-500">

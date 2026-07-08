@@ -35,7 +35,7 @@ export default function TermsPage() {
 
         <p className="mt-5 text-gray-400">
           For questions, contact us at:{" "}
-          <span className="text-violet-300">contact@trysaasscout.com</span>
+          <span className="text-violet-300">cedeomartineze@gmail.com</span>
         </p>
 
         <p className="mt-10 text-sm text-gray-500">
