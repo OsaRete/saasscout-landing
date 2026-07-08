@@ -24,3 +24,14 @@ export type {
   SnapshotSupportTargetField,
   SnapshotVersions,
 } from "./types";
+
+export {
+  buildSnapshot,
+  SNAPSHOT_BUILDER_CONTRACT_VERSION,
+  SNAPSHOT_BUILDER_ENGINE_VERSION,
+  SNAPSHOT_BUILDER_INTELLIGENCE_VERSION,
+  SNAPSHOT_BUILDER_NORMALIZATION_VERSION,
+  SNAPSHOT_BUILDER_SNAPSHOT_VERSION,
+  type SnapshotBuilderInput,
+  type SnapshotBuilderMetadataInput,
+} from "./builder.ts";
