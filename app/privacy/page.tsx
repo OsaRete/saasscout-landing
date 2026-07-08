@@ -26,6 +26,10 @@ export default function PrivacyPage() {
           Some data may be stored using trusted third-party services such as
           Supabase, Vercel, and analytics or AI providers we may add in the
           future.
+          SaaSScout may process publicly available information from third-party
+          platforms and public sources to generate research insights. 
+          Such information is accessed and used in accordance with the 
+          applicable terms and policies of those services.
         </p>
 
         <p className="mt-5 text-gray-400">
