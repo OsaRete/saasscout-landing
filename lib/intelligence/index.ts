@@ -43,3 +43,17 @@ export {
   type SolutionConfidenceBucket,
   type SolutionDiagnosticAggregateReport,
 } from "./solution-diagnostics/index.ts";
+
+export type {
+  Snapshot,
+  SnapshotConfidence,
+  SnapshotDiagnostics,
+  SnapshotDiscoveryContext,
+  SnapshotEvidence,
+  SnapshotFounderIntelligence,
+  SnapshotMetadata,
+  SnapshotOpportunityIntelligence,
+  SnapshotProblemIntelligence,
+  SnapshotProvenance,
+  SnapshotVersions,
+} from "./snapshots";
