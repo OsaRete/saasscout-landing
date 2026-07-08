@@ -35,3 +35,11 @@ export {
   type SnapshotBuilderInput,
   type SnapshotBuilderMetadataInput,
 } from "./builder.ts";
+
+export {
+  mapDiscoveryToSnapshotInput,
+  type DiscoverySnapshotAdapterContextInput,
+  type DiscoverySnapshotAdapterEvidenceInput,
+  type DiscoverySnapshotAdapterInput,
+  type DiscoverySnapshotAdapterMetadataInput,
+} from "./discovery-adapter.ts";
