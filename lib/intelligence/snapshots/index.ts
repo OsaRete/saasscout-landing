@@ -73,3 +73,20 @@ export {
   type SnapshotPersistenceSuccessResult,
   type SnapshotPersistenceValidationMetadata,
 } from "./persistence.ts";
+
+export {
+  mapSnapshotPersistenceInputToStorageRecords,
+  type SnapshotEngineAttributionStorageRecord,
+  type SnapshotEvidenceLineageStorageRecord,
+  type SnapshotEvidenceStorageRecord,
+  type SnapshotEvidenceSupportStorageRecord,
+  type SnapshotIdentityStorageRecord,
+  type SnapshotProcessingHistoryStorageRecord,
+  type SnapshotProvenanceSourceStorageRecord,
+  type SnapshotSectionStorageRecord,
+  type SnapshotStorageMapping,
+  type SnapshotStorageRecord,
+  type SnapshotStorageRecordBase,
+  type SnapshotStorageRecordKind,
+  type SnapshotValidationStorageRecord,
+} from "./storage-mapper.ts";
