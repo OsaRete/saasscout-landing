@@ -287,3 +287,111 @@ test("mapDiscoveryToSnapshotInput excludes provider payloads, prompt history, ru
     /rawProviderPayload|promptHistory|runtimeDebug|uiState|providerRequestId/i,
   );
 });
+
+const forbiddenRuntimeFields = {
+  rawProviderPayload: { provider: "openai" },
+  promptHistory: ["system", "user"],
+  runtimeDebug: { trace: true },
+  uiState: { tab: "debug" },
+  providerRequestId: "provider-request-1",
+  tokenUsage: { input: 100, output: 50 },
+  supabaseClient: { connected: true },
+  openaiResponse: { id: "response-1" },
+  serpApiPayload: { organic_results: [] },
+  xApiPayload: { posts: [] },
+} as const;
+
+function withForbiddenFields<T extends object>(value: T): T {
+  return { ...value, ...forbiddenRuntimeFields };
+}
+
+function assertNoForbiddenRuntimeFields(value: unknown): void {
+  const serialized = JSON.stringify(value);
+
+  for (const fieldName of Object.keys(forbiddenRuntimeFields)) {
+    assert.doesNotMatch(serialized, new RegExp(fieldName, "i"));
+  }
+}
+
+test("mapDiscoveryToSnapshotInput strips forbidden runtime fields from every spread-sensitive section", () => {
+  const inputWithRuntimeFields = withForbiddenFields({
+    ...adapterInput,
+    discoveryContext: withForbiddenFields({
+      ...adapterInput.discoveryContext,
+      configuration: withForbiddenFields({
+        ...adapterInput.discoveryContext.configuration,
+      }),
+    }),
+    problemIntelligence: withForbiddenFields({
+      ...adapterInput.problemIntelligence,
+      painSeverity: withForbiddenFields({
+        ...adapterInput.problemIntelligence.painSeverity,
+      }),
+    }),
+    opportunityIntelligence: withForbiddenFields({
+      ...adapterInput.opportunityIntelligence,
+      opportunityScore: withForbiddenFields({
+        ...adapterInput.opportunityIntelligence.opportunityScore,
+      }),
+    }),
+    founderIntelligence: withForbiddenFields({
+      ...adapterInput.founderIntelligence,
+      founderScore: withForbiddenFields({
+        ...adapterInput.founderIntelligence?.founderScore,
+      }),
+    }),
+    evidence: adapterInput.evidence.map((evidence) =>
+      withForbiddenFields({
+        ...evidence,
+        sourceReference: evidence.sourceReference
+          ? withForbiddenFields({ ...evidence.sourceReference })
+          : undefined,
+        supports: evidence.supports.map((support) =>
+          withForbiddenFields({ ...support }),
+        ),
+        confidence: evidence.confidence
+          ? withForbiddenFields({ ...evidence.confidence })
+          : undefined,
+      }),
+    ),
+    confidence: withForbiddenFields({
+      ...adapterInput.confidence,
+      overall: withForbiddenFields({ ...adapterInput.confidence.overall }),
+      evidence: withForbiddenFields({ ...adapterInput.confidence.evidence }),
+      opportunity: withForbiddenFields({ ...adapterInput.confidence.opportunity }),
+      founder: withForbiddenFields({ ...adapterInput.confidence.founder }),
+      market: withForbiddenFields({ ...adapterInput.confidence.market }),
+      calibration: withForbiddenFields({
+        ...adapterInput.confidence.calibration,
+        scoreScale: withForbiddenFields({
+          ...adapterInput.confidence.calibration?.scoreScale,
+        }),
+      }),
+    }),
+    diagnostics: withForbiddenFields({
+      ...adapterInput.diagnostics,
+      items: adapterInput.diagnostics?.items.map((item) =>
+        withForbiddenFields({ ...item }),
+      ),
+      processing: adapterInput.diagnostics?.processing.map((step) =>
+        withForbiddenFields({ ...step }),
+      ),
+    }),
+    versions: withForbiddenFields({ ...adapterInput.versions }),
+    provenance: withForbiddenFields({
+      ...adapterInput.provenance,
+      engineAttribution: adapterInput.provenance?.engineAttribution.map(
+        (attribution) => withForbiddenFields({ ...attribution }),
+      ),
+      processingHistory: adapterInput.provenance?.processingHistory.map(
+        (history) => withForbiddenFields({ ...history }),
+      ),
+    }),
+  }) as DiscoverySnapshotAdapterInput;
+
+  const builderInput = mapDiscoveryToSnapshotInput(inputWithRuntimeFields);
+  const snapshot = buildSnapshot(builderInput);
+
+  assertNoForbiddenRuntimeFields(builderInput);
+  assertNoForbiddenRuntimeFields(snapshot);
+});
