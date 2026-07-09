@@ -43,3 +43,11 @@ export {
   type DiscoverySnapshotAdapterInput,
   type DiscoverySnapshotAdapterMetadataInput,
 } from "./discovery-adapter.ts";
+
+export {
+  validateSnapshot,
+  type SnapshotValidationIssue,
+  type SnapshotValidationResult,
+  type SnapshotValidationSeverity,
+  type SnapshotValidationSummary,
+} from "./validator.ts";
