@@ -51,3 +51,12 @@ export {
   type SnapshotValidationSeverity,
   type SnapshotValidationSummary,
 } from "./validator.ts";
+
+export {
+  runSnapshotPipeline,
+  type SnapshotPipelineDiagnostic,
+  type SnapshotPipelineResult,
+  type SnapshotPipelineStage,
+  type SnapshotPipelineStatus,
+  type SnapshotPipelineSummary,
+} from "./pipeline.ts";
