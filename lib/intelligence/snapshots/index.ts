@@ -60,3 +60,16 @@ export {
   type SnapshotPipelineStatus,
   type SnapshotPipelineSummary,
 } from "./pipeline.ts";
+
+export {
+  createSnapshotPersistenceInputFromPipeline,
+  InMemorySnapshotPersistencePort,
+  type SnapshotPersistenceFailureResult,
+  type SnapshotPersistenceInput,
+  type SnapshotPersistenceInputResult,
+  type SnapshotPersistencePort,
+  type SnapshotPersistenceRejectionReason,
+  type SnapshotPersistenceResult,
+  type SnapshotPersistenceSuccessResult,
+  type SnapshotPersistenceValidationMetadata,
+} from "./persistence.ts";
