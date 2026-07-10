@@ -90,3 +90,18 @@ export {
   type SnapshotStorageRecordKind,
   type SnapshotValidationStorageRecord,
 } from "./storage-mapper.ts";
+
+export {
+  InMemorySnapshotRepositoryPort,
+  validateSnapshotRepositoryWriteInput,
+  type SnapshotRepositoryFailureReason,
+  type SnapshotRepositoryFailureResult,
+  type SnapshotRepositoryIssue,
+  type SnapshotRepositoryPort,
+  type SnapshotRepositoryReadInput,
+  type SnapshotRepositoryReadResult,
+  type SnapshotRepositoryReadSuccessResult,
+  type SnapshotRepositoryWriteInput,
+  type SnapshotRepositoryWriteResult,
+  type SnapshotRepositoryWriteSuccessResult,
+} from "./repository.ts";
