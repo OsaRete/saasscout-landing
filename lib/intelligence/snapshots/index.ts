@@ -45,6 +45,7 @@ export {
 } from "./discovery-adapter.ts";
 
 export {
+  SNAPSHOT_VALIDATOR_VERSION,
   validateSnapshot,
   type SnapshotValidationIssue,
   type SnapshotValidationResult,
@@ -102,6 +103,7 @@ export {
   type SnapshotRepositoryReadResult,
   type SnapshotRepositoryReadSuccessResult,
   type SnapshotRepositoryWriteInput,
+  type SnapshotRepositoryWriteOutcome,
   type SnapshotRepositoryWriteResult,
   type SnapshotRepositoryWriteSuccessResult,
 } from "./repository.ts";

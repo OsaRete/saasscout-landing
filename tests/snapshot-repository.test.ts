@@ -140,3 +140,75 @@ test("Snapshot repository boundary has no database, SQL, API, UI, or production 
   assert.doesNotMatch(source, /createClient|from\(["']|select\s+.*\s+from|insert\s+into|update\s+.*\s+set|delete\s+from|migration/i);
   assert.doesNotMatch(source, /fetch\(|route\.ts|api\/|use client|feature flag|knowledge evolution|recommendation/i);
 });
+
+test("Snapshot repository returns inserted then replayed_identical for identical replay", () => {
+  const mapping = storageMapping();
+  const repository = new InMemorySnapshotRepositoryPort();
+
+  const first = repository.writeSnapshotMapping({ mapping });
+  const replay = repository.writeSnapshotMapping({ mapping });
+
+  assert.equal(first.status, "success");
+  assert.equal(replay.status, "success");
+  if (first.status !== "success" || replay.status !== "success") assert.fail("expected repository write success");
+  assert.equal(first.outcome, "inserted");
+  assert.equal(first.written, true);
+  assert.equal(replay.outcome, "replayed_identical");
+  assert.equal(replay.written, false);
+});
+
+test("Snapshot repository rejects conflicting replay and never replaces existing mapping", () => {
+  const mapping = storageMapping();
+  const repository = new InMemorySnapshotRepositoryPort();
+  const first = repository.writeSnapshotMapping({ mapping });
+  assert.equal(first.status, "success");
+
+  const conflicting: SnapshotStorageMapping = {
+    ...mapping,
+    records: Object.freeze(mapping.records.map((record) => (
+      record.kind === "snapshot_evidence"
+        ? Object.freeze({ ...record, claim: `${record.claim} Conflicting rewrite.` })
+        : record
+    ))),
+  };
+
+  const conflict = repository.writeSnapshotMapping({ mapping: conflicting });
+  assert.equal(conflict.status, "failure");
+  if (conflict.status !== "failure") assert.fail("expected repository conflict");
+  assert.equal(conflict.reason, "rejected_conflict");
+
+  const read = repository.readSnapshotMapping({
+    snapshotId: mapping.snapshotId,
+    discoveryId: mapping.discoveryId,
+    contractVersion: mapping.contractVersion,
+    idempotencyKey: mapping.idempotencyKey,
+  });
+  assert.equal(read.status, "success");
+  if (read.status !== "success") assert.fail("expected repository read success");
+  assert.deepEqual(read.mapping, mapping);
+});
+
+test("Snapshot repository validates required section uniqueness and optional founder zero-or-one semantics", () => {
+  const mapping = storageMapping();
+  const withoutRequired: SnapshotStorageMapping = {
+    ...mapping,
+    records: Object.freeze(mapping.records.filter((record) => !(record.kind === "snapshot_section" && record.section === "confidence"))),
+  };
+  assert.equal(validateSnapshotRepositoryWriteInput({ mapping: withoutRequired }).some((issue) => issue.message.includes("confidence")), true);
+
+  const founderRecords = mapping.records.filter((record) => record.kind === "snapshot_section" && record.section === "founder_intelligence");
+  assert.equal(founderRecords.length, 0);
+
+  const problemSection = mapping.records.find((record) => record.kind === "snapshot_section" && record.section === "problem_intelligence");
+  assert.ok(problemSection);
+  if (!problemSection || problemSection.kind !== "snapshot_section") assert.fail("expected problem section");
+  const duplicateFounder: SnapshotStorageMapping = {
+    ...mapping,
+    records: Object.freeze([
+      ...mapping.records,
+      Object.freeze({ ...problemSection, storageKey: `${problemSection.storageKey}:founder-a`, section: "founder_intelligence" as const }),
+      Object.freeze({ ...problemSection, storageKey: `${problemSection.storageKey}:founder-b`, section: "founder_intelligence" as const }),
+    ]),
+  };
+  assert.equal(validateSnapshotRepositoryWriteInput({ mapping: duplicateFounder }).some((issue) => issue.message.includes("zero or one founder_intelligence")), true);
+});

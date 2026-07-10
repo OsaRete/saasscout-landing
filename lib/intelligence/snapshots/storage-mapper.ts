@@ -61,7 +61,7 @@ export type SnapshotEvidenceStorageRecord = SnapshotStorageRecordBase & Readonly
 export type SnapshotEvidenceSupportStorageRecord = SnapshotStorageRecordBase & Readonly<{
   kind: "snapshot_evidence_support";
   evidenceId: string;
-  supportIndex: number;
+  supportKey: string;
   support: SnapshotEvidence["supports"][number];
 }>;
 
@@ -119,6 +119,23 @@ const SECTION_ORDER: readonly MappableSection[] = Object.freeze([
   "confidence",
   "diagnostics",
 ]);
+
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalize(entryValue)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function semanticKey(parts: readonly unknown[]): string {
+  return parts.map((part) => canonicalize(part)).join(":");
+}
 
 function baseRecord(input: SnapshotPersistenceInput, kind: SnapshotStorageRecordKind, suffix: string): SnapshotStorageRecordBase {
   const { metadata } = input.snapshot;
@@ -178,15 +195,16 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
       provenanceIds: evidence.provenanceIds,
     }));
 
-    evidence.supports.forEach((support, supportIndex) => {
+    for (const support of [...evidence.supports].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+      const supportKey = semanticKey([support.section, support.field ?? null, support.targetId ?? null, support.rationale ?? null]);
       records.push(Object.freeze({
-        ...baseRecord(input, "snapshot_evidence_support", `evidence:${evidence.evidenceId}:support:${supportIndex}`),
+        ...baseRecord(input, "snapshot_evidence_support", `evidence:${evidence.evidenceId}:support:${supportKey}`),
         kind: "snapshot_evidence_support" as const,
         evidenceId: evidence.evidenceId,
-        supportIndex,
+        supportKey,
         support,
       }));
-    });
+    }
   }
 
   for (const source of snapshot.provenance.sourceReferences) {
@@ -205,21 +223,23 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
     }));
   }
 
-  snapshot.provenance.engineAttribution.forEach((attribution, index) => {
+  for (const attribution of [...snapshot.provenance.engineAttribution].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+    const attributionKey = semanticKey([attribution.engineName, attribution.engineVersion, attribution.section]);
     records.push(Object.freeze({
-      ...baseRecord(input, "snapshot_engine_attribution", `provenance:engine:${index}:${attribution.section}`),
+      ...baseRecord(input, "snapshot_engine_attribution", `provenance:engine:${attributionKey}`),
       kind: "snapshot_engine_attribution" as const,
       attribution,
     }));
-  });
+  }
 
-  snapshot.provenance.processingHistory.forEach((history, index) => {
+  for (const history of [...snapshot.provenance.processingHistory].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+    const historyKey = semanticKey([history.step, history.completedAt ?? null, history.version ?? null]);
     records.push(Object.freeze({
-      ...baseRecord(input, "snapshot_processing_history", `provenance:processing:${index}:${history.step}`),
+      ...baseRecord(input, "snapshot_processing_history", `provenance:processing:${historyKey}`),
       kind: "snapshot_processing_history" as const,
       history,
     }));
-  });
+  }
 
   records.push(Object.freeze({
     ...baseRecord(input, "snapshot_validation", "validation"),

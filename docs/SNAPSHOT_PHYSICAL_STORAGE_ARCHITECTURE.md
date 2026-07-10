@@ -448,3 +448,6 @@ Observation Extraction always consumes persisted Snapshots.
 Future storage implementations must preserve these invariants exactly.
 
 No infrastructure implementation may weaken them.
+## Snapshot storage identity and conflict policy
+
+The canonical storage identity, replay/conflict semantics, version storage policy, optional-section uniqueness rules, validation metadata ownership, and atomic write requirements are defined in `docs/SNAPSHOT_STORAGE_IDENTITY_AND_CONFLICT_POLICY.md`. Physical schema work must conform to that policy before introducing SQL migrations.

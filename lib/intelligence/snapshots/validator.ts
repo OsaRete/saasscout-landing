@@ -1,5 +1,7 @@
 import type { Snapshot, SnapshotSectionIdentifier, SnapshotSupportTargetField } from "./types";
 
+export const SNAPSHOT_VALIDATOR_VERSION = "1.0";
+
 export type SnapshotValidationSeverity = "error" | "warning";
 
 export type SnapshotValidationIssue = Readonly<{

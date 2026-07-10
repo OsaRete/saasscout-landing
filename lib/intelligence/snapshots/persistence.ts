@@ -1,6 +1,6 @@
 import type { Snapshot } from "./types";
 import type { SnapshotPipelineResult } from "./pipeline.ts";
-import type { SnapshotValidationIssue, SnapshotValidationResult, SnapshotValidationSummary } from "./validator.ts";
+import { SNAPSHOT_VALIDATOR_VERSION, type SnapshotValidationIssue, type SnapshotValidationResult, type SnapshotValidationSummary } from "./validator.ts";
 
 export type SnapshotPersistenceRejectionReason =
   | "invalid_snapshot"
@@ -10,7 +10,9 @@ export type SnapshotPersistenceRejectionReason =
 
 export type SnapshotPersistenceValidationMetadata = Readonly<{
   valid: true;
+  validatorVersion: string;
   summary: SnapshotValidationSummary;
+  errors: readonly SnapshotValidationIssue[];
   warnings: readonly SnapshotValidationIssue[];
 }>;
 
@@ -30,6 +32,7 @@ export type SnapshotPersistenceSuccessResult = Readonly<{
   discoveryId: string;
   persistenceId: string;
   message: string;
+  errors: readonly SnapshotValidationIssue[];
   warnings: readonly SnapshotValidationIssue[];
 }>;
 
@@ -64,7 +67,9 @@ function persistenceIdFor(snapshot: Snapshot): string {
 function validationMetadata(validation: SnapshotValidationResult): SnapshotPersistenceValidationMetadata {
   return Object.freeze({
     valid: true as const,
+    validatorVersion: SNAPSHOT_VALIDATOR_VERSION,
     summary: validation.summary,
+    errors: Object.freeze([...validation.errors]),
     warnings: Object.freeze([...validation.warnings]),
   });
 }
@@ -147,6 +152,7 @@ export class InMemorySnapshotPersistencePort implements SnapshotPersistencePort 
       discoveryId: input.snapshot.metadata.discoveryId,
       persistenceId: input.idempotencyKey,
       message: "Validated Snapshot accepted by in-memory persistence boundary double.",
+      errors: Object.freeze([...input.validation.errors]),
       warnings: Object.freeze([...input.validation.warnings]),
     });
   }
