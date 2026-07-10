@@ -416,4 +416,6 @@ revoke all on table public.snapshot_evidence_lineage from anon, authenticated;
 revoke all on table public.snapshot_engine_attribution from anon, authenticated;
 revoke all on table public.snapshot_processing_history from anon, authenticated;
 revoke all on table public.snapshot_validations from anon, authenticated;
-revoke all on function public.write_snapshot_mapping(jsonb) from anon, authenticated;
+revoke all on function public.snapshot_require_non_empty(text, text) from public, anon, authenticated;
+revoke all on function public.write_snapshot_mapping(jsonb) from public, anon, authenticated;
+grant execute on function public.write_snapshot_mapping(jsonb) to service_role;
