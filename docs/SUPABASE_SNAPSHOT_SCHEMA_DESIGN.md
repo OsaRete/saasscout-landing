@@ -461,3 +461,6 @@ Knowledge Evolution is downstream.
 Observation Extraction is downstream.
 
 Repository implementation never changes Snapshot semantics.
+## Migration prerequisite: identity and conflict policy
+
+The Supabase Snapshot schema must not be implemented until it has been audited against `docs/SNAPSHOT_STORAGE_IDENTITY_AND_CONFLICT_POLICY.md`. SQL constraints and write procedures must preserve deterministic semantic identities, full-version retention, first-class compatibility columns where specified, atomic writes, and no-overwrite conflict handling.

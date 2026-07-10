@@ -7,6 +7,7 @@ export type SnapshotRepositoryFailureReason =
   | "record_idempotency_mismatch"
   | "record_set_empty"
   | "not_found"
+  | "rejected_conflict"
   | "port_unavailable";
 
 export type SnapshotRepositoryIssue = Readonly<{
@@ -31,9 +32,12 @@ export type SnapshotRepositoryReadInput = Readonly<{
   idempotencyKey: string;
 }>;
 
+export type SnapshotRepositoryWriteOutcome = "inserted" | "replayed_identical";
+
 export type SnapshotRepositoryWriteSuccessResult = Readonly<{
   status: "success";
-  written: true;
+  outcome: SnapshotRepositoryWriteOutcome;
+  written: boolean;
   snapshotId: string;
   discoveryId: string;
   contractVersion: string;
@@ -84,6 +88,19 @@ function repositoryKeyFor(input: SnapshotRepositoryReadInput): string {
   return `${input.discoveryId}:${input.snapshotId}:${input.contractVersion}:${input.idempotencyKey}`;
 }
 
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalize(entryValue)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
 function failureFromMapping(
   mapping: SnapshotStorageMapping | undefined,
   reason: SnapshotRepositoryFailureReason,
@@ -131,6 +148,11 @@ export function validateSnapshotRepositoryWriteInput(
     }));
   }
 
+  const seenStorageKeys = new Set<string>();
+  const requiredSectionNames = ["discovery_context", "problem_intelligence", "opportunity_intelligence", "confidence", "diagnostics"] as const;
+  const sectionCounts = new Map<string, number>(requiredSectionNames.map((section) => [section, 0]));
+  let founderSectionCount = 0;
+
   for (const record of mapping.records ?? []) {
     if (
       record.snapshotId !== mapping.snapshotId
@@ -144,6 +166,20 @@ export function validateSnapshotRepositoryWriteInput(
       }));
     }
 
+    if (seenStorageKeys.has(record.storageKey)) {
+      issues.push(Object.freeze({
+        reason: "invalid_storage_mapping" as const,
+        storageKey: record.storageKey,
+        message: "Storage record identities must be unique within a Snapshot mapping.",
+      }));
+    }
+    seenStorageKeys.add(record.storageKey);
+
+    if (record.kind === "snapshot_section") {
+      if (record.section === "founder_intelligence") founderSectionCount += 1;
+      if (sectionCounts.has(record.section)) sectionCounts.set(record.section, (sectionCounts.get(record.section) ?? 0) + 1);
+    }
+
     if (record.kind === "snapshot_identity" && record.idempotencyKey !== mapping.idempotencyKey) {
       issues.push(Object.freeze({
         reason: "record_idempotency_mismatch" as const,
@@ -151,6 +187,22 @@ export function validateSnapshotRepositoryWriteInput(
         message: "Snapshot identity record idempotency key must match the SnapshotStorageMapping identity.",
       }));
     }
+  }
+
+  for (const section of requiredSectionNames) {
+    if (sectionCounts.get(section) !== 1) {
+      issues.push(Object.freeze({
+        reason: "invalid_storage_mapping" as const,
+        message: `Snapshot storage mapping requires exactly one ${section} section record.`,
+      }));
+    }
+  }
+
+  if (founderSectionCount > 1) {
+    issues.push(Object.freeze({
+      reason: "invalid_storage_mapping" as const,
+      message: "Snapshot storage mapping allows zero or one founder_intelligence section record.",
+    }));
   }
 
   return Object.freeze(issues);
@@ -171,11 +223,34 @@ export class InMemorySnapshotRepositoryPort implements SnapshotRepositoryPort {
 
     const { mapping } = input;
     const repositoryKey = repositoryKeyFor(mapping);
+    const existing = this.mappings.get(repositoryKey);
+    if (existing) {
+      if (canonicalize(existing) === canonicalize(mapping)) {
+        return Object.freeze({
+          status: "success" as const,
+          outcome: "replayed_identical" as const,
+          written: false,
+          snapshotId: mapping.snapshotId,
+          discoveryId: mapping.discoveryId,
+          contractVersion: mapping.contractVersion,
+          idempotencyKey: mapping.idempotencyKey,
+          repositoryKey,
+          recordCount: mapping.records.length,
+          message: "Snapshot storage mapping replay matched existing immutable content.",
+        });
+      }
+
+      return failureFromMapping(mapping, "rejected_conflict", "Snapshot storage mapping conflicts with existing immutable content and was not written.", [
+        Object.freeze({ reason: "rejected_conflict" as const, message: "Same repository identity has different canonical content." }),
+      ]);
+    }
+
     this.mappings.set(repositoryKey, mapping);
 
     return Object.freeze({
       status: "success" as const,
-      written: true as const,
+      outcome: "inserted" as const,
+      written: true,
       snapshotId: mapping.snapshotId,
       discoveryId: mapping.discoveryId,
       contractVersion: mapping.contractVersion,

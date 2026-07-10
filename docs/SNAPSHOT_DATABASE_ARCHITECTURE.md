@@ -514,3 +514,6 @@ Knowledge Evolution never modifies Snapshot storage.
 Observation Extraction always starts from persisted Snapshots.
 
 Database implementation never changes Snapshot semantics.
+## Pre-SQL identity gate
+
+Before the first Snapshot SQL migration, database architecture must satisfy `docs/SNAPSHOT_STORAGE_IDENTITY_AND_CONFLICT_POLICY.md`: atomic mapping writes, inserted versus identical replay versus rejected conflict outcomes, immutable historical records, exact required-section uniqueness, zero-or-one founder intelligence, and validator-owned `validatorVersion` persistence.

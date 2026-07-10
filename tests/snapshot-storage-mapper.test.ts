@@ -180,3 +180,65 @@ test("storage mapper has no database, repository, workflow, or provider-payload 
   assert.doesNotMatch(source, /knowledge evolution|recommendation|feature flag/i);
   assert.doesNotMatch(mappingJson, /rawProviderPayload|promptHistory|runtimeDebug|uiState|providerRequestId|tokenUsage/i);
 });
+
+test("reordered equivalent child records produce the same storage identities", () => {
+  const reordered: DiscoverySnapshotAdapterInput = structuredClone(input);
+  reordered.evidence = reordered.evidence.map((evidence) => ({
+    ...evidence,
+    supports: [...evidence.supports].reverse(),
+  })).reverse();
+  reordered.provenance.engineAttribution = [...reordered.provenance.engineAttribution].reverse();
+  reordered.provenance.processingHistory = [
+    { step: "snapshot_validated", completedAt: "2026-07-08T00:02:00.000Z", version: "1.0" },
+    ...reordered.provenance.processingHistory,
+  ];
+
+  const baseWithSameHistory: DiscoverySnapshotAdapterInput = structuredClone(input);
+  baseWithSameHistory.provenance.processingHistory = [
+    ...baseWithSameHistory.provenance.processingHistory,
+    { step: "snapshot_validated", completedAt: "2026-07-08T00:02:00.000Z", version: "1.0" },
+  ];
+
+  const leftResult = createSnapshotPersistenceInputFromPipeline(runSnapshotPipeline(baseWithSameHistory));
+  assert.equal(leftResult.status, "accepted");
+  if (leftResult.status !== "accepted") assert.fail("expected accepted persistence input");
+  const left = mapSnapshotPersistenceInputToStorageRecords(leftResult.input);
+  const rightResult = createSnapshotPersistenceInputFromPipeline(runSnapshotPipeline(reordered));
+  assert.equal(rightResult.status, "accepted");
+  if (rightResult.status !== "accepted") assert.fail("expected accepted persistence input");
+  const right = mapSnapshotPersistenceInputToStorageRecords(rightResult.input);
+
+  assert.deepEqual(
+    left.records.filter((record) => record.kind === "snapshot_evidence_support").map((record) => record.storageKey).sort(),
+    right.records.filter((record) => record.kind === "snapshot_evidence_support").map((record) => record.storageKey).sort(),
+  );
+  assert.deepEqual(
+    left.records.filter((record) => record.kind === "snapshot_engine_attribution").map((record) => record.storageKey).sort(),
+    right.records.filter((record) => record.kind === "snapshot_engine_attribution").map((record) => record.storageKey).sort(),
+  );
+  assert.deepEqual(
+    left.records.filter((record) => record.kind === "snapshot_processing_history").map((record) => record.storageKey).sort(),
+    right.records.filter((record) => record.kind === "snapshot_processing_history").map((record) => record.storageKey).sort(),
+  );
+});
+
+test("evidence support, engine attribution, and processing history keys do not depend on array index", () => {
+  const mapping = mapSnapshotPersistenceInputToStorageRecords(acceptedPersistenceInput());
+  const childKeys = mapping.records
+    .filter((record) => record.kind === "snapshot_evidence_support" || record.kind === "snapshot_engine_attribution" || record.kind === "snapshot_processing_history")
+    .map((record) => record.storageKey);
+
+  assert.equal(childKeys.every((key) => !/:support:\d+$/.test(key)), true);
+  assert.equal(childKeys.every((key) => !/:engine:\d+:/.test(key)), true);
+  assert.equal(childKeys.every((key) => !/:processing:\d+:/.test(key)), true);
+});
+
+test("validation storage preserves validator version and deterministic diagnostics", () => {
+  const mapping = mapSnapshotPersistenceInputToStorageRecords(acceptedPersistenceInput());
+  const validationRecord = mapping.records.find((record) => record.kind === "snapshot_validation");
+
+  assert.equal(validationRecord?.validation.valid, true);
+  assert.equal(validationRecord?.validation.validatorVersion, "1.0");
+  assert.deepEqual(validationRecord?.validation.errors, []);
+  assert.equal(validationRecord?.validation.summary.evidenceCount, 2);
+});

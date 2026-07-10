@@ -483,3 +483,6 @@ Provider-specific information is never stored.
 Knowledge Evolution never modifies Snapshot storage.
 
 Future repository implementations must preserve these invariants exactly.
+## Identity, replay, and version alignment
+
+Snapshot storage identity and repository replay behavior are governed by `docs/SNAPSHOT_STORAGE_IDENTITY_AND_CONFLICT_POLICY.md`. Storage keys must be derived from canonical semantic fields, never array indexes, insertion order, provider execution order, database-generated business identifiers, or provider-specific behavior. The full Snapshot `versions` object is retained while migration designs may additionally expose first-class version columns for compatibility and indexing.
