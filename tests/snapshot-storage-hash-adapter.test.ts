@@ -29,12 +29,104 @@ function mapping(): SnapshotStorageMapping {
   return mapSnapshotPersistenceInputToStorageRecords(persistence.input);
 }
 
+function identityWithVersionsValue(value: unknown): SnapshotStorageMapping["records"][number] {
+  const identity = mapping().records.find((record) => record.kind === "snapshot_identity");
+  assert.ok(identity);
+  if (!identity || identity.kind !== "snapshot_identity") assert.fail("expected identity record");
+
+  return {
+    ...identity,
+    versions: {
+      ...identity.versions,
+      canonicalTestValue: value,
+    },
+  } as typeof identity;
+}
+
 test("canonical storage hashing is deterministic and order-independent by storageKey", () => {
   const base = mapping();
   const reordered = { ...base, records: Object.freeze([...base.records].reverse()) };
   assert.equal(hashSnapshotStorageMapping(base), hashSnapshotStorageMapping(base));
   assert.equal(hashSnapshotStorageMapping(base), hashSnapshotStorageMapping(reordered));
   assert.match(hashSnapshotStorageMapping(base), /^sha256:[0-9a-f]{64}$/);
+});
+
+test("canonical storage hashing accepts supported primitive, array, and plain-object values", () => {
+  const supportedValues = [
+    null,
+    0,
+    42,
+    0.125,
+    -7,
+    true,
+    false,
+    "2026-07-10T00:01:00.000Z",
+    ["alpha", 1, false, null, { nested: "value" }],
+    { z: "last", a: { nested: ["first", 2] } },
+  ];
+
+  for (const value of supportedValues) {
+    assert.match(hashSnapshotStorageRecord(identityWithVersionsValue(value)), /^sha256:[0-9a-f]{64}$/);
+  }
+});
+
+test("canonical storage hashing rejects ambiguous unsupported runtime values", () => {
+  class CustomSnapshotValue {
+    readonly value = "custom";
+  }
+  const customPrototype = Object.create({ inherited: "unsupported" }) as Record<string, unknown>;
+  customPrototype.value = "custom-prototype";
+  const unsupportedValues: readonly [string, unknown, RegExp][] = [
+    ["NaN", Number.NaN, /Non-finite numbers/],
+    ["Infinity", Infinity, /Non-finite numbers/],
+    ["-Infinity", -Infinity, /Non-finite numbers/],
+    ["Date", new Date("2026-07-10T00:00:00.000Z"), /Date objects are not valid/],
+    ["invalid Date", new Date("not-a-date"), /Date objects are not valid/],
+    ["Map", new Map([["key", "value"]]), /Unsupported non-plain object/],
+    ["Set", new Set(["value"]), /Unsupported non-plain object/],
+    ["RegExp", /snapshot/u, /Unsupported non-plain object/],
+    ["URL", new URL("https://example.com"), /Unsupported non-plain object/],
+    ["Error", new Error("snapshot"), /Unsupported non-plain object/],
+    ["custom class", new CustomSnapshotValue(), /Unsupported non-plain object/],
+    ["function", () => "unsupported", /Unsupported Snapshot storage hash value type/],
+    ["symbol", Symbol("snapshot"), /Unsupported Snapshot storage hash value type/],
+    ["bigint", BigInt(1), /Unsupported Snapshot storage hash value type/],
+    ["custom prototype", customPrototype, /Unsupported non-plain object/],
+  ];
+
+  for (const [label, value, message] of unsupportedValues) {
+    assert.throws(() => hashSnapshotStorageRecord(identityWithVersionsValue(value)), message, label);
+  }
+});
+
+test("canonical storage hashing omits undefined object properties but rejects undefined array elements", () => {
+  const omittedUndefined = identityWithVersionsValue({ stable: "value", optional: undefined });
+  const omittedUndefinedEquivalent = identityWithVersionsValue({ stable: "value" });
+  assert.equal(hashSnapshotStorageRecord(omittedUndefined), hashSnapshotStorageRecord(omittedUndefinedEquivalent));
+
+  const arrayUndefined = identityWithVersionsValue(["stable", undefined]);
+  assert.throws(() => hashSnapshotStorageRecord(arrayUndefined), /Undefined is not a valid canonical Snapshot storage value/);
+});
+
+test("canonical storage hashing is independent of object key order and uses lexical record ordering", () => {
+  const left = identityWithVersionsValue({ zebra: 1, Alpha: 2, alpha: { beta: true, Beta: false } });
+  const right = identityWithVersionsValue({ alpha: { Beta: false, beta: true }, zebra: 1, Alpha: 2 });
+  assert.equal(hashSnapshotStorageRecord(left), hashSnapshotStorageRecord(right));
+
+  const base = mapping();
+  const lexicalOrder = {
+    ...base,
+    records: Object.freeze([...base.records].sort((leftRecord, rightRecord) => (leftRecord.storageKey < rightRecord.storageKey ? -1 : leftRecord.storageKey > rightRecord.storageKey ? 1 : 0))),
+  };
+  const reverseOrder = { ...base, records: Object.freeze([...lexicalOrder.records].reverse()) };
+  assert.equal(hashSnapshotStorageMapping(lexicalOrder), hashSnapshotStorageMapping(reverseOrder));
+});
+
+test("canonical storage hashing implementation does not depend on localeCompare", () => {
+  const hashSource = readFileSync("lib/intelligence/snapshots/storage-hash.ts", "utf8");
+  const mapperSource = readFileSync("lib/intelligence/snapshots/storage-mapper.ts", "utf8");
+  assert.doesNotMatch(hashSource, /localeCompare/);
+  assert.doesNotMatch(mapperSource, /localeCompare/);
 });
 
 test("one canonical child-field change changes mappingHash", () => {
@@ -94,4 +186,9 @@ test("Supabase RPC response mapping covers inserted, replayed_identical, rejecte
   assert.equal(mapSupabaseSnapshotWriteResponse({ status: "replayed_identical", written: false }).outcome, "replayed_identical");
   assert.equal(mapSupabaseSnapshotWriteResponse({ status: "rejected_conflict", written: false }).reason, "rejected_conflict");
   assert.equal(mapSupabaseSnapshotWriteResponse({ status: "failed", written: false }).reason, "failed");
+  assert.throws(() => mapSupabaseSnapshotWriteResponse({ status: "unexpected", written: false } as never), /Invalid Supabase Snapshot RPC response status/);
+  assert.throws(() => mapSupabaseSnapshotWriteResponse({ written: false } as never), /Invalid Supabase Snapshot RPC response status/);
+  assert.throws(() => mapSupabaseSnapshotWriteResponse({ status: "inserted", written: false }), /inserted responses must have written=true/);
+  assert.throws(() => mapSupabaseSnapshotWriteResponse({ status: "replayed_identical", written: true }), /replayed_identical responses must have written=false/);
+  assert.throws(() => mapSupabaseSnapshotWriteResponse({ status: "rejected_conflict", written: true }), /rejected_conflict responses must have written=false/);
 });

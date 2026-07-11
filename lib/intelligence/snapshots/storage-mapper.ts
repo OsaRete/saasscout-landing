@@ -121,12 +121,18 @@ const SECTION_ORDER: readonly MappableSection[] = Object.freeze([
   "diagnostics",
 ]);
 
+function lexicalCompare(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function canonicalize(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
       .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => lexicalCompare(left, right))
       .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalize(entryValue)}`)
       .join(",")}}`;
   }
@@ -196,7 +202,7 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
       provenanceIds: evidence.provenanceIds,
     }));
 
-    for (const support of [...evidence.supports].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+    for (const support of [...evidence.supports].sort((left, right) => lexicalCompare(canonicalize(left), canonicalize(right)))) {
       const supportKey = semanticKey([support.section, support.field ?? null, support.targetId ?? null, support.rationale ?? null]);
       records.push(Object.freeze({
         ...baseRecord(input, "snapshot_evidence_support", `evidence:${evidence.evidenceId}:support:${supportKey}`),
@@ -224,7 +230,7 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
     }));
   }
 
-  for (const attribution of [...snapshot.provenance.engineAttribution].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+  for (const attribution of [...snapshot.provenance.engineAttribution].sort((left, right) => lexicalCompare(canonicalize(left), canonicalize(right)))) {
     const attributionKey = semanticKey([attribution.engineName, attribution.engineVersion, attribution.section]);
     records.push(Object.freeze({
       ...baseRecord(input, "snapshot_engine_attribution", `provenance:engine:${attributionKey}`),
@@ -233,7 +239,7 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
     }));
   }
 
-  for (const history of [...snapshot.provenance.processingHistory].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)))) {
+  for (const history of [...snapshot.provenance.processingHistory].sort((left, right) => lexicalCompare(canonicalize(left), canonicalize(right)))) {
     const historyKey = semanticKey([history.step, history.completedAt ?? null, history.version ?? null]);
     records.push(Object.freeze({
       ...baseRecord(input, "snapshot_processing_history", `provenance:processing:${historyKey}`),

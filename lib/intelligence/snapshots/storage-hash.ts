@@ -43,6 +43,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function lexicalCompare(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function isPlainObject(value: Record<string, unknown>): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function sha256(value: string): SnapshotStorageHash {
   const digest = createHash("sha256").update(value, "utf8").digest("hex");
   return `${HASH_PREFIX}${digest}` as SnapshotStorageHash;
@@ -55,22 +66,36 @@ function assertHashFormat(hash: SnapshotStorageHash): void {
   }
 }
 
-function canonicalJson(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+function canonicalJson(value: unknown, path = "value"): string {
+  if (value === undefined) {
+    throw new Error(`Undefined is not a valid canonical Snapshot storage value at ${path}; omit optional object properties instead.`);
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Non-finite numbers are not valid canonical Snapshot storage values at ${path}.`);
+    }
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+    return `[${value.map((item, index) => canonicalJson(item, `${path}[${index}]`)).join(",")}]`;
   }
   if (isRecord(value)) {
+    if (value instanceof Date) {
+      throw new Error(`Date objects are not valid canonical Snapshot storage values at ${path}; timestamps must be canonical ISO strings before hashing.`);
+    }
+    if (!isPlainObject(value)) {
+      throw new Error(`Unsupported non-plain object is not a valid canonical Snapshot storage value at ${path}.`);
+    }
     return `{${Object.entries(value)
       .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalJson(entryValue)}`)
+      .sort(([left], [right]) => lexicalCompare(left, right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalJson(entryValue, `${path}.${key}`)}`)
       .join(",")}}`;
   }
-  throw new Error(`Unsupported Snapshot storage hash value type: ${typeof value}`);
+  throw new Error(`Unsupported Snapshot storage hash value type at ${path}: ${typeof value}`);
 }
 
 function canonicalRecord(record: SnapshotStorageRecord): Record<string, unknown> {
@@ -113,7 +138,7 @@ export function serializeCanonicalSnapshotStorageMapping(mapping: SnapshotStorag
     contractVersion: mapping.contractVersion,
     idempotencyKey: mapping.idempotencyKey,
     records: [...mapping.records]
-      .sort((left, right) => left.storageKey.localeCompare(right.storageKey))
+      .sort((left, right) => lexicalCompare(left.storageKey, right.storageKey))
       .map((record) => canonicalRecord(record)),
   });
 }
