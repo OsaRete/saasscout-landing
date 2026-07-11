@@ -93,6 +93,26 @@ export {
 } from "./storage-mapper.ts";
 
 export {
+  hashSnapshotStorageMapping,
+  hashSnapshotStorageRecord,
+  serializeCanonicalSnapshotStorageMapping,
+  serializeCanonicalSnapshotStorageRecord,
+  SNAPSHOT_STORAGE_HASH_ALGORITHM,
+  SNAPSHOT_STORAGE_RECORD_KINDS,
+  type SnapshotStorageHash,
+} from "./storage-hash.ts";
+
+export {
+  buildSupabaseSnapshotPersistencePayload,
+  mapSupabaseSnapshotWriteResponse,
+  type SnapshotSupabaseMappedWriteResponse,
+  type SnapshotSupabaseRpcRecord,
+  type SnapshotSupabaseRpcStatus,
+  type SnapshotSupabaseWriteMappingPayload,
+  type SnapshotSupabaseWriteMappingResponse,
+} from "./supabase-persistence-adapter.ts";
+
+export {
   InMemorySnapshotRepositoryPort,
   validateSnapshotRepositoryWriteInput,
   type SnapshotRepositoryFailureReason,

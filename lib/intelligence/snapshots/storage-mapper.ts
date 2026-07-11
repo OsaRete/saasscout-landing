@@ -82,6 +82,7 @@ export type SnapshotEngineAttributionStorageRecord = SnapshotStorageRecordBase &
 
 export type SnapshotProcessingHistoryStorageRecord = SnapshotStorageRecordBase & Readonly<{
   kind: "snapshot_processing_history";
+  historyKey: string;
   history: SnapshotProvenance["processingHistory"][number];
 }>;
 
@@ -237,6 +238,7 @@ export function mapSnapshotPersistenceInputToStorageRecords(input: SnapshotPersi
     records.push(Object.freeze({
       ...baseRecord(input, "snapshot_processing_history", `provenance:processing:${historyKey}`),
       kind: "snapshot_processing_history" as const,
+      historyKey,
       history,
     }));
   }
