@@ -67,16 +67,42 @@ export type SnapshotSupabaseMappedWriteResponse = Readonly<{
 }>;
 
 export function mapSupabaseSnapshotWriteResponse(response: SnapshotSupabaseWriteMappingResponse): SnapshotSupabaseMappedWriteResponse {
-  if (response.status === "inserted" || response.status === "replayed_identical") {
+  if (response.status === "inserted") {
+    if (response.written !== true) {
+      throw new Error("Invalid Supabase Snapshot RPC response: inserted responses must have written=true.");
+    }
     return Object.freeze({
       status: "success" as const,
-      outcome: response.status,
-      written: response.written,
+      outcome: "inserted" as const,
+      written: true,
       snapshotId: response.snapshot_id,
       discoveryId: response.discovery_id,
       idempotencyKey: response.idempotency_key,
       message: response.message ?? "Snapshot mapping write accepted by Supabase RPC.",
     });
+  }
+
+  if (response.status === "replayed_identical") {
+    if (response.written !== false) {
+      throw new Error("Invalid Supabase Snapshot RPC response: replayed_identical responses must have written=false.");
+    }
+    return Object.freeze({
+      status: "success" as const,
+      outcome: "replayed_identical" as const,
+      written: false,
+      snapshotId: response.snapshot_id,
+      discoveryId: response.discovery_id,
+      idempotencyKey: response.idempotency_key,
+      message: response.message ?? "Snapshot mapping write accepted by Supabase RPC.",
+    });
+  }
+
+  if (response.status !== "rejected_conflict" && response.status !== "failed") {
+    throw new Error(`Invalid Supabase Snapshot RPC response status: ${String((response as { status?: unknown }).status)}`);
+  }
+
+  if (response.written !== false) {
+    throw new Error(`Invalid Supabase Snapshot RPC response: ${response.status} responses must have written=false.`);
   }
 
   return Object.freeze({
