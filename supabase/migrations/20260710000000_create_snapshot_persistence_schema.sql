@@ -258,7 +258,7 @@ declare
   validation_record jsonb;
   existing_identity public.snapshot_identities%rowtype;
   inserted_identity_id uuid;
-  record jsonb;
+  mapped_record jsonb;
   section_counts jsonb;
   unexpected_kind text;
   evidence_row_id uuid;
@@ -273,22 +273,22 @@ begin
 
   perform pg_advisory_xact_lock(hashtextextended(root_discovery_id || ':' || root_snapshot_id || ':' || root_contract_version || ':' || root_idempotency_key, 0));
 
-  select record ->> 'kind' into unexpected_kind
-  from jsonb_array_elements(records) as r(record)
-  where record ->> 'kind' not in ('snapshot_identity','snapshot_section','snapshot_evidence','snapshot_evidence_support','snapshot_provenance_source','snapshot_evidence_lineage','snapshot_engine_attribution','snapshot_processing_history','snapshot_validation')
+  select r.record_json ->> 'kind' into unexpected_kind
+  from jsonb_array_elements(records) as r(record_json)
+  where r.record_json ->> 'kind' not in ('snapshot_identity','snapshot_section','snapshot_evidence','snapshot_evidence_support','snapshot_provenance_source','snapshot_evidence_lineage','snapshot_engine_attribution','snapshot_processing_history','snapshot_validation')
   limit 1;
   if unexpected_kind is not null then
     raise exception 'Snapshot mapping contains unknown record kind: %', unexpected_kind using errcode = '22023';
   end if;
 
-  perform 1 from jsonb_array_elements(records) as r(record)
-  where public.snapshot_require_non_empty(record ->> 'contentHash', 'records[].contentHash') is null;
+  perform 1 from jsonb_array_elements(records) as r(record_json)
+  where public.snapshot_require_non_empty(r.record_json ->> 'contentHash', 'records[].contentHash') is null;
 
   select key into duplicate_storage_key
   from (
-    select record ->> 'storageKey' as key, count(*) as count
-    from jsonb_array_elements(records) as r(record)
-    group by record ->> 'storageKey'
+    select r.record_json ->> 'storageKey' as key, count(*) as count
+    from jsonb_array_elements(records) as r(record_json)
+    group by r.record_json ->> 'storageKey'
     having count(*) > 1
   ) duplicates
   limit 1;
@@ -296,28 +296,28 @@ begin
     raise exception 'Duplicate storage_key in mapped Snapshot payload: %', duplicate_storage_key using errcode = '23505';
   end if;
 
-  select record into identity_record from jsonb_array_elements(records) as r(record) where record ->> 'kind' = 'snapshot_identity';
-  if (select count(*) from jsonb_array_elements(records) as r(record) where record ->> 'kind' = 'snapshot_identity') <> 1 then
+  select r.record_json into identity_record from jsonb_array_elements(records) as r(record_json) where r.record_json ->> 'kind' = 'snapshot_identity';
+  if (select count(*) from jsonb_array_elements(records) as r(record_json) where r.record_json ->> 'kind' = 'snapshot_identity') <> 1 then
     raise exception 'Snapshot mapping requires exactly one identity record' using errcode = '22023';
   end if;
   if identity_record ->> 'snapshotId' <> root_snapshot_id or identity_record ->> 'discoveryId' <> root_discovery_id or identity_record ->> 'contractVersion' <> root_contract_version or identity_record ->> 'idempotencyKey' <> root_idempotency_key then
     raise exception 'Snapshot identity record does not match root mapping identity' using errcode = '22023';
   end if;
 
-  perform 1 from jsonb_array_elements(records) as r(record)
-  where record ->> 'snapshotId' is distinct from root_snapshot_id
-     or record ->> 'discoveryId' is distinct from root_discovery_id
-     or record ->> 'contractVersion' is distinct from root_contract_version;
+  perform 1 from jsonb_array_elements(records) as r(record_json)
+  where r.record_json ->> 'snapshotId' is distinct from root_snapshot_id
+     or r.record_json ->> 'discoveryId' is distinct from root_discovery_id
+     or r.record_json ->> 'contractVersion' is distinct from root_contract_version;
   if found then
     raise exception 'Child record identity fields must match root mapping identity' using errcode = '22023';
   end if;
 
   select jsonb_object_agg(section_type, section_count) into section_counts
   from (
-    select record ->> 'section' as section_type, count(*) as section_count
-    from jsonb_array_elements(records) as r(record)
-    where record ->> 'kind' = 'snapshot_section'
-    group by record ->> 'section'
+    select r.record_json ->> 'section' as section_type, count(*) as section_count
+    from jsonb_array_elements(records) as r(record_json)
+    where r.record_json ->> 'kind' = 'snapshot_section'
+    group by r.record_json ->> 'section'
   ) counted;
 
   if coalesce((section_counts ->> 'discovery_context')::int, 0) <> 1
@@ -329,17 +329,17 @@ begin
     raise exception 'Snapshot mapping has invalid required/optional section cardinality' using errcode = '22023';
   end if;
 
-  perform 1 from jsonb_array_elements(records) as r(record)
-  where record ->> 'kind' = 'snapshot_section'
-    and record ->> 'section' not in ('discovery_context','problem_intelligence','opportunity_intelligence','founder_intelligence','confidence','diagnostics');
+  perform 1 from jsonb_array_elements(records) as r(record_json)
+  where r.record_json ->> 'kind' = 'snapshot_section'
+    and r.record_json ->> 'section' not in ('discovery_context','problem_intelligence','opportunity_intelligence','founder_intelligence','confidence','diagnostics');
   if found then
     raise exception 'Snapshot mapping contains unknown section type' using errcode = '22023';
   end if;
 
-  if (select count(*) from jsonb_array_elements(records) as r(record) where record ->> 'kind' = 'snapshot_validation') <> 1 then
+  if (select count(*) from jsonb_array_elements(records) as r(record_json) where r.record_json ->> 'kind' = 'snapshot_validation') <> 1 then
     raise exception 'Snapshot mapping requires exactly one validation record' using errcode = '22023';
   end if;
-  select record into validation_record from jsonb_array_elements(records) as r(record) where record ->> 'kind' = 'snapshot_validation';
+  select r.record_json into validation_record from jsonb_array_elements(records) as r(record_json) where r.record_json ->> 'kind' = 'snapshot_validation';
   if coalesce((validation_record #>> '{validation,valid}')::boolean, false) is not true then
     raise exception 'Snapshot validation record must be valid=true' using errcode = '22023';
   end if;
@@ -362,43 +362,43 @@ begin
   values (identity_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, identity_record ->> 'snapshotVersion', identity_record ->> 'lifecycleState', identity_record #>> '{versions,engine}', identity_record #>> '{versions,intelligence}', identity_record #>> '{versions,normalization}', identity_record #>> '{versions,confidence}', validation_record #>> '{validation,validatorVersion}', identity_record -> 'versions', (identity_record ->> 'createdAt')::timestamptz, identity_record ->> 'contentHash', root_mapping_hash)
   returning id into inserted_identity_id;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_section' loop
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_section' loop
     insert into public.snapshot_sections(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, section_type, payload)
-    values (inserted_identity_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record ->> 'section', record -> 'payload');
+    values (inserted_identity_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record ->> 'section', mapped_record -> 'payload');
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence' loop
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence' loop
     insert into public.snapshot_evidence(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, evidence_id, evidence_kind, relationship, claim, provenance_ids, source_reference, confidence)
-    values (inserted_identity_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record ->> 'evidenceId', record ->> 'evidenceKind', record ->> 'relationship', record ->> 'claim', coalesce(array(select jsonb_array_elements_text(record -> 'provenanceIds')), '{}'), coalesce(record -> 'sourceReference', '{}'::jsonb), coalesce(record -> 'confidence', '{}'::jsonb));
+    values (inserted_identity_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record ->> 'evidenceId', mapped_record ->> 'evidenceKind', mapped_record ->> 'relationship', mapped_record ->> 'claim', coalesce(array(select jsonb_array_elements_text(mapped_record -> 'provenanceIds')), '{}'), coalesce(mapped_record -> 'sourceReference', '{}'::jsonb), coalesce(mapped_record -> 'confidence', '{}'::jsonb));
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence_support' loop
-    select id into evidence_row_id from public.snapshot_evidence where snapshot_identity_id = inserted_identity_id and evidence_id = record ->> 'evidenceId';
-    if evidence_row_id is null then raise exception 'Evidence support references missing evidence_id %', record ->> 'evidenceId' using errcode = '23503'; end if;
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence_support' loop
+    select id into evidence_row_id from public.snapshot_evidence where snapshot_identity_id = inserted_identity_id and evidence_id = mapped_record ->> 'evidenceId';
+    if evidence_row_id is null then raise exception 'Evidence support references missing evidence_id %', mapped_record ->> 'evidenceId' using errcode = '23503'; end if;
     insert into public.snapshot_evidence_supports(snapshot_identity_id, snapshot_evidence_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, evidence_id, support_key, target_section, target_field, target_id, rationale, support)
-    values (inserted_identity_id, evidence_row_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record ->> 'evidenceId', record ->> 'supportKey', record #>> '{support,section}', record #>> '{support,field}', record #>> '{support,targetId}', record #>> '{support,rationale}', record -> 'support');
+    values (inserted_identity_id, evidence_row_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record ->> 'evidenceId', mapped_record ->> 'supportKey', mapped_record #>> '{support,section}', mapped_record #>> '{support,field}', mapped_record #>> '{support,targetId}', mapped_record #>> '{support,rationale}', mapped_record -> 'support');
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_provenance_source' loop
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_provenance_source' loop
     insert into public.snapshot_provenance_sources(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, source_id, source_type, source_name, source_url, source)
-    values (inserted_identity_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record #>> '{source,sourceId}', record #>> '{source,sourceType}', record #>> '{source,sourceName}', record #>> '{source,sourceUrl}', record -> 'source');
+    values (inserted_identity_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record #>> '{source,sourceId}', mapped_record #>> '{source,sourceType}', mapped_record #>> '{source,sourceName}', mapped_record #>> '{source,sourceUrl}', mapped_record -> 'source');
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence_lineage' loop
-    select id into evidence_row_id from public.snapshot_evidence where snapshot_identity_id = inserted_identity_id and evidence_id = record #>> '{lineage,evidenceId}';
-    if evidence_row_id is null then raise exception 'Evidence lineage references missing evidence_id %', record #>> '{lineage,evidenceId}' using errcode = '23503'; end if;
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_evidence_lineage' loop
+    select id into evidence_row_id from public.snapshot_evidence where snapshot_identity_id = inserted_identity_id and evidence_id = mapped_record #>> '{lineage,evidenceId}';
+    if evidence_row_id is null then raise exception 'Evidence lineage references missing evidence_id %', mapped_record #>> '{lineage,evidenceId}' using errcode = '23503'; end if;
     insert into public.snapshot_evidence_lineage(snapshot_identity_id, snapshot_evidence_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, evidence_id, derived_from, lineage)
-    values (inserted_identity_id, evidence_row_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record #>> '{lineage,evidenceId}', coalesce(array(select jsonb_array_elements_text(record #> '{lineage,derivedFrom}')), '{}'), record -> 'lineage');
+    values (inserted_identity_id, evidence_row_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record #>> '{lineage,evidenceId}', coalesce(array(select jsonb_array_elements_text(mapped_record #> '{lineage,derivedFrom}')), '{}'), mapped_record -> 'lineage');
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_engine_attribution' loop
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_engine_attribution' loop
     insert into public.snapshot_engine_attribution(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, engine_name, engine_version, section, attribution)
-    values (inserted_identity_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, record #>> '{attribution,engineName}', record #>> '{attribution,engineVersion}', record #>> '{attribution,section}', record -> 'attribution');
+    values (inserted_identity_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, mapped_record #>> '{attribution,engineName}', mapped_record #>> '{attribution,engineVersion}', mapped_record #>> '{attribution,section}', mapped_record -> 'attribution');
   end loop;
 
-  for record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_processing_history' loop
+  for mapped_record in select value from jsonb_array_elements(records) where value ->> 'kind' = 'snapshot_processing_history' loop
     insert into public.snapshot_processing_history(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, history_key, step, completed_at, version, history)
-    values (inserted_identity_id, record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (record ->> 'createdAt')::timestamptz, record ->> 'contentHash', root_mapping_hash, public.snapshot_require_non_empty(record ->> 'historyKey', 'historyKey'), record #>> '{history,step}', nullif(record #>> '{history,completedAt}', '')::timestamptz, record #>> '{history,version}', record -> 'history');
+    values (inserted_identity_id, mapped_record ->> 'storageKey', root_snapshot_id, root_discovery_id, root_contract_version, root_idempotency_key, (mapped_record ->> 'createdAt')::timestamptz, mapped_record ->> 'contentHash', root_mapping_hash, public.snapshot_require_non_empty(mapped_record ->> 'historyKey', 'historyKey'), mapped_record #>> '{history,step}', nullif(mapped_record #>> '{history,completedAt}', '')::timestamptz, mapped_record #>> '{history,version}', mapped_record -> 'history');
   end loop;
 
   insert into public.snapshot_validations(snapshot_identity_id, storage_key, snapshot_id, discovery_id, contract_version, idempotency_key, created_at, content_hash, mapping_hash, valid, validator_version, summary, errors, warnings, validation)

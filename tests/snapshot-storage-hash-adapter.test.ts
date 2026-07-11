@@ -169,11 +169,16 @@ test("Supabase adapter accepts mapper output and rejects unknown record kinds", 
 
 test("static SQL migration guards Snapshot RPC contract blockers", () => {
   const sql = readFileSync("supabase/migrations/20260710000000_create_snapshot_persistence_schema.sql", "utf8");
-  assert.match(sql, /record ->> 'kind' not in \('snapshot_identity','snapshot_section','snapshot_evidence','snapshot_evidence_support','snapshot_provenance_source','snapshot_evidence_lineage','snapshot_engine_attribution','snapshot_processing_history','snapshot_validation'\)/);
+  assert.match(sql, /r\.record_json ->> 'kind' not in \('snapshot_identity','snapshot_section','snapshot_evidence','snapshot_evidence_support','snapshot_provenance_source','snapshot_evidence_lineage','snapshot_engine_attribution','snapshot_processing_history','snapshot_validation'\)/);
   assert.match(sql, /pg_advisory_xact_lock\(hashtextextended/);
   assert.doesNotMatch(sql, /ON CONFLICT DO UPDATE/i);
   assert.doesNotMatch(sql, /root_content_hash/);
-  assert.match(sql, /record ->> 'contentHash'/);
+  assert.doesNotMatch(sql, /\n\s*record jsonb;/);
+  assert.doesNotMatch(sql, /as\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(record\)/i);
+  assert.doesNotMatch(sql, /\brecord\s*(?:->>|->|#>>|#>)/);
+  assert.match(sql, /jsonb_array_elements\(records\) as r\(record_json\)/);
+  assert.match(sql, /r\.record_json ->> 'contentHash'/);
+  assert.match(sql, /mapped_record ->> 'storageKey'/);
   assert.match(sql, /snapshot_evidence_supports_owned_evidence_fk/);
   assert.match(sql, /snapshot_evidence_lineage_owned_evidence_fk/);
   assert.match(sql, /revoke all on function public\.write_snapshot_mapping\(jsonb\) from public, anon, authenticated/);
