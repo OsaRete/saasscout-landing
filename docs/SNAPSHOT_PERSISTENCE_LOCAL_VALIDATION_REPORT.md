@@ -1,324 +1,380 @@
 # Snapshot Persistence Local Validation Report
 
-**Project:** SaaSScout  
-**Date:** 11 July 2026  
-**Environment:** Local (Docker Desktop + WSL2 + Supabase CLI + PostgreSQL)
+**Project:** SaaSScout
 
----
-
-# Objective
-
-Validate the complete Snapshot Persistence migration before deploying it to the production Supabase project.
-
-Migration validated:
+**Validated migration:**
 
 ```
 supabase/migrations/20260710000000_create_snapshot_persistence_schema.sql
 ```
 
-The goal of this validation is to verify:
-
-- Repository integrity
-- Atomic persistence
-- Idempotency
-- Immutable storage
-- Referential integrity
-- Security model
-- Deterministic reconstruction
-- Concurrency behavior
+**Validation date:** July 2026
 
 ---
 
-# Environment
+# Purpose
 
-- Windows 11
+This document records the complete local validation performed for the Snapshot Persistence layer before any remote Supabase deployment.
+
+The objective of this validation was to verify that the Snapshot repository behaves correctly under normal operation, replay scenarios, conflict scenarios, transactional failures, security restrictions and deterministic reconstruction.
+
+All tests documented here were executed against an isolated local Supabase instance.
+
+No remote Supabase project was accessed.
+
+No production database was modified.
+
+---
+
+# Local Environment
+
+- Windows 10 Home Single Language
 - Docker Desktop
 - WSL2
 - Supabase CLI
-- PostgreSQL (local)
+- PostgreSQL (local container)
 - PowerShell
+
+---
+
+# Validated Database Objects
+
+The migration successfully created the complete Snapshot Persistence schema.
+
+Validated tables:
+
+- snapshot_identities
+- snapshot_sections
+- snapshot_evidence
+- snapshot_evidence_supports
+- snapshot_provenance_sources
+- snapshot_evidence_lineage
+- snapshot_engine_attribution
+- snapshot_processing_history
+- snapshot_validations
+
+Validated infrastructure:
+
+- SECURITY DEFINER write RPC
+- Append-only triggers
+- Primary Keys
+- Foreign Keys
+- Unique Constraints
+- Advisory Lock
+- Row Level Security
+- Permission revocations
+- Service Role execution permissions
 
 ---
 
 # Validation Results
 
-## 1. Migration deployment
+## ✅ 1. Migration execution
 
-### Objective
+Verified that the migration executes successfully from a clean database.
 
-Verify that the migration creates every required object.
+Status:
 
-### Verified
-
-- Snapshot tables
-- Constraints
-- Indexes
-- Triggers
-- Functions
-- SECURITY DEFINER RPC
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 2. Initial insertion
+## ✅ 2. Schema creation
 
-### Objective
+Verified creation of all nine Snapshot Persistence tables.
 
-Insert a valid Snapshot Mapping.
+Status:
 
-### Expected
-
-```
-status = inserted
-written = true
-```
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 3. Idempotent replay
+## ✅ 3. SECURITY DEFINER RPC
 
-### Objective
+Verified that `public.write_snapshot_mapping(jsonb)` exists and is configured as SECURITY DEFINER.
 
-Execute the exact same mapping twice.
+Status:
 
-### Expected
-
-```
-status = replayed_identical
-written = false
-```
-
-No additional rows should be inserted.
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 4. Conflict detection
+## ✅ 4. Atomic Snapshot insertion
 
-### Objective
+Inserted a valid Snapshot mapping.
 
-Replay the same Snapshot using a different mapping hash.
+Verified:
 
-### Expected
+- Snapshot Identity
+- Sections
+- Validation
 
-```
-status = rejected_conflict
-```
+were persisted atomically.
 
-Repository must remain unchanged.
+Status:
 
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 5. Invalid section rollback
+## ✅ 5. Idempotent replay
 
-### Objective
+Submitted exactly the same Snapshot twice.
 
-Insert a Snapshot with invalid section cardinality.
+Observed result:
 
-### Expected
+- no duplicate rows
+- replay detected
+- repository remained immutable
 
-Transaction rollback.
+Status:
 
-No records persisted.
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 6. Referential integrity rollback
+## ✅ 6. Sequential conflict detection
 
-### Objective
+Submitted the same repository identity with a different mappingHash.
 
-Insert Evidence Support referencing a non-existent Evidence record.
+Observed result:
 
-### Expected
+- conflict detected
+- write rejected
+- original Snapshot preserved
 
-Transaction rollback.
+Status:
 
-No records persisted.
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 7. Append-only UPDATE protection
+## ✅ 7. Required section validation
 
-### Objective
+Submitted a Snapshot missing one mandatory section.
 
-Attempt to modify persisted data.
+Observed result:
 
-### Expected
+- transaction rejected
+- rollback completed
+- zero rows persisted
+
+Status:
+
+PASS
+
+---
+
+## ✅ 8. Referential integrity validation
+
+Submitted an Evidence Support referencing a non-existent Evidence.
+
+Observed result:
+
+- transaction rejected
+- rollback completed
+- zero rows persisted
+
+Status:
+
+PASS
+
+---
+
+## ✅ 9. Append-only protection
+
+Attempted UPDATE operations on Snapshot tables.
+
+Observed result:
 
 ```
 UPDATE forbidden
 ```
 
-### Result
+Original rows remained unchanged.
 
-✅ PASS
+Status:
+
+PASS
 
 ---
 
-## 8. Append-only DELETE protection
+## ✅ 10. DELETE protection
 
-### Objective
+Attempted DELETE operations.
 
-Attempt to delete persisted data.
-
-### Expected
+Observed result:
 
 ```
 DELETE forbidden
 ```
 
-### Result
+Original rows remained intact.
 
-✅ PASS
+Status:
+
+PASS
 
 ---
 
-## 9. Anonymous role protection
+## ✅ 11. Anonymous access
 
-### Objective
+Attempted direct table reads using the `anon` role.
 
-Verify that anon cannot read tables or execute the persistence RPC.
-
-### Expected
+Observed result:
 
 Permission denied.
 
-### Result
+Status:
 
-✅ PASS
+PASS
 
 ---
 
-## 10. Authenticated role protection
+## ✅ 12. Authenticated access
 
-### Objective
+Attempted direct table reads using the `authenticated` role.
 
-Verify that authenticated users cannot read persistence tables or execute the persistence RPC.
-
-### Expected
+Observed result:
 
 Permission denied.
 
-### Result
+Status:
 
-✅ PASS
-
----
-
-## 11. Service Role validation
-
-### Objective
-
-Verify that only service_role can execute the persistence function.
-
-### Expected
-
-RPC execution allowed.
-
-Input validation executed correctly.
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 12. Concurrent insertion
+## ✅ 13. RPC execution permissions
 
-### Objective
+Verified:
 
-Execute two identical Snapshot insertions simultaneously.
+- anon cannot execute the RPC
+- authenticated cannot execute the RPC
+- service_role can execute the RPC
 
-### Expected
+Status:
 
-One transaction:
-
-```
-inserted
-```
-
-Second transaction:
-
-```
-replayed_identical
-```
-
-Repository must contain only one Snapshot.
-
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-## 13. Deterministic reconstruction
+## ✅ 14. Concurrent identical writes
 
-### Objective
+Executed two simultaneous writes for the same Snapshot.
 
-Reconstruct the persisted Snapshot twice.
+Observed result:
 
-### Expected
+One transaction inserted the Snapshot.
 
-Both generated JSON files must produce the exact same SHA256 hash.
+The second transaction detected an identical replay.
 
-Observed SHA256:
+Final repository state:
 
-```
-5612F9F316F1A1774B0097F16129DFACE588B2C5B9D64627E6C5FA9B1ACAF45A
-```
+- one identity
+- one Snapshot
+- no duplicates
 
-The hashes matched exactly.
+Status:
 
-### Result
-
-✅ PASS
+PASS
 
 ---
 
-# Overall Validation
+## ✅ 15. Deterministic reconstruction
 
-The Snapshot Persistence layer successfully demonstrated:
+Reconstructed the Snapshot directly from the database.
 
-- Atomic transactions
-- Immutable storage
-- Idempotent writes
-- Conflict detection
+Generated two independent reconstruction files.
+
+Computed SHA-256 for both outputs.
+
+Observed result:
+
+Both hashes were identical.
+
+This confirms deterministic reconstruction from persisted storage.
+
+Status:
+
+PASS
+
+---
+
+# Overall Validation Summary
+
+The following capabilities were successfully validated locally:
+
+- Schema creation
+- Atomic persistence
+- Idempotent replay
+- Sequential conflict detection
+- Transaction rollback
+- Required section validation
 - Referential integrity
-- Append-only protection
-- Secure RPC permissions
+- Append-only enforcement
+- Row Level Security
+- Service-role-only write boundary
+- Concurrent identical writes
 - Deterministic reconstruction
-- Concurrent write safety
 
 ---
 
-# Final Status
+# Remaining Verification Before Production
+
+Although the local validation was successful, the following items remain part of the controlled deployment process before production deployment:
+
+- Verify remote Supabase project identity.
+- Inspect remote migration history.
+- Inspect remote object ownership.
+- Verify remote RLS policies.
+- Verify remote function permissions.
+- Execute migration dry-run.
+- Validate complete TypeScript → SQL → TypeScript hash equivalence using production-generated Snapshots.
+- Execute concurrent conflicting-write validation.
+- Prepare rollback strategy.
+- Obtain explicit deployment approval.
+
+---
+
+# Final Assessment
+
+## Local Validation
+
+✅ PASSED
+
+The Snapshot Persistence layer behaved correctly for all documented local validation scenarios.
+
+No data corruption, duplicate persistence, partial writes or permission regressions were observed.
+
+---
+
+## Deployment Readiness
+
+Current status:
 
 ```
-READY FOR REMOTE DEPLOYMENT
+READY FOR CONTROLLED REMOTE DEPLOYMENT PREPARATION
 ```
 
-All planned local validation scenarios completed successfully.
+This migration **is not yet approved for direct production deployment**.
 
-The persistence layer is considered production-ready pending final architecture and security audit.
+Before executing `supabase db push`, the remote project state must be inspected and the deployment gate completed.
+
+---
+
+# Conclusion
+
+The Snapshot Persistence implementation has successfully passed isolated local validation.
+
+The persistence model demonstrates:
+
+- immutable repository behavior;
+- deterministic storage;
+- transactional consistency;
+- append-only guarantees;
+- controlled write access through a SECURITY DEFINER RPC;
+- successful recovery from invalid transactions;
+- deterministic reconstruction from persisted data.
+
+Based on the completed local validation, the project is ready to proceed to the **controlled remote deployment preparation phase**.
