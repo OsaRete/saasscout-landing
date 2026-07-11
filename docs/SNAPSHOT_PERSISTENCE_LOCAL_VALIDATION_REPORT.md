@@ -378,3 +378,70 @@ The persistence model demonstrates:
 - deterministic reconstruction from persisted data.
 
 Based on the completed local validation, the project is ready to proceed to the **controlled remote deployment preparation phase**.
+
+Remote Deployment Validation (2026-07-11)
+
+Objective
+
+Verify that the Snapshot Persistence migration was successfully deployed to the remote Supabase project after completing local functional validation.
+
+Results
+
+Migration
+
+* ✅ Remote project successfully linked.
+* ✅ Migration 20260710000000_create_snapshot_persistence_schema.sql applied successfully.
+* ✅ supabase migration list confirms the migration exists both locally and remotely.
+
+Schema Verification
+
+Verified in the remote schema dump:
+
+* ✅ snapshot_identities
+* ✅ snapshot_sections
+* ✅ snapshot_evidence
+* ✅ snapshot_evidence_supports
+* ✅ snapshot_provenance_sources
+* ✅ snapshot_evidence_lineage
+* ✅ snapshot_engine_attribution
+* ✅ snapshot_processing_history
+* ✅ snapshot_validations
+
+Functions
+
+Verified:
+
+* ✅ snapshot_require_non_empty
+* ✅ prevent_snapshot_table_mutation
+* ✅ write_snapshot_mapping
+
+The RPC is deployed as:
+
+* SECURITY DEFINER
+* search_path = public, pg_temp
+
+Security
+
+Verified:
+
+* ✅ Row Level Security enabled on all Snapshot tables.
+* ✅ Append-only triggers installed on all Snapshot tables.
+* ✅ PUBLIC execution revoked from write_snapshot_mapping.
+* ✅ Execution granted only to service_role.
+
+Deployment Safety
+
+Before deployment the following backups were created:
+
+* Remote schema dump
+* Remote data dump
+* Migration history
+* Dry-run output
+
+Final Status
+
+Snapshot Persistence has been successfully deployed to the remote Supabase project.
+
+Local validation, remote deployment and remote structural verification have all completed successfully.
+
+The persistence layer is deployed but remains inactive until the production application is connected to write_snapshot_mapping().
