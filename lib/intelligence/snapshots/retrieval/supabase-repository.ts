@@ -65,6 +65,10 @@ function stringList(value: unknown): readonly string[] {
 function clamp01(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null;
 }
+function scoreValue(value: unknown): number | null {
+  if (isObject(value)) return scoreValue(value.value ?? value.overall ?? value.score);
+  return clamp01(value);
+}
 function normalizeWindow(query: SnapshotRetrievalQuery): { start: string; end: string } {
   const referenceMs = Date.parse(query.referenceTimestamp);
   if (!Number.isFinite(referenceMs)) throw new SnapshotRetrievalRepositoryError("SNAPSHOT_RETRIEVAL_INVALID_QUERY_BOUNDS", "Snapshot retrieval reference timestamp is invalid.");
@@ -93,7 +97,7 @@ function mapOpportunity(payload: unknown): OpportunitySection | undefined {
 }
 function mapConfidence(payload: unknown): ConfidenceSection | undefined {
   if (!isObject(payload)) return undefined;
-  return Object.freeze({ overall: clamp01(payload.overall) });
+  return Object.freeze({ overall: scoreValue(payload.overall) });
 }
 function snippet(value: string): string {
   return value.length > CLAIM_SNIPPET_MAX_LENGTH ? `${value.slice(0, CLAIM_SNIPPET_MAX_LENGTH - 1)}…` : value;
@@ -208,7 +212,7 @@ function buildEvidenceMap(rows: EvidenceRow[], supportCounts: Map<string, number
   for (const row of rows) {
     const id = stringValue(row.snapshot_identity_id), evidenceId = stringValue(row.evidence_id), claim = stringValue(row.claim);
     if (!id || !evidenceId || !claim) continue;
-    const confidence = isObject(row.confidence) ? clamp01(row.confidence.value ?? row.confidence.overall ?? row.confidence.score) : null;
+    const confidence = scoreValue(row.confidence);
     const list = grouped.get(id) ?? [];
     if (list.length < CLAIM_SNIPPET_LIMIT) list.push(Object.freeze({ claimSnippet: snippet(claim), confidence, supportingTargetCount: supportCounts.get(`${id}:${evidenceId}`) ?? 0 }));
     grouped.set(id, list);

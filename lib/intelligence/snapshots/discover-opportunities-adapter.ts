@@ -132,6 +132,7 @@ export function buildDiscoverOpportunitiesSnapshotInput(
       snapshotId: stableSnapshotId(discoveryId),
       discoveryId,
       createdAt,
+      lifecycleState: "validated",
     },
     discoveryContext: {
       searchTopic: problem.problem_cluster || problem.problem_title,

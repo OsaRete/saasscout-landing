@@ -7,6 +7,7 @@ import type {
   SnapshotEvidenceKind,
   SnapshotEvidenceRelationship,
   SnapshotExecutionConfiguration,
+  SnapshotLifecycleState,
   SnapshotFounderIntelligence,
   SnapshotOpportunityIntelligence,
   SnapshotProblemIntelligence,
@@ -20,6 +21,7 @@ export type DiscoverySnapshotAdapterMetadataInput = Readonly<{
   snapshotId: string;
   discoveryId: string;
   createdAt: string;
+  lifecycleState?: SnapshotLifecycleState;
 }>;
 
 export type DiscoverySnapshotAdapterContextInput = Readonly<{
@@ -443,6 +445,7 @@ export function mapDiscoveryToSnapshotInput(
         input.metadata.createdAt,
         "metadata.createdAt",
       ),
+      lifecycleState: input.metadata.lifecycleState,
     },
     discoveryContext: {
       searchTopic: requireNonEmpty(
