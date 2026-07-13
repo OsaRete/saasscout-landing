@@ -21,6 +21,7 @@ import {
   runSnapshotPipeline,
 } from "@/lib/intelligence/snapshots";
 import { buildDiscoverOpportunitiesSnapshotInput } from "@/lib/intelligence/snapshots/discover-opportunities-adapter";
+import { runDiscoverOpportunitiesSnapshotRetrievalShadow } from "@/lib/intelligence/snapshots/retrieval/discover-opportunities-shadow-runner";
 import {
   isSnapshotPersistenceEnabled,
   persistSnapshotToSupabase,
@@ -68,6 +69,10 @@ function isKnowledgeEvolutionDiagnosticsEnabled() {
 
 function isSolutionIntelligenceDiagnosticsEnabled() {
   return process.env.SOLUTION_INTELLIGENCE_DIAGNOSTICS === "1";
+}
+
+function buildDiscoveryRetrievalTopic(): string {
+  return "SaaS opportunity discovery from live external signals and internal data moat";
 }
 
 function buildLegacyDiscoveredProblemRows({
@@ -124,6 +129,7 @@ function runDiscoveryOrchestratorDryRun({
     dryRun: true,
   });
 }
+
 
 type DiscoverySnapshotPersistenceExecution = Readonly<{
   outcome: SnapshotProductionPersistenceOutcome;
@@ -565,9 +571,19 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   }
 
   const sourcesLimit = Number(profile.external_sources_limit) || 10;
+  const normalizedDiscoveryTopic = buildDiscoveryRetrievalTopic();
+  const retrievalPromise = runDiscoverOpportunitiesSnapshotRetrievalShadow({
+    userId,
+    queryText: normalizedDiscoveryTopic,
+    referenceTimestamp: discoveryExecutionStartedAt,
+  });
 
-  const externalSources = await collectExternalSources(sourcesLimit);
-  const moatSources = await collectDataMoatSources();
+  const [externalSources, moatSources] = await Promise.all([
+    collectExternalSources(sourcesLimit),
+    collectDataMoatSources(),
+  ]);
+
+  await retrievalPromise;
 
   const analysis = await analyzeSignals({
     externalSources,

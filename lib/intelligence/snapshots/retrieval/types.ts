@@ -9,6 +9,7 @@ export type SnapshotRetrievalQuery = Readonly<{
   userId?: string;
   organizationId?: string | null;
   discoveryId?: string;
+  excludeDiscoveryId?: string;
   niches?: readonly string[];
   clusters?: readonly string[];
   keywords?: readonly string[];

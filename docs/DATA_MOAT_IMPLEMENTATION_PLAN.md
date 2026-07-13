@@ -661,3 +661,36 @@ Safety policy:
 Next phase:
 
 - Add controlled shadow-mode workflow integration behind explicit safeguards, without prompt influence, before any future production influence path is considered.
+
+---
+
+# Snapshot Retrieval Shadow Integration
+
+Status:
+
+Implemented in shadow mode only.
+
+Scope:
+
+- The Discovery workflow now has a server-side integration point for user-scoped Snapshot retrieval.
+- Retrieval is disabled by default and controlled only by `SNAPSHOT_RETRIEVAL_MODE`.
+- Accepted modes are `disabled` and `shadow`; `influence` is not enabled.
+- In `shadow` mode, retrieval reads historical Snapshots scoped to the authenticated user.
+- Retrieved historical context is used only for safe operational metrics.
+- Retrieved context is discarded before AI analysis.
+- Retrieved context is not injected into prompts.
+- Retrieved context is not returned through public APIs.
+- Retrieved context is not shown in the UI.
+- Retrieved context is not persisted into legacy tables or attached to new Snapshots.
+- Retrieval failures are non-disruptive and must not block Discovery or Snapshot persistence.
+
+Operational behavior:
+
+- Production remains unchanged while the mode is missing or set to any invalid value.
+- `disabled` mode avoids creating the Supabase retrieval repository and avoids admin-client creation for retrieval.
+- `shadow` mode logs only structured safe metrics: mode, query fingerprint, ownership scope, candidate count, result count, top scores, duration, status, and warning count.
+- Raw query text, historical context, evidence claims, source URLs, service keys, prompts, and AI output must not be logged.
+
+Next phase:
+
+Before Knowledge Fusion or prompt influence is considered, the next phase must validate retrieval quality, ownership isolation, malformed-row behavior, and operational metrics in controlled review. This phase must not claim user-result improvement yet because retrieval remains diagnostic-only.
