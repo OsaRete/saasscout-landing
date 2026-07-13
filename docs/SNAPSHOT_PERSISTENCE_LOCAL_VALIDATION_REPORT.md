@@ -445,3 +445,58 @@ Snapshot Persistence has been successfully deployed to the remote Supabase proje
 Local validation, remote deployment and remote structural verification have all completed successfully.
 
 The persistence layer is deployed but remains inactive until the production application is connected to write_snapshot_mapping().
+
+## Remote Preview Smoke Test — 2026-07-13
+
+### Environment
+
+- Deployment environment: Vercel Preview
+- Branch: `snapshot-smoke-test`
+- Feature flag: `SNAPSHOT_PERSISTENCE_ENABLED=1`
+- Database: Remote Supabase project
+
+### Validated Flow
+
+The following end-to-end production-like flow was validated successfully:
+
+1. A real Discovery was executed through the Vercel Preview deployment.
+2. The canonical Snapshot pipeline completed successfully.
+3. Snapshot validation returned `valid = true`.
+4. Deterministic storage mapping and hashing completed.
+5. The server-only executor called `public.write_snapshot_mapping(jsonb)`.
+6. The RPC returned a successful insertion result.
+7. The Snapshot was persisted in the remote Supabase project.
+8. The existing public Discovery UI and API behavior remained unchanged.
+
+### Remote Data Verification
+
+Verified successfully:
+
+- One row created in `snapshot_identities`
+- Five canonical rows created in `snapshot_sections`
+- One valid row created in `snapshot_validations`
+- Snapshot evidence created successfully
+- Evidence support relationships created successfully
+- Provenance source records created successfully
+- Deterministic Snapshot identity format confirmed
+- No conflict, malformed response, or Supabase client errors observed
+
+### Observability Verification
+
+Vercel logs confirmed successful Snapshot persistence with:
+
+- RPC status: `inserted`
+- `written = true`
+- No service-role credentials exposed
+- No complete Snapshot payloads logged
+- No source or evidence bodies exposed
+
+### Final Preview Result
+
+**REMOTE PREVIEW SNAPSHOT SMOKE TEST: PASSED**
+
+The first real Discovery producer is now validated end to end against the deployed remote Snapshot Persistence infrastructure.
+
+Production activation still requires explicit configuration of:
+
+`SNAPSHOT_PERSISTENCE_ENABLED=1`
