@@ -134,3 +134,26 @@ export {
   type SnapshotRepositoryWriteResult,
   type SnapshotRepositoryWriteSuccessResult,
 } from "./repository.ts";
+
+export type {
+  SnapshotHistoricalContext,
+  SnapshotRetrievalCandidate,
+  SnapshotRetrievalDiagnostics,
+  SnapshotRetrievalMode,
+  SnapshotRetrievalOutcome,
+  SnapshotRetrievalQuery,
+  SnapshotRetrievalResult,
+  SnapshotRetrievalScoreBreakdown,
+} from "./retrieval/index.ts";
+
+export {
+  buildSnapshotHistoricalContext,
+  calculateSnapshotRetrievalBreakdown,
+  InMemorySnapshotRetrievalRepository,
+  normalizeSnapshotRetrievalQuery,
+  rankSnapshotRetrievalCandidates,
+  SNAPSHOT_RETRIEVAL_WEIGHTS,
+  SNAPSHOT_RETRIEVAL_WEIGHT_SUM,
+  tokenizeDeterministically,
+  type SnapshotRetrievalRepository,
+} from "./retrieval/index.ts";

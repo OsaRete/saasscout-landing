@@ -588,3 +588,38 @@ The first production Snapshot persistence integration is intentionally narrow an
 - **Scope:** no UI changes, no schema changes, no migration changes, no remote Supabase SQL, and no automatic production activation.
 
 Production Snapshot persistence is not active until `SNAPSHOT_PERSISTENCE_ENABLED=1` is explicitly configured by a human operator.
+
+---
+
+## Snapshot Retrieval Engine PR 1 — Foundational Contracts and Deterministic Ranking
+
+Status: foundational implementation only; retrieval is **not active in production**.
+
+This phase introduces the browser-safe Snapshot Retrieval core contracts, a deterministic lexical ranker, a redacted historical context builder, a pure repository boundary, and a server-only executor shell that only works with an injected repository. It does not include a Supabase repository, SQL, migrations, production data access, workflow integration, prompt influence, embeddings, vector search, UI behavior, public API behavior, or production retrieval activation.
+
+### Deterministic V1 ranking formula
+
+The V1 ranker computes normalized factors from 0 to 1 and combines them with fixed weights that sum to exactly 1:
+
+```text
+totalScore =
+  0.30 * queryTextMatch
++ 0.20 * nicheOverlap
++ 0.15 * clusterOverlap
++ 0.15 * evidenceStrength
++ 0.10 * snapshotConfidence
++ 0.05 * provenanceDiversity
++ 0.05 * freshness
+```
+
+The ranker is deterministic: it uses lexical token overlap only, accepts an explicit reference timestamp for freshness, avoids randomness, avoids implicit wall-clock reads, and applies stable tie-breaking by total score, query text match, evidence strength, newer creation timestamp, then lexicographically smaller Snapshot ID.
+
+### Ownership and influence limitation
+
+The retrieval contracts preserve user, organization, and discovery scoping metadata, plus ownership diagnostics. However, influence mode remains a future contract value only. The current Snapshot persistence tables do not directly contain `user_id` or `organization_id`; ownership must be resolved through `snapshot_identities.discovery_id -> opportunity_discoveries.id -> opportunity_discoveries.user_id` in a later server-only repository PR before any production influence behavior can be considered.
+
+### Next phases
+
+1. Implement a server-only, user-scoped Supabase Snapshot Retrieval repository with explicit ownership enforcement and no global Snapshot influence.
+2. Add production shadow-mode integration in a later PR after repository ownership validation.
+3. Consider influence mode only after ownership, authorization, evaluation, and prompt-safety policies are approved.
