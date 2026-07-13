@@ -623,3 +623,41 @@ The retrieval contracts preserve user, organization, and discovery scoping metad
 1. Implement a server-only, user-scoped Supabase Snapshot Retrieval repository with explicit ownership enforcement and no global Snapshot influence.
 2. Add production shadow-mode integration in a later PR after repository ownership validation.
 3. Consider influence mode only after ownership, authorization, evaluation, and prompt-safety policies are approved.
+
+---
+
+# Snapshot Retrieval Engine — PR 2 Server-only Supabase Repository
+
+Status:
+
+Implemented, not active in production workflow.
+
+Scope:
+
+- Added a server-only Supabase Snapshot retrieval repository for internal user-scoped candidate retrieval.
+- Ownership is enforced by resolving `opportunity_discoveries.id` rows where `opportunity_discoveries.user_id` matches the requested user, then reading Snapshots through `snapshot_identities.discovery_id` only for those owned discoveries.
+- Discovery-scoped retrieval remains user-scoped: a provided discovery ID is only accepted when it belongs to the same requested user.
+- Organization-scoped retrieval is explicitly unsupported until a verified organization ownership boundary exists in the schema.
+- Global retrieval and global influence remain prohibited.
+
+Production behavior:
+
+- The repository is not integrated into `discover-opportunities-workflow.ts`.
+- Retrieval does not influence prompts, LLM inputs, rankings, public API responses, or user-visible output.
+- No production shadow mode or influence mode is activated by this phase.
+
+Schema and operations:
+
+- No schema migration is introduced in this phase.
+- No Supabase migration, remote SQL, or database push is required.
+- The repository performs read-only staged queries against existing Snapshot persistence tables and `opportunity_discoveries`.
+
+Safety policy:
+
+- The repository returns minimal safe candidate projections only.
+- Raw Snapshot mappings, full diagnostics, provider payloads, prompts, AI responses, service credentials, and full provenance JSON are not returned.
+- Malformed Snapshot rows are skipped with safe diagnostics rather than leaking raw payloads or failing the whole retrieval operation.
+
+Next phase:
+
+- Add controlled shadow-mode workflow integration behind explicit safeguards, without prompt influence, before any future production influence path is considered.
