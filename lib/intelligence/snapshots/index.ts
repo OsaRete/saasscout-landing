@@ -44,6 +44,13 @@ export {
   type DiscoverySnapshotAdapterMetadataInput,
 } from "./discovery-adapter.ts";
 
+
+export {
+  buildDiscoverOpportunitiesSnapshotInput,
+  type DiscoverOpportunitiesSnapshotInput,
+  type DiscoverOpportunitiesSnapshotSource,
+} from "./discover-opportunities-adapter.ts";
+
 export {
   SNAPSHOT_VALIDATOR_VERSION,
   validateSnapshot,
