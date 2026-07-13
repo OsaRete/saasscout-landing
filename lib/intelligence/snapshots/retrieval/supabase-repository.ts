@@ -114,7 +114,9 @@ export function createSupabaseSnapshotRetrievalRepository(dependencies: { client
 
       let discoveriesQuery = client.from<DiscoveryRow>("opportunity_discoveries").select("id,user_id").eq("user_id", query.userId).order("id", { ascending: true }).limit(cap);
       if (query.discoveryId != null) discoveriesQuery = discoveriesQuery.eq("id", query.discoveryId);
-      const discoveryIds = readSafeStrings(await readRows(discoveriesQuery), "id").slice(0, cap);
+      const discoveryIds = readSafeStrings(await readRows(discoveriesQuery), "id")
+        .filter((discoveryId) => discoveryId !== query.excludeDiscoveryId)
+        .slice(0, cap);
       if (discoveryIds.length === 0) return Object.freeze([]);
 
       const identities = (await readRows(client.from<IdentityRow>("snapshot_identities")
