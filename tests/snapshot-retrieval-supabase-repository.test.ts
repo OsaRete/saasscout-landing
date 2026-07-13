@@ -20,7 +20,7 @@ const fixtures = () => ({
   snapshot_sections: [
     { snapshot_identity_id: "ident-1", section_type: "problem_intelligence", payload: { title: "Agency onboarding gaps", summary: "Manual client onboarding", affectedMarket: "Agencies", affectedAudience: "operators" } },
     { snapshot_identity_id: "ident-1", section_type: "opportunity_intelligence", payload: { summary: "Build onboarding workflow", opportunityScore: 0.9, validationIndicators: ["pain"] } },
-    { snapshot_identity_id: "ident-1", section_type: "confidence", payload: { overall: 1.7, evidence: -1, opportunity: 0.8, market: 0.7 } },
+    { snapshot_identity_id: "ident-1", section_type: "confidence", payload: { overall: { value: 0.8 }, evidence: -1, opportunity: 0.8, market: 0.7 } },
     { snapshot_identity_id: "ident-malformed", section_type: "problem_intelligence", payload: { summary: "Missing title", relatedNiches: ["x"] } },
     { snapshot_identity_id: "ident-malformed", section_type: "opportunity_intelligence", payload: { summary: "Bad" } },
     { snapshot_identity_id: "ident-malformed", section_type: "confidence", payload: { overall: 0.4 } },
@@ -96,7 +96,7 @@ test("maps JSONB safely, clamps confidence, falls back relatedNiches, caps snipp
   const result = (await createSupabaseSnapshotRetrievalRepository({ client: mockClient() }).findCandidates(baseQuery))[0];
   assert.equal(result?.problem.title, "Agency onboarding gaps");
   assert.deepEqual(result?.problem.relatedNiches, []);
-  assert.equal(result?.confidence?.overall, 1);
+  assert.equal(result?.confidence?.overall, 0.8);
   assert.equal(result?.evidenceSignals.length, 5);
   assert.ok((result?.evidenceSignals[0]?.claimSnippet.length ?? 0) <= 240);
   assert.equal(result?.evidenceSignals[0]?.confidence, 1);

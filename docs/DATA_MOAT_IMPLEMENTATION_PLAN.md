@@ -694,3 +694,19 @@ Operational behavior:
 Next phase:
 
 Before Knowledge Fusion or prompt influence is considered, the next phase must validate retrieval quality, ownership isolation, malformed-row behavior, and operational metrics in controlled review. This phase must not claim user-result improvement yet because retrieval remains diagnostic-only.
+
+---
+
+# Discover Opportunities Snapshot Lifecycle Alignment
+
+Status:
+
+Implemented for newly produced Discover Opportunities Snapshots only.
+
+Scope:
+
+- The Discover Opportunities Snapshot producer now explicitly marks its canonical Snapshot metadata lifecycle as `validated` after the producer-owned Snapshot pipeline accepts validation before persistence input is created.
+- Retrieval eligibility remains limited to `validated` and `persisted` lifecycle states; `created` Snapshots remain excluded and must not become retrievable.
+- Existing immutable Snapshot rows whose lifecycle was previously stored as `created` are not modified, backfilled, updated, deleted, or relabeled.
+- Only newly produced Discover Opportunities Snapshots receive the corrected lifecycle value at the producer boundary.
+- Remote smoke testing requires creating a new Discovery so the new immutable Snapshot identity is written with `validated` lifecycle from the beginning.
