@@ -1,0 +1,14 @@
+{
+  "name": "server-only",
+  "version": "0.0.0-saasscout-local",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "react-server": "./empty.js",
+      "node": "./empty.js",
+      "default": "./index.js"
+    }
+  },
+  "types": "index.d.ts"
+}

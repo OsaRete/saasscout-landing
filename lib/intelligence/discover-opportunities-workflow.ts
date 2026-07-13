@@ -15,6 +15,17 @@ import type { ProblemObservationInput } from "@/lib/knowledge/problem-observatio
 import { runKnowledgeEvolutionDiscoveryDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { adaptDiscoverySourcesToInput } from "@/lib/intelligence/discovery-source-adapter";
 import { DiscoveryOrchestrator } from "@/lib/intelligence/orchestrator";
+import {
+  createSnapshotPersistenceInputFromPipeline,
+  mapSnapshotPersistenceInputToStorageRecords,
+  runSnapshotPipeline,
+} from "@/lib/intelligence/snapshots";
+import { buildDiscoverOpportunitiesSnapshotInput } from "@/lib/intelligence/snapshots/discover-opportunities-adapter";
+import {
+  isSnapshotPersistenceEnabled,
+  persistSnapshotToSupabase,
+  type SnapshotProductionPersistenceOutcome,
+} from "@/lib/intelligence/snapshots/server-persistence-executor";
 import { buildDiscoveryOrchestratorDiagnosticMetrics } from "@/lib/intelligence/discovery-orchestrator-diagnostics";
 import {
   buildDiscoveryPersistencePlan,
@@ -112,6 +123,82 @@ function runDiscoveryOrchestratorDryRun({
     enabled: true,
     dryRun: true,
   });
+}
+
+type DiscoverySnapshotPersistenceExecution = Readonly<{
+  outcome: SnapshotProductionPersistenceOutcome;
+  durationMs: number;
+}>;
+
+type DiscoverySnapshotPersistenceExecutor = (
+  input: ReturnType<typeof mapSnapshotPersistenceInputToStorageRecords>,
+) => Promise<SnapshotProductionPersistenceOutcome>;
+
+function logSnapshotPersistenceOutcome(result: DiscoverySnapshotPersistenceExecution) {
+  const { outcome, durationMs } = result;
+  const logPayload = {
+    event: "snapshot_persistence_result",
+    snapshotId: outcome.snapshotId,
+    discoveryId: outcome.discoveryId,
+    contractVersion: outcome.contractVersion,
+    idempotencyKey: outcome.idempotencyKey,
+    mappingHash: outcome.mappingHash,
+    rpcStatus: outcome.status === "success" ? outcome.outcome : outcome.reason,
+    written: outcome.written,
+    durationMs,
+  };
+
+  if (outcome.status === "failure" && outcome.reason === "rejected_conflict") {
+    console.error("Snapshot persistence integrity conflict:", logPayload);
+    return;
+  }
+
+  if (outcome.status === "failure") {
+    console.warn("Snapshot persistence failed during controlled rollout:", logPayload);
+    return;
+  }
+
+  console.info("Snapshot persistence completed:", logPayload);
+}
+
+export async function persistDiscoverOpportunitiesSnapshotIfEnabled({
+  snapshotInput,
+  executor = persistSnapshotToSupabase,
+  enabled = isSnapshotPersistenceEnabled,
+}: {
+  snapshotInput: ReturnType<typeof buildDiscoverOpportunitiesSnapshotInput>;
+  executor?: DiscoverySnapshotPersistenceExecutor;
+  enabled?: () => boolean;
+}): Promise<SnapshotProductionPersistenceOutcome | null> {
+  const pipelineResult = runSnapshotPipeline(snapshotInput);
+  const persistenceInput = createSnapshotPersistenceInputFromPipeline(pipelineResult);
+
+  if (persistenceInput.status !== "accepted") {
+    console.warn("Snapshot persistence skipped because canonical Snapshot validation failed:", {
+      event: "snapshot_persistence_validation_failed",
+      snapshotId: persistenceInput.snapshotId,
+      discoveryId: persistenceInput.discoveryId,
+      errorCount: persistenceInput.errors.length,
+    });
+    return null;
+  }
+
+  const mapping = mapSnapshotPersistenceInputToStorageRecords(persistenceInput.input);
+
+  if (!enabled()) {
+    return null;
+  }
+
+  const startedAt = Date.now();
+  const outcome = await executor(mapping);
+  const durationMs = Date.now() - startedAt;
+  logSnapshotPersistenceOutcome({ outcome, durationMs });
+
+  if (outcome.status === "failure" && outcome.reason === "rejected_conflict") {
+    throw new Error("Snapshot persistence rejected a conflicting immutable mapping.");
+  }
+
+  return outcome;
 }
 
 function getSafePersistencePlanMetrics(plan: ReturnType<typeof buildDiscoveryPersistencePlan>) {
@@ -464,6 +551,7 @@ JSON format:
 }
 
 export async function discoverOpportunitiesWorkflow(userId: string) {
+  const discoveryExecutionStartedAt = new Date().toISOString();
   const { data: profile, error: profileError } = await getSupabaseAdminClient()
     .from("user_profiles")
     .select("*")
@@ -514,6 +602,21 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   if (discoveryError || !discoveryData) {
     throw discoveryError || new Error("Could not save discovery.");
   }
+
+  const discoverySnapshotInput = buildDiscoverOpportunitiesSnapshotInput({
+    discoveryId: discoveryData.id,
+    createdAt: discoveryData.created_at || discoveryExecutionStartedAt,
+    completedAt: discoveryData.created_at || discoveryExecutionStartedAt,
+    userId,
+    plan: profile.plan || "free",
+    sourcesLimit,
+    externalSources,
+    moatSources,
+    problems,
+    summary: analysis.summary || null,
+  });
+
+  await persistDiscoverOpportunitiesSnapshotIfEnabled({ snapshotInput: discoverySnapshotInput });
 
   const legacyProblemsToInsert = buildLegacyDiscoveredProblemRows({
     problems,

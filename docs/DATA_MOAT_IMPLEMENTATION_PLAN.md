@@ -573,3 +573,18 @@ Recommendations guide.
 Prediction anticipates.
 
 Together, these components create a compounding intelligence advantage that becomes stronger with every Discovery executed by the platform.
+---
+
+## Controlled Snapshot Persistence Integration Note
+
+The first production Snapshot persistence integration is intentionally narrow and disabled by default.
+
+- **First integrated producer:** `lib/intelligence/discover-opportunities-workflow.ts`, after external/Data Moat analysis completes and after the `opportunity_discoveries.id` row exists.
+- **Feature flag:** `SNAPSHOT_PERSISTENCE_ENABLED`; persistence executes only when the value is exactly `1`.
+- **Default rollout:** disabled in development, preview and production until a human explicitly configures the environment flag.
+- **Identity invariant:** `discoveryId` is the persisted `opportunity_discoveries.id`; `snapshotId` is deterministically derived as `snapshot:discover-opportunities:${discoveryId}`; `createdAt` and processing timestamps come from the persisted discovery timestamp when available, with only the discovery execution start time as a pre-RPC fallback.
+- **Idempotency invariant:** the persistence boundary retains `discoveryId:snapshotId:contractVersion` as the idempotency key through the existing Snapshot persistence contract.
+- **Failure policy:** `inserted` and `replayed_identical` are successful; `rejected_conflict` is a hard integrity failure; transient infrastructure/RPC failures are logged with sanitized metadata and do not change the public discovery response during the initial controlled rollout.
+- **Scope:** no UI changes, no schema changes, no migration changes, no remote Supabase SQL, and no automatic production activation.
+
+Production Snapshot persistence is not active until `SNAPSHOT_PERSISTENCE_ENABLED=1` is explicitly configured by a human operator.
