@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
+import { buildGenerateOpportunitiesPrompt } from "@/lib/scan/safe-prompt-builders";
 import { AuthError, requireUser } from "../_utils/auth";
 
 function getOpenRouterClient() {
@@ -17,7 +19,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function cleanJsonResponse(content: string) {
-  return content.replace(/```json/g, "").replace(/```/g, "").trim();
+  return content
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
 }
 
 type RawOpportunity = {
@@ -42,7 +47,8 @@ function normalizeOpportunities(rawOpportunities: RawOpportunity[]) {
     score: Number(item.score) || 7,
     pain: item.pain || "A repeated pain point was detected in this market.",
     customer: item.customer || item.target_customer || "Not specified",
-    mvp: item.mvp || "Build a focused MVP that solves the main repeated problem.",
+    mvp:
+      item.mvp || "Build a focused MVP that solves the main repeated problem.",
     pricing: item.pricing || "$19/mo",
     difficulty: item.difficulty || "Medium",
     problem_summary:
@@ -86,62 +92,21 @@ export async function POST(req: Request) {
           success: false,
           error: "Market or evidence is required.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const prompt = `
-You are SaaSScout, an AI SaaS opportunity analyst.
-
-Your job is to generate practical SaaS business opportunities from market evidence.
-
-Market:
-${market || "Not specified"}
-
-Target audience:
-${audience || "Not specified"}
-
-Region:
-${region || "Global"}
-
-Evidence:
-${evidence || "No evidence provided."}
-
-Generate exactly 3 SaaS opportunities.
-
-Rules:
-- Focus on real, practical SaaS products.
-- Each opportunity must solve a specific repeated pain point.
-- Avoid generic ideas.
-- Make the MVP simple and buildable.
-- Pricing must be realistic.
-- Score must be from 1 to 10.
-- Difficulty must be one of: Easy, Medium, Hard.
-- Return ONLY valid JSON.
-- Do not include markdown.
-- Do not include explanations outside JSON.
-
-JSON format:
-{
-  "opportunities": [
-    {
-      "title": "CRM for Freelance Designers",
-      "score": 8.4,
-      "pain": "Freelance designers struggle to manage leads, follow-ups, proposals, and client communication across scattered tools.",
-      "customer": "Freelance designers and small design studios",
-      "mvp": "A simple CRM with lead tracking, proposal status, follow-up reminders, and client notes.",
-      "pricing": "$19/mo",
-      "difficulty": "Medium",
-      "problem_summary": "Designers lose time and revenue because client management is fragmented.",
-      "target_customer": "Solo freelance designers earning revenue from client projects",
-      "mvp_roadmap": "1. Lead pipeline | 2. Client notes | 3. Follow-up reminders | 4. Proposal tracking",
-      "validation_questions": "How do you currently track leads? | How often do you forget follow-ups? | Would you pay for a simple client workflow tool?",
-      "landing_page_idea": "Never lose a design client again. Track leads, proposals, and follow-ups in one simple workspace.",
-      "acquisition_channels": "Design communities | LinkedIn outreach | Reddit | Freelance newsletters"
-    }
-  ]
-}
-`;
+    const trustedIntent = buildTrustedUserIntent({ market, audience, region });
+    const prompt = buildGenerateOpportunitiesPrompt({
+      intent: trustedIntent,
+      evidence: [
+        {
+          evidenceId: "scan-user-evidence",
+          sourceKind: "pasted_evidence",
+          content: evidence,
+        },
+      ],
+    });
 
     const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
@@ -187,7 +152,7 @@ JSON format:
     if (error instanceof AuthError) {
       return NextResponse.json(
         { success: false, error: error.message },
-        { status: error.status }
+        { status: error.status },
       );
     }
 
@@ -201,7 +166,7 @@ JSON format:
         success: false,
         error: message,
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
