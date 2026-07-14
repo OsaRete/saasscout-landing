@@ -1,4 +1,5 @@
 import type { SnapshotLifecycleState } from "../types.ts";
+import type { SnapshotRetrievalDuplicateSummary, SnapshotRetrievalQualityClassification, SnapshotRetrievalScoreDistribution, SnapshotRetrievalTopResultBreakdown } from "./quality-diagnostics.ts";
 
 export type SnapshotRetrievalMode = "disabled" | "shadow" | "influence";
 export type SnapshotRetrievalOwnershipScope = "user" | "organization" | "discovery" | "unknown";
@@ -106,10 +107,15 @@ export type SnapshotRetrievalDiagnostics = Readonly<{
   mode: SnapshotRetrievalMode;
   ownershipScope: SnapshotRetrievalOwnershipScope;
   queryFingerprint: string;
+  discoveryExecutionFingerprint?: string;
   candidateCount: number;
   rankedResultCount: number;
   contextCount: number;
   repositoryCalled: boolean;
+  duplicateSummary?: SnapshotRetrievalDuplicateSummary;
+  qualityClassification?: SnapshotRetrievalQualityClassification;
+  scoreDistribution?: SnapshotRetrievalScoreDistribution;
+  topResultBreakdown?: SnapshotRetrievalTopResultBreakdown | null;
   unsupportedMode?: boolean;
   errorCode?: string;
 }>;
