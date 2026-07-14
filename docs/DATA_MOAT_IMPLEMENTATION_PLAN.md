@@ -710,3 +710,109 @@ Scope:
 - Existing immutable Snapshot rows whose lifecycle was previously stored as `created` are not modified, backfilled, updated, deleted, or relabeled.
 - Only newly produced Discover Opportunities Snapshots receive the corrected lifecycle value at the producer boundary.
 - Remote smoke testing requires creating a new Discovery so the new immutable Snapshot identity is written with `validated` lifecycle from the beginning.
+
+---
+
+## Snapshot Retrieval Quality Calibration and Shadow Observability
+
+Status:
+
+Implemented as diagnostic-only Shadow Retrieval support.
+
+Scope:
+
+- Adds deterministic relevance diagnostics over existing Snapshot Retrieval score breakdowns.
+- Adds duplicate candidate diagnostics after repository retrieval and before/after ranking observation.
+- Adds score distribution diagnostics for ranked shadow results.
+- Adds a safe top-result aggregate breakdown for operator review.
+- Adds a deterministic non-reversible `discoveryExecutionFingerprint` for shadow-run correlation.
+- Adds a pure calibration summary helper for tests and future operator tooling.
+
+Production behavior:
+
+- Retrieval remains shadow-only and non-influential.
+- No candidate filtering is introduced.
+- No ranking weights are changed.
+- Knowledge Fusion remains disabled.
+- Historical Snapshot context is not injected into prompts.
+- Public API responses and UI behavior remain unchanged.
+- Snapshot persistence inputs remain unchanged.
+
+Diagnostic relevance gate:
+
+```text
+hasThematicRelevance =
+  queryTextMatch > 0
+  || nicheOverlap > 0
+  || clusterOverlap > 0
+```
+
+Evidence strength, Snapshot confidence, provenance diversity and freshness may explain quality-score lift, but they cannot create thematic relevance by themselves. This rule is diagnostic-only in this phase and must not filter or mutate retrieval candidates.
+
+Classification thresholds:
+
+- `strongly_related`: thematic relevance is present, total score is at least `0.60`, and at least one thematic factor is at least `0.50`.
+- `partially_related`: thematic relevance is present and total score is at least `0.35`.
+- `weakly_related`: thematic relevance is present and total score is greater than `0`.
+- `not_relevant`: thematic factors are all `0`, including cases where evidence, confidence, provenance or freshness create quality-score lift.
+- `empty`: no ranked result exists.
+
+Safe aggregate observability fields:
+
+Shadow logs may include only aggregate diagnostic fields:
+
+- `event`
+- `mode`
+- `queryFingerprint`
+- `discoveryExecutionFingerprint`
+- `ownershipScope`
+- `candidatesRead`
+- `uniqueSnapshotCount`
+- `duplicateCandidateCount`
+- `resultsReturned`
+- `topScores`
+- `topResultBreakdown`
+- `qualityClassification`
+- `scoreDistribution`
+- `durationMs`
+- `status`
+- `warningsCount`
+
+Shadow logs must not include raw query text, raw user IDs, raw discovery IDs, Snapshot IDs, titles, summaries, claim snippets, source URLs, prompts, provider payloads, credentials or full historical context.
+
+Discovery execution fingerprint limitation:
+
+When a current discovery ID is not available at retrieval time, `discoveryExecutionFingerprint` is derived from the query fingerprint, reference timestamp and safe user scope material. It is deterministic for the same execution inputs but is not a database identity and must only be used for safe operational correlation.
+
+Controlled benchmark protocol:
+
+Run a controlled review set before considering any Knowledge Fusion or prompt influence:
+
+- 3 strongly related Discoveries.
+- 3 partially related Discoveries.
+- 3 unrelated Discoveries.
+- 1 near-duplicate Discovery.
+
+For each run, record:
+
+- `candidatesRead`
+- top score
+- `qualityClassification`
+- `topResultBreakdown`
+- `durationMs`
+- duplicate count
+
+Knowledge Fusion readiness must not be claimed until benchmark evidence exists and operator review is complete.
+
+Future readiness criteria:
+
+- No cross-user retrieval is observed.
+- Critical warning count remains `0`.
+- p95 retrieval latency is acceptable for the deployment target.
+- Strongly related benchmark runs score and classify higher than unrelated runs.
+- Unrelated top results classify as `not_relevant` or remain below an approved future threshold.
+- `duplicateCandidateCount` remains `0` under normal retrieval.
+- Public behavior parity remains intact.
+- Operator review is completed and documented.
+
+These criteria are future readiness criteria only. They are not production gates activated by this PR.
