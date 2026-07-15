@@ -816,3 +816,56 @@ Future readiness criteria:
 - Operator review is completed and documented.
 
 These criteria are future readiness criteria only. They are not production gates activated by this PR.
+
+---
+
+# Scan Safety and Quality Program — PR 2 Strict Structured Output Validation
+
+Status:
+
+Implemented for the existing Scan AI routes only.
+
+Scope:
+
+- Added a reusable strict validation boundary for `analyze-evidence` model output.
+- Added a reusable strict validation boundary for `generate-opportunities` model output.
+- Added a shared strict JSON extraction helper that accepts plain JSON or one complete fenced JSON block and rejects surrounding prose, multiple fences, malformed JSON, and empty responses.
+- Removed route-level conversion of incomplete model output into plausible business intelligence defaults.
+- Preserved the existing public successful response shapes for valid model output.
+- Preserved the existing Untrusted Evidence Boundary prompt builders, model provider, model names, temperatures, token limits, authentication, route names, persistence consumers, and UI behavior.
+
+Canonical Scan score range:
+
+- The canonical API range for the current Scan AI routes remains **1 to 10**.
+- This matches the existing Scan prompts, generated examples, opportunity detail display, and `confidence_score` usage.
+- The results list currently renders opportunity scores with a `/100` presentation convention. This PR does not redesign UI score presentation; score-range UI harmonization remains a follow-up because this milestone is limited to server-side structured-output safety.
+- The validation boundary rejects non-finite values and any confidence or opportunity score outside `1..10`.
+
+Invalid-output failure policy:
+
+- Invalid or incomplete model output is treated as a controlled model-output failure.
+- The routes must not invent missing critical business intelligence.
+- The routes must not return raw model content, prompts, evidence, source text, provider secrets, or private content to clients.
+- Safe machine-readable categories are used for invalid output: `model_empty_response`, `model_invalid_json`, `model_schema_validation_failed`, and `model_output_out_of_range`.
+- Sanitized server logs may include aggregate validation metadata such as route, prompt version, model, status, error code, invalid field count, and invalid field names only.
+
+Fallback policy:
+
+- Unsafe generic route fallbacks such as default confidence `7`, default opportunity score `7`, generic opportunity titles, generic MVPs, fixed `$19/mo` pricing, generic validation questions, generic roadmaps, and generic acquisition channels were removed from the Scan AI output boundary.
+- Presentation-only UI fallbacks that operate after persisted data is already loaded are unchanged in this milestone and do not alter model-output validation.
+
+Explicit non-goals for this milestone:
+
+- No schema changes.
+- No migrations.
+- No remote SQL or database push.
+- No UI redesign.
+- No Scan Retrieval.
+- No Knowledge Fusion.
+- No Scan Snapshots.
+- No server-side Scan orchestration migration.
+- No claim-level grounding, evidence citations, confidence-calibration algorithm, solution-neutrality redesign, competitor analysis, or prompt-quality redesign.
+
+Next milestone:
+
+Grounding and evidence-reference contracts should define how Scan outputs cite and bind claims to evidence without exposing untrusted content as instructions. Scan output is safer after this milestone, but it is not yet fully Data-Moat-ready until grounding, evidence references, and later canonical Scan Artifact work are completed.
