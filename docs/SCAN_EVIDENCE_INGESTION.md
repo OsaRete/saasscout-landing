@@ -27,33 +27,52 @@ The route now performs defense-in-depth metadata preflight before reading any fi
 
 Policy: declared `byteLength` must be a finite non-negative integer and must exactly match `Buffer.byteLength` after the input bytes are converted to a single `Buffer`. The actual buffer length is authoritative for per-file limits, total upload limits, canonical `byteCount`, and safe aggregate logs. A mismatch is rejected as `scan_evidence_request_invalid`; declared or actual byte values are not included in public error messages.
 
-## Extraction ordering
+## Two-stage preparation and extraction
 
-Canonical file extraction follows this order:
+Canonical file handling is split into two private stages so future server-side callers cannot accidentally parse documents before upload totals are approved.
 
-1. construct `Buffer` once;
-2. validate actual byte length;
-3. sanitize and validate filename;
-4. validate extension and MIME compatibility;
-5. validate PDF/DOCX signatures or TXT binary heuristic;
-6. parse/extract;
-7. normalize;
-8. enforce extracted-character and useful-content limits.
+### Stage A: preparation
 
-Parsers are not invoked for oversized files, MIME mismatches, unsupported extensions, invalid filenames, invalid signatures, TXT binary content, or malformed TXT UTF-8.
+`prepareScanEvidenceFile()` performs only request validation and request-scoped byte preparation:
+
+1. construct the `Buffer` once from caller-supplied bytes;
+2. calculate `actualByteLength`;
+3. verify declared `byteLength` exactly matches actual bytes;
+4. enforce the per-file actual-byte limit;
+5. sanitize the filename;
+6. validate extension and MIME compatibility;
+7. classify the upload as TXT, PDF, or DOCX.
+
+Preparation does not decode TXT, validate binary signatures, invoke PDF/DOCX parsers, invoke any model, or mutate caller input. The prepared structure carries the same request-scoped `Buffer` forward only until extraction completes. Buffers are not retained in final canonical evidence items.
+
+### Stage B: extraction
+
+`extractPreparedScanEvidenceFile()` runs only after every file is prepared and the sum of actual bytes is approved. It validates PDF/DOCX signatures, applies TXT binary and strict UTF-8 checks, invokes the relevant parser with the cooperative timeout, maps parser failures to controlled public errors, and returns extracted text plus safe metadata.
+
+Canonical ingestion order is now:
+
+1. enforce file count;
+2. prepare every file without parsing;
+3. sum prepared `actualByteLength`;
+4. reject totals above `maxTotalFileBytes`;
+5. extract prepared files;
+6. normalize;
+7. enforce extracted-character and useful-content limits.
+
+Required invariant: neither `extractPdf()` nor `extractDocx()` executes when the canonical sum of actual uploaded bytes exceeds `SCAN_DOCUMENT_INGESTION_POLICY_V1.maxTotalFileBytes`. TXT decoding also occurs only after total-byte approval for consistent ordering. Parsers are not invoked for oversized files, MIME mismatches, unsupported extensions, invalid filenames, invalid signatures, TXT binary content, malformed TXT UTF-8, or combined actual-byte overflow.
 
 ## Timeout architecture and limitation
 
-PR 7.1 keeps `extractionTimeoutMs` active through `withExtractionTimeout()`. This is a cooperative wait timeout: it limits how long the request awaits a parser and maps timeout to `scan_evidence_extraction_timeout`. It does **not** guarantee cancellation of CPU work already running in the same Node process. Strong parser termination requires future worker-thread or process isolation. Raw timeout or parser errors are not returned to clients.
+PR 7.2 keeps the PR 7.1 `extractionTimeoutMs` behavior active through `withExtractionTimeout()`. This is a cooperative wait timeout: it limits how long the request awaits a parser and maps timeout to `scan_evidence_extraction_timeout`. It does **not** guarantee cancellation of CPU work already running in the same Node process. Strong parser termination requires future worker-thread or process isolation. Raw timeout or parser errors are not returned to clients.
 
 ## PDF and DOCX extraction coverage
 
 Tests now include deterministic synthetic fixtures created specifically for this repository:
 
-- a minimal extractable PDF containing `SaaSScout synthetic PDF extraction evidence` that passes extension, MIME, and `%PDF-` signature validation and exercises the real installed PDF parser;
-- a minimal real DOCX/ZIP package containing `SaaSScout synthetic DOCX extraction evidence` that exercises the real installed Mammoth parser.
+- a minimal extractable PDF containing `SaaSScout synthetic PDF extraction evidence` that is generated entirely in TypeScript, uses no shell command, produces stable bytes, passes extension, MIME, and `%PDF-` signature validation, and exercises the real installed PDF parser;
+- a minimal real DOCX/ZIP package containing `SaaSScout synthetic DOCX extraction evidence` as an embedded deterministic base64 fixture that exercises the real installed Mammoth parser.
 
-Corrupt PDF/DOCX and renamed-ZIP rejection coverage remains.
+The DOCX fixture is self-contained and does not create temporary directories or call operating-system utilities such as `mkdir` or `zip`. Corrupt PDF/DOCX and renamed-ZIP rejection coverage remains.
 
 ## PDF error classification
 
