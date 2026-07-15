@@ -1,9 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   buildSafeScanEvidenceIngestionLog,
   hashScanEvidence,
@@ -50,18 +47,7 @@ const syntheticPdfBytes = () => {
   output += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return Buffer.from(output, "utf8");
 };
-const syntheticDocxBytes = () => {
-  const dir = mkdtempSync(join(tmpdir(), "scan-docx-"));
-  try {
-    writeFileSync(join(dir, "[Content_Types].xml"), `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
-    execFileSync("mkdir", ["-p", join(dir, "_rels"), join(dir, "word", "_rels"), join(dir, "word")]);
-    writeFileSync(join(dir, "_rels", ".rels"), `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
-    writeFileSync(join(dir, "word", "document.xml"), `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>SaaSScout synthetic DOCX extraction evidence</w:t></w:r></w:p></w:body></w:document>`);
-    writeFileSync(join(dir, "word", "_rels", "document.xml.rels"), `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`);
-    execFileSync("zip", ["-X", "-q", "-r", "fixture.docx", "[Content_Types].xml", "_rels", "word"], { cwd: dir });
-    return readFileSync(join(dir, "fixture.docx"));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-};
+const syntheticDocxBytes = () => Buffer.from("UEsDBBQAAAAIAAAAIVjMVIwQ4AAAAJwBAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH2Qy07DMBBFf8XyFsUTukAIJekCyhJYlA+w7Eli4Zc8bil/z6QtXaDC0r6PM7rd+hC82GMhl2Ivb1UrBUaTrItTL9+3z829XA/d9isjCbZG6uVca34AIDNj0KRSxsjKmErQlZ9lgqzNh54QVm17BybFirE2demQQ/eEo975KjYH/j5hC3qS4vFkXFi91Dl7Z3RlHfbR/qI0Z4Li5NFDs8t0wwYJVwmL8jfgnHvlHYqzKN50qS86sAs+U7Fgk9kFTqr/a67cmcbRGbzkl7ZckkEiHjh4dVGCdvHnfjjOPXwDUEsDBBQAAAAIAAAAIVg2V97cogAAABgBAAALAAAAX3JlbHMvLnJlbHONzzsOwjAMBuCrRN6pCwNCqGkXhNQVlQNEiZtGNA8l4XV7MjBQxMBo+/dnuekedmY3isl4x2Fd1cDISa+M0xzOw3G1g65tTjSLXBJpMiGxsuIShynnsEdMciIrUuUDuTIZfbQilzJqDEJehCbc1PUW46cBS5P1ikPs1RrY8Az0j+3H0Ug6eHm15PKPE1+JIouoKXO4+6hQvdtVYQHbBhcvti9QSwMEFAAAAAgAAAAhWJS7FBSsAAAA5AAAABEAAAB3b3JkL2RvY3VtZW50LnhtbEWOuw7CMAxFfyXKDikMCFVtGUCsDAWJNSSmjUTiKHFff09SBpZjWdc+utVpth82QogGXc1324IzcAq1cV3NH/fr5shPTTWVGtVgwRFL9y6WU817Il8KEVUPVsYtenApe2OwktIaOjFh0D6gghiTzn7EvigOwkrjeFa+UC95+oyQQU0rZdsqHIjFxVEPZBS73M5PBjMFqSi1ZDAanTpCJfJHZljpV/6s4t+4+QJQSwMEFAAAAAgAAAAhWNJ3/LdtAAAAewAAABwAAAB3b3JkL19yZWxzL2RvY3VtZW50LnhtbC5yZWxzTYxBDgIhDEWvQrp3ii6MMcPMbg5g9AANViAOhVBiPL4sXf689/68fvNuPtw0FXFwnCwYFl+eSYKDx307XGBd5hvv1IehMVU1IxF1EHuvV0T1kTPpVCrLIK/SMvUxW8BK/k2B8WTtGdv/B+DyA1BLAQIUAxQAAAAIAAAAIVjMVIwQ4AAAAJwBAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAgAAAAhWDZX3tyiAAAAGAEAAAsAAAAAAAAAAAAAAIABEQEAAF9yZWxzLy5yZWxzUEsBAhQDFAAAAAgAAAAhWJS7FBSsAAAA5AAAABEAAAAAAAAAAAAAAIAB3AEAAHdvcmQvZG9jdW1lbnQueG1sUEsBAhQDFAAAAAgAAAAhWNJ3/LdtAAAAewAAABwAAAAAAAAAAAAAAIABtwIAAHdvcmQvX3JlbHMvZG9jdW1lbnQueG1sLnJlbHNQSwUGAAAAAAQABAADAQAAXgMAAAAA", "base64");
 
 test("pasted evidence is accepted, normalized, bounded, hashed, and deterministically identified", async () => {
   const first = await ingestScanEvidence({ pastedEvidence: "\uFEFFPain\r\n\r\n\r\n  repeats\t for teams with manual reporting." });
@@ -109,6 +95,8 @@ test("valid synthetic PDF and DOCX fixtures extract expected text deterministica
   assert.equal(docxFirst.evidenceItems[0].extractionStatus, "extracted");
   assert.match(docxFirst.evidenceItems[0].normalizedContent, /SaaSScout synthetic DOCX extraction evidence/);
   assert.equal(docxFirst.evidenceItems[0].byteCount, docxBytes.length);
+  const docxSecond = await ingestScanEvidence({ files: [{ filename: "fixture.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", byteLength: docxBytes.length, bytes: docxBytes }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(docxFirst)), JSON.parse(JSON.stringify(docxSecond)));
 });
 
 test("PDF validations reject corrupt, renamed, no-text, and oversized inputs with controlled codes", async () => {
@@ -178,6 +166,22 @@ test("route preflight rejects invalid multipart metadata before arrayBuffer read
   assert.equal(reads, 0);
 });
 
+test("combined actual bytes are enforced before any parser invocation", async () => {
+  let pdfCalls = 0;
+  let docxCalls = 0;
+  const extractors = { extractPdf: async () => { pdfCalls += 1; return "never"; }, extractDocx: async () => { docxCalls += 1; return "never"; } };
+  const pdfBytes = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(4 * 1024 * 1024 - 9, 65)]);
+  const docxBytes = Buffer.concat([Buffer.from("PK"), Buffer.alloc(4 * 1024 * 1024 - 2, 66)]);
+  const txtBytes = Buffer.alloc(4 * 1024 * 1024 + 1, 67);
+  await assert.rejects(() => ingestScanEvidence({ files: [
+    { filename: "large-a.pdf", mimeType: "application/pdf", byteLength: pdfBytes.length, bytes: pdfBytes },
+    { filename: "large-b.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", byteLength: docxBytes.length, bytes: docxBytes },
+    { filename: "large-c.txt", mimeType: "text/plain", byteLength: txtBytes.length, bytes: txtBytes },
+  ] }, { extractors }), (e) => e instanceof ScanEvidenceIngestionError && e.code === "scan_evidence_total_size_exceeded");
+  assert.equal(pdfCalls, 0);
+  assert.equal(docxCalls, 0);
+});
+
 test("actual bytes are authoritative and parser is not invoked before byte/type/signature validation", async () => {
   let parserCalls = 0;
   const extractors = { extractPdf: async () => { parserCalls += 1; return "never"; }, extractDocx: async () => { parserCalls += 1; return "never"; } };
@@ -216,6 +220,17 @@ test("collection counts, response minimization, status mapping, filenames, and l
   const log = JSON.stringify(buildSafeScanEvidenceIngestionLog({ result, durationMs: 1 }));
   assert.equal(log.includes("Café"), false);
   assert.equal(log.includes("sha256"), false);
+});
+
+test("DOCX fixture source stays portable and self-contained", () => {
+  const source = readFileSync("tests/scan-evidence-ingestion.test.ts", "utf8");
+  const forbidden = ["exec" + "FileSync", "mk" + "dtempSync", "rm" + "Sync", "write" + "FileSync", "tmp" + "dir"];
+  for (const token of forbidden) assert.equal(source.includes(token), false);
+  const processCall = "exec" + "FileSync";
+  assert.equal(source.includes(processCall + '("zip"'), false);
+  assert.equal(source.includes(processCall + "('zip'"), false);
+  assert.equal(source.includes(processCall + '("mkdir"'), false);
+  assert.equal(source.includes(processCall + "('mkdir'"), false);
 });
 
 test("legacy prompt builders and route contracts remain present", () => {
