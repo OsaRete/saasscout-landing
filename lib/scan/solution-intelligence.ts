@@ -170,6 +170,26 @@ const serviceCategories = new Set<SolutionCategory>([
   "hybrid_solution",
 ]);
 const bands = new Set(["poor", "weak", "possible", "strong", "best_fit"]);
+export const SOLUTION_SUITABILITY_POLICY_V1 = Object.freeze({
+  poorMaxExclusive: 0.2,
+  weakMaxExclusive: 0.4,
+  possibleMaxExclusive: 0.65,
+  strongMaxExclusive: 0.85,
+});
+export function deriveSuitabilityBand(
+  suitability: number,
+): SolutionSuitabilityBand {
+  if (suitability < SOLUTION_SUITABILITY_POLICY_V1.poorMaxExclusive)
+    return "poor";
+  if (suitability < SOLUTION_SUITABILITY_POLICY_V1.weakMaxExclusive)
+    return "weak";
+  if (suitability < SOLUTION_SUITABILITY_POLICY_V1.possibleMaxExclusive)
+    return "possible";
+  if (suitability < SOLUTION_SUITABILITY_POLICY_V1.strongMaxExclusive)
+    return "strong";
+  return "best_fit";
+}
+const evidenceRefRelevances = new Set(["primary", "supporting", "contradicting"]);
 const coverages = new Set(["none", "limited", "moderate", "strong"]);
 const altTypes = new Set([
   "direct_competitor",
@@ -285,12 +305,13 @@ function refs(
   issues: SolutionIntelligenceIssue[],
 ) {
   const out: ScanEvidenceReference[] = [];
-  if (!Array.isArray(raw)) {
+  const seen = new Set<string>();
+  if (!Array.isArray(raw) || raw.length > MAX_CLAIMS) {
     issues.push(
       issue(
         p,
         "solution_model_grounding_invalid",
-        "Evidence refs must be an array.",
+        "Evidence refs must be a bounded array.",
       ),
     );
     return out;
@@ -308,7 +329,19 @@ function refs(
     }
     keys(r, ["evidenceId", "relevance"], `${p}.${i}`, issues);
     const id = typeof r.evidenceId === "string" ? r.evidenceId.trim() : "";
-    if (!id || !allowed.has(id))
+    const relevance = r.relevance;
+    let valid = true;
+    if (!id || id.length > MAX_STRING) {
+      valid = false;
+      issues.push(
+        issue(
+          `${p}.${i}.evidenceId`,
+          "solution_model_grounding_invalid",
+          "Evidence ID must be non-empty and bounded.",
+        ),
+      );
+    } else if (!allowed.has(id)) {
+      valid = false;
       issues.push(
         issue(
           `${p}.${i}.evidenceId`,
@@ -316,17 +349,41 @@ function refs(
           "Evidence ID is not allowed.",
         ),
       );
-    out.push(
-      Object.freeze({
-        evidenceId: id,
-        ...(r.relevance
-          ? { relevance: r.relevance as ScanEvidenceReference["relevance"] }
-          : {}),
-      }),
-    );
+    }
+    if (id && seen.has(id)) {
+      valid = false;
+      issues.push(
+        issue(
+          `${p}.${i}.evidenceId`,
+          "solution_model_grounding_invalid",
+          "Duplicate evidence references are not allowed.",
+        ),
+      );
+    }
+    seen.add(id);
+    if (relevance !== undefined && !evidenceRefRelevances.has(relevance as string)) {
+      valid = false;
+      issues.push(
+        issue(
+          `${p}.${i}.relevance`,
+          "solution_model_grounding_invalid",
+          "Evidence relevance is invalid.",
+        ),
+      );
+    }
+    if (valid)
+      out.push(
+        Object.freeze({
+          evidenceId: id,
+          ...(relevance
+            ? { relevance: relevance as ScanEvidenceReference["relevance"] }
+            : {}),
+        }),
+      );
   }
   return out;
 }
+
 function claim(
   raw: unknown,
   p: string,
@@ -350,6 +407,83 @@ function claim(
     );
   return res.claim;
 }
+function flexibleGroundedClaim(
+  raw: unknown,
+  p: string,
+  allowed: ReadonlySet<string>,
+  issues: SolutionIntelligenceIssue[],
+) {
+  return claim(raw, p, allowed, issues);
+}
+function requiredEvidenceClaim(
+  raw: unknown,
+  p: string,
+  allowed: ReadonlySet<string>,
+  issues: SolutionIntelligenceIssue[],
+) {
+  const validated = claim(raw, p, allowed, issues);
+  if (!validated) return validated;
+  if (validated.groundingMode !== "evidence")
+    issues.push(
+      issue(
+        `${p}.groundingMode`,
+        "solution_model_grounding_mismatch",
+        "This factual field must be evidence-grounded.",
+      ),
+    );
+  if (validated.evidenceRefs.length === 0)
+    issues.push(
+      issue(
+        `${p}.evidenceRefs`,
+        "solution_model_grounding_missing",
+        "This factual field requires at least one evidence reference.",
+      ),
+    );
+  if (validated.inferenceReason !== undefined)
+    issues.push(
+      issue(
+        `${p}.inferenceReason`,
+        "solution_model_grounding_mismatch",
+        "Evidence-required factual fields must not include inferenceReason.",
+      ),
+    );
+  return validated;
+}
+function requiredInferenceClaim(
+  raw: unknown,
+  p: string,
+  allowed: ReadonlySet<string>,
+  issues: SolutionIntelligenceIssue[],
+) {
+  const validated = claim(raw, p, allowed, issues);
+  if (!validated) return validated;
+  if (validated.groundingMode !== "inference")
+    issues.push(
+      issue(
+        `${p}.groundingMode`,
+        "solution_model_grounding_mismatch",
+        "This recommendation field must be inference-labeled unless promoted by contract revision.",
+      ),
+    );
+  if (validated.evidenceRefs.length > 0)
+    issues.push(
+      issue(
+        `${p}.evidenceRefs`,
+        "solution_model_grounding_invalid",
+        "Inference-required fields must not include evidence references.",
+      ),
+    );
+  if (!validated.inferenceReason)
+    issues.push(
+      issue(
+        `${p}.inferenceReason`,
+        "solution_model_grounding_missing",
+        "Inference-required fields require inferenceReason.",
+      ),
+    );
+  return validated;
+}
+
 function claimArr(
   v: Record<string, unknown>,
   k: string,
@@ -357,9 +491,10 @@ function claimArr(
   allowed: ReadonlySet<string>,
   issues: SolutionIntelligenceIssue[],
   min = 0,
+  validator: typeof flexibleGroundedClaim = flexibleGroundedClaim,
 ) {
   const raw = v[k];
-  const fp = `${p}.${k}`;
+  const fp = p ? `${p}.${k}` : k;
   if (!Array.isArray(raw) || raw.length < min || raw.length > MAX_CLAIMS) {
     issues.push(
       issue(
@@ -371,9 +506,10 @@ function claimArr(
     return [] as ScanGroundedClaim[];
   }
   return raw
-    .map((x, i) => claim(x, `${fp}.${i}`, allowed, issues))
+    .map((x, i) => validator(x, `${fp}.${i}`, allowed, issues))
     .filter(Boolean) as ScanGroundedClaim[];
 }
+
 function assess(
   raw: unknown,
   i: number,
@@ -423,15 +559,27 @@ function assess(
         "Suitability must be finite on a 0-1 scale.",
       ),
     );
+  const suitabilityBand = enumv<SolutionSuitabilityBand>(
+    raw.suitabilityBand,
+    bands,
+    `${p}.suitabilityBand`,
+    issues,
+  );
+  if (Number.isFinite(suitability)) {
+    const derivedBand = deriveSuitabilityBand(suitability);
+    if (suitabilityBand !== derivedBand)
+      issues.push(
+        issue(
+          `${p}.suitabilityBand`,
+          "solution_model_grounding_mismatch",
+          "Suitability band must match deterministic suitability thresholds.",
+        ),
+      );
+  }
   return Object.freeze({
     category,
     suitability,
-    suitabilityBand: enumv<SolutionSuitabilityBand>(
-      raw.suitabilityBand,
-      bands,
-      `${p}.suitabilityBand`,
-      issues,
-    ),
+    suitabilityBand,
     rationale: claim(raw.rationale, `${p}.rationale`, allowed, issues)!,
     advantages: claimArr(raw, "advantages", p, allowed, issues),
     limitations: claimArr(raw, "limitations", p, allowed, issues),
@@ -517,6 +665,19 @@ function existing(
                 "Named direct competitors require evidence.",
               ),
             );
+          if (
+            alternativeType === "category_level_alternative" &&
+            /\b(?:inc|llc|ltd|corp|corporation|company|co\.|\.com)\b/i.test(
+              nameOrCategory,
+            )
+          )
+            issues.push(
+              issue(
+                `${ap}.nameOrCategory`,
+                "solution_model_grounding_mismatch",
+                "Category-level alternatives must not masquerade as named companies.",
+              ),
+            );
           return Object.freeze({
             nameOrCategory,
             alternativeType,
@@ -559,6 +720,8 @@ function existing(
       p,
       allowed,
       issues,
+      0,
+      requiredEvidenceClaim,
     ),
     whatAppearsPoorlySolved: claimArr(
       raw,
@@ -610,7 +773,15 @@ function innovation(
     `${p}.innovationMode`,
     issues,
   );
-  const vf = claimArr(raw, "verifiedFoundation", p, allowed, issues);
+  const vf = claimArr(
+    raw,
+    "verifiedFoundation",
+    p,
+    allowed,
+    issues,
+    0,
+    requiredEvidenceClaim,
+  );
   const assumptions = claimArr(
     raw,
     "unverifiedAssumptions",
@@ -618,6 +789,7 @@ function innovation(
     allowed,
     issues,
     mode === "unproven_concept" ? 1 : 0,
+    requiredInferenceClaim,
   );
   if (
     mode !== "unproven_concept" &&
@@ -687,15 +859,42 @@ function validation(
     p,
     issues,
   );
+  const readinessValue = enumv<ValidationReadiness>(
+    raw.readiness,
+    readiness,
+    `${p}.readiness`,
+    issues,
+  );
+  const knownFacts = claimArr(
+    raw,
+    "knownFacts",
+    p,
+    allowed,
+    issues,
+    readinessValue === "not_ready" ? 0 : 1,
+    requiredEvidenceClaim,
+  );
+  const criticalUnknowns = claimArr(
+    raw,
+    "criticalUnknowns",
+    p,
+    allowed,
+    issues,
+    readinessValue === "solution_validation_ready" || readinessValue === "demand_test_ready" ? 1 : 0,
+    requiredInferenceClaim,
+  );
+  if (readinessValue === "demand_test_ready" && knownFacts.length === 0)
+    issues.push(
+      issue(
+        `${p}.knownFacts`,
+        "solution_model_grounding_missing",
+        "Demand-test readiness requires evidence-backed problem facts.",
+      ),
+    );
   return Object.freeze({
-    readiness: enumv<ValidationReadiness>(
-      raw.readiness,
-      readiness,
-      `${p}.readiness`,
-      issues,
-    ),
-    knownFacts: claimArr(raw, "knownFacts", p, allowed, issues),
-    criticalUnknowns: claimArr(raw, "criticalUnknowns", p, allowed, issues),
+    readiness: readinessValue,
+    knownFacts,
+    criticalUnknowns,
     cheapestNextTest: enumv<CheapestNextTest>(
       raw.cheapestNextTest,
       tests,
@@ -879,9 +1078,48 @@ export function validateSolutionIntelligenceOutput(
         "Secondary category must differ.",
       ),
     );
+  const recAssessment = evaluated.find((item) => item.category === recommended);
+  if (recAssessment && evaluated.length) {
+    const highest = Math.max(...evaluated.map((item) => item.suitability));
+    if (recAssessment.suitability < highest)
+      issues.push(
+        issue(
+          "recommendedCategory",
+          "solution_model_grounding_mismatch",
+          "Recommended category must tie for highest suitability.",
+        ),
+      );
+  }
+  if (secondary) {
+    const secondaryAssessment = evaluated.find((item) => item.category === secondary);
+    if (!secondaryAssessment)
+      issues.push(
+        issue(
+          "secondaryCategory",
+          "solution_model_schema_validation_failed",
+          "Secondary category must be evaluated.",
+        ),
+      );
+    else {
+      const nonRecommended = evaluated.filter(
+        (item) => item.category !== recommended,
+      );
+      const secondHighest = Math.max(
+        ...nonRecommended.map((item) => item.suitability),
+      );
+      if (secondaryAssessment.suitability < secondHighest)
+        issues.push(
+          issue(
+            "secondaryCategory",
+            "solution_model_grounding_mismatch",
+            "Secondary category must tie for second-highest suitability among non-recommended categories.",
+          ),
+        );
+    }
+  }
   const result = Object.freeze({
     version: SOLUTION_INTELLIGENCE_VERSION,
-    problemFraming: claim(
+    problemFraming: requiredEvidenceClaim(
       input.problemFraming,
       "problemFraming",
       allowed,
@@ -890,7 +1128,7 @@ export function validateSolutionIntelligenceOutput(
     evaluatedCategories: Object.freeze(evaluated),
     recommendedCategory: recommended,
     ...(secondary ? { secondaryCategory: secondary } : {}),
-    recommendation: claim(
+    recommendation: requiredInferenceClaim(
       input.recommendation,
       "recommendation",
       allowed,
@@ -907,9 +1145,9 @@ export function validateSolutionIntelligenceOutput(
       issues,
     ),
     validationReadiness: validation(input.validationReadiness, allowed, issues),
-    keyAssumptions: claimArr(input, "keyAssumptions", "", allowed, issues),
+    keyAssumptions: claimArr(input, "keyAssumptions", "", allowed, issues, 0, requiredInferenceClaim),
     risks: claimArr(input, "risks", "", allowed, issues),
-    nextValidationAction: claim(
+    nextValidationAction: requiredInferenceClaim(
       input.nextValidationAction,
       "nextValidationAction",
       allowed,
@@ -978,6 +1216,50 @@ export function computeSolutionIntelligenceDiagnostics(
     contradictionReferenceCount: summary.contradictingReferenceCount,
   });
 }
+export function buildSafeSolutionIntelligenceLog(input: {
+  event: string;
+  route: string;
+  promptVersion: typeof SOLUTION_INTELLIGENCE_VERSION;
+  model: string;
+  validationStatus: "passed" | "failed" | "configuration_error" | "unexpected_error";
+  durationMs?: number;
+  diagnostics?: SolutionIntelligenceDiagnostics;
+  errorCategory?: string;
+  errorName?: string;
+  statusClass?: string;
+}) {
+  return Object.freeze({
+    event: input.event,
+    route: input.route,
+    promptVersion: input.promptVersion,
+    model: input.model,
+    validationStatus: input.validationStatus,
+    ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
+    ...(input.errorCategory ? { errorCategory: input.errorCategory } : {}),
+    ...(input.errorName ? { errorName: input.errorName } : {}),
+    ...(input.statusClass ? { statusClass: input.statusClass } : {}),
+    ...(input.diagnostics
+      ? {
+          categoryCount: input.diagnostics.categoryCount,
+          recommendedCategoryPresent: input.diagnostics.recommendedCategoryPresent,
+          validateFirstConsidered: input.diagnostics.validateFirstConsidered,
+          evidenceGroundedClaimPercentage:
+            input.diagnostics.evidenceGroundedClaimPercentage,
+          inferenceClaimPercentage: input.diagnostics.inferenceClaimPercentage,
+          independentEvidenceIdsReferenced:
+            input.diagnostics.independentEvidenceIdsReferenced,
+          existingAlternativeCount: input.diagnostics.existingAlternativeCount,
+          innovationVerifiedFoundationCount:
+            input.diagnostics.innovationVerifiedFoundationCount,
+          innovationAssumptionCount: input.diagnostics.innovationAssumptionCount,
+          criticalUnknownCount: input.diagnostics.criticalUnknownCount,
+          validationReadiness: input.diagnostics.validationReadiness,
+          cheapestNextTest: input.diagnostics.cheapestNextTest,
+          contradictionReferenceCount: input.diagnostics.contradictionReferenceCount,
+        }
+      : {}),
+  });
+}
 export function publicSolutionIntelligenceError(
   code: SolutionIntelligenceErrorCode,
 ) {
@@ -986,5 +1268,19 @@ export function publicSolutionIntelligenceError(
     error: code,
     message:
       "The Solution Intelligence response could not be safely validated. Please try again.",
+  };
+}
+export function publicSolutionIntelligenceFailure() {
+  return {
+    success: false,
+    error: "solution_intelligence_failed",
+    message: "Solution Intelligence could not be generated. Please try again.",
+  };
+}
+export function publicSolutionIntelligenceConfigurationFailure() {
+  return {
+    success: false,
+    error: "solution_intelligence_configuration_failed",
+    message: "Solution Intelligence is temporarily unavailable. Please try again later.",
   };
 }

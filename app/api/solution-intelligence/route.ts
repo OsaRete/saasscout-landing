@@ -3,8 +3,11 @@ import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildSolutionIntelligencePrompt } from "@/lib/scan/safe-prompt-builders";
 import { ModelJsonError, parseStrictModelJson } from "@/lib/scan/model-json";
 import {
+  buildSafeSolutionIntelligenceLog,
   computeSolutionIntelligenceDiagnostics,
+  publicSolutionIntelligenceConfigurationFailure,
   publicSolutionIntelligenceError,
+  publicSolutionIntelligenceFailure,
   SolutionIntelligenceValidationError,
   validateSolutionIntelligenceOutput,
 } from "@/lib/scan/solution-intelligence";
@@ -33,10 +36,20 @@ export async function POST(request: Request) {
   try {
     await requireUser(request);
     if (!process.env.OPENROUTER_API_KEY) {
-      return Response.json(
-        { success: false, error: "OpenRouter API key is missing." },
-        { status: 500 },
+      console.error(
+        "Solution Intelligence configuration",
+        buildSafeSolutionIntelligenceLog({
+          event: "solution_intelligence_configuration",
+          route: "solution-intelligence",
+          promptVersion: "scan-solution-intelligence@1",
+          model: "openai/gpt-4.1-mini",
+          validationStatus: "configuration_error",
+          errorCategory: "provider_configuration_missing",
+        }),
       );
+      return Response.json(publicSolutionIntelligenceConfigurationFailure(), {
+        status: 500,
+      });
     }
 
     const body = await request.json();
@@ -92,19 +105,21 @@ export async function POST(request: Request) {
       });
       const diagnostics =
         computeSolutionIntelligenceDiagnostics(solutionIntelligence);
-      console.info("Solution Intelligence validation", {
-        event: "solution_intelligence_validation",
-        route: "solution-intelligence",
-        promptVersion: "scan-solution-intelligence@1",
-        model: "openai/gpt-4.1-mini",
-        validationStatus: "passed",
-        durationMs: Date.now() - startedAt,
-        diagnostics,
-      });
+      console.info(
+        "Solution Intelligence validation",
+        buildSafeSolutionIntelligenceLog({
+          event: "solution_intelligence_validation",
+          route: "solution-intelligence",
+          promptVersion: "scan-solution-intelligence@1",
+          model: "openai/gpt-4.1-mini",
+          validationStatus: "passed",
+          durationMs: Date.now() - startedAt,
+          diagnostics,
+        }),
+      );
       return Response.json({
         success: true,
         solutionIntelligence,
-        diagnostics,
       });
     } catch (validationError) {
       if (
@@ -115,22 +130,18 @@ export async function POST(request: Request) {
           validationError instanceof ModelJsonError
             ? "solution_model_schema_validation_failed"
             : validationError.code;
-        console.warn("Solution Intelligence validation", {
-          event: "solution_intelligence_validation",
-          route: "solution-intelligence",
-          promptVersion: "scan-solution-intelligence@1",
-          model: "openai/gpt-4.1-mini",
-          validationStatus: "failed",
-          validationErrorCode: code,
-          invalidFieldCount:
-            validationError instanceof SolutionIntelligenceValidationError
-              ? validationError.issues.length
-              : 0,
-          invalidFieldNames:
-            validationError instanceof SolutionIntelligenceValidationError
-              ? validationError.issues.map((item) => item.path).slice(0, 20)
-              : [],
-        });
+        console.warn(
+          "Solution Intelligence validation",
+          buildSafeSolutionIntelligenceLog({
+            event: "solution_intelligence_validation",
+            route: "solution-intelligence",
+            promptVersion: "scan-solution-intelligence@1",
+            model: "openai/gpt-4.1-mini",
+            validationStatus: "failed",
+            errorCategory: code,
+            errorName: validationError.name,
+          }),
+        );
         return Response.json(publicSolutionIntelligenceError(code), {
           status: 502,
         });
@@ -138,21 +149,27 @@ export async function POST(request: Request) {
       throw validationError;
     }
   } catch (error) {
-    console.error("Solution Intelligence error:", error);
     if (error instanceof AuthError)
       return Response.json(
         { success: false, error: error.message },
         { status: error.status },
       );
-    return Response.json(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not generate Solution Intelligence.",
-      },
-      { status: 500 },
+    const status = typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+    console.error(
+      "Solution Intelligence error",
+      buildSafeSolutionIntelligenceLog({
+        event: "solution_intelligence_error",
+        route: "solution-intelligence",
+        promptVersion: "scan-solution-intelligence@1",
+        model: "openai/gpt-4.1-mini",
+        validationStatus: "unexpected_error",
+        errorCategory: "unexpected",
+        errorName: error instanceof Error ? error.name : typeof error,
+        ...(status ? { statusClass: `${Math.floor(status / 100)}xx` } : {}),
+      }),
     );
+    return Response.json(publicSolutionIntelligenceFailure(), { status: 500 });
   }
 }
