@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildGenerateOpportunitiesPrompt } from "@/lib/scan/safe-prompt-builders";
 import { computeScanQualityDiagnostics } from "@/lib/scan/quality-diagnostics";
+import { buildScanCalibrationShadowLog, calibrateGenerateOpportunitiesSupport } from "@/lib/scan/score-calibration";
 import {
   ModelJsonError,
   parseStrictModelJson,
@@ -112,6 +113,16 @@ export async function POST(req: Request) {
         evidence: [{ evidenceId: "scan-user-evidence", sourceKind: "pasted_evidence" }],
         derivedAnalysisUsed: Boolean(derivedAnalysis),
       });
+
+      const calibrationStartedAt = Date.now();
+      const calibration = calibrateGenerateOpportunitiesSupport({ output: scanOutput, diagnostics: qualityDiagnostics });
+      console.info("Scan score calibration shadow", buildScanCalibrationShadowLog({
+        route: "generate-opportunities",
+        promptVersion: "scan-generate-opportunities@1",
+        model: "openai/gpt-4.1-mini",
+        calibration,
+        durationMs: Date.now() - calibrationStartedAt,
+      }));
 
       console.info("Scan model output validation", {
         event: "scan_model_output_validation",
