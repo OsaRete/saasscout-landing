@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildGenerateOpportunitiesPrompt } from "@/lib/scan/safe-prompt-builders";
+import { computeScanQualityDiagnostics } from "@/lib/scan/quality-diagnostics";
 import {
   ModelJsonError,
   parseStrictModelJson,
@@ -104,7 +105,13 @@ export async function POST(req: Request) {
 
     try {
       const parsed = parseStrictModelJson(content || "");
-      const { opportunities, groundingSummary } = validateGenerateOpportunitiesOutput(parsed, { evidenceIds });
+      const scanOutput = validateGenerateOpportunitiesOutput(parsed, { evidenceIds });
+      const { opportunities, groundingSummary } = scanOutput;
+      const qualityDiagnostics = computeScanQualityDiagnostics({
+        output: scanOutput,
+        evidence: [{ evidenceId: "scan-user-evidence", sourceKind: "pasted_evidence" }],
+        derivedAnalysisUsed: Boolean(derivedAnalysis),
+      });
 
       console.info("Scan model output validation", {
         event: "scan_model_output_validation",
@@ -118,6 +125,7 @@ export async function POST(req: Request) {
         inferenceClaims: groundingSummary.inferenceClaims,
         groundingCoverage: groundingSummary.groundingCoverage,
         distinctEvidenceIdsReferenced: groundingSummary.distinctEvidenceIdsReferenced,
+        qualityDiagnostics: qualityDiagnostics.qualitySummary,
         durationMs: Date.now() - startedAt,
       });
 
