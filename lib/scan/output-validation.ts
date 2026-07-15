@@ -1,5 +1,17 @@
+import {
+  summarizeScanGrounding,
+  validateScanGroundedClaim,
+  type ScanGroundedClaim,
+  type ScanGroundingSummary,
+} from "./grounding.ts";
+
 export type ScanOutputErrorCode =
-  "model_schema_validation_failed" | "model_output_out_of_range";
+  | "model_schema_validation_failed"
+  | "model_output_out_of_range"
+  | "model_grounding_missing"
+  | "model_grounding_invalid"
+  | "model_grounding_unknown_evidence_id"
+  | "model_grounding_mismatch";
 
 export type ScanValidationIssue = {
   path: string;
@@ -15,11 +27,10 @@ export class ScanOutputValidationError extends Error {
     super("Scan model output failed validation.");
     this.name = "ScanOutputValidationError";
     this.issues = issues;
-    this.code = issues.some(
-      (issue) => issue.code === "model_output_out_of_range",
-    )
-      ? "model_output_out_of_range"
-      : "model_schema_validation_failed";
+    this.code = issues.find((issue) => issue.code.startsWith("model_grounding_"))?.code ??
+      (issues.some((issue) => issue.code === "model_output_out_of_range")
+        ? "model_output_out_of_range"
+        : "model_schema_validation_failed");
   }
 }
 
@@ -33,6 +44,20 @@ export type AnalyzeEvidenceOutput = {
   willingness_to_pay_signals: string;
   opportunity_angles: string;
   confidence_score: number;
+  grounding: AnalyzeEvidenceGrounding;
+  groundingSummary: ScanGroundingSummary;
+};
+
+export type AnalyzeEvidenceGrounding = {
+  inferred_market: ScanGroundedClaim;
+  audience_summary: ScanGroundedClaim;
+  evidence_summary: ScanGroundedClaim;
+  pain_points: readonly ScanGroundedClaim[];
+  repeated_patterns: readonly ScanGroundedClaim[];
+  workflow_problems: readonly ScanGroundedClaim[];
+  willingness_to_pay_signals: readonly ScanGroundedClaim[];
+  opportunity_angles: readonly ScanGroundedClaim[];
+  confidence_score: ScanGroundedClaim;
 };
 
 export type GeneratedOpportunity = {
@@ -49,10 +74,22 @@ export type GeneratedOpportunity = {
   validation_questions: string;
   landing_page_idea: string;
   acquisition_channels: string;
+  grounding: OpportunityGrounding;
+};
+
+export type OpportunityGrounding = {
+  pain: ScanGroundedClaim;
+  customer: ScanGroundedClaim;
+  rationale: ScanGroundedClaim;
+  mvp: ScanGroundedClaim;
+  pricing: ScanGroundedClaim;
+  score: ScanGroundedClaim;
+  difficulty: ScanGroundedClaim;
 };
 
 export type GenerateOpportunitiesOutput = {
   opportunities: GeneratedOpportunity[];
+  groundingSummary: ScanGroundingSummary;
 };
 
 const ANALYZE_STRING_FIELDS = [
@@ -101,6 +138,54 @@ function issue(
   message: string,
 ): ScanValidationIssue {
   return { path, code, message };
+}
+
+function getAllowedEvidenceIds(options?: { evidenceIds?: readonly string[] }) {
+  return new Set(options?.evidenceIds?.length ? options.evidenceIds : ["scan-user-evidence"]);
+}
+
+function splitLegacyList(value: string) {
+  return value.split("|").map((item) => item.trim()).filter(Boolean);
+}
+
+function pushGroundingIssues(
+  issues: ScanValidationIssue[],
+  groundingIssues: ReturnType<typeof validateScanGroundedClaim>["issues"],
+) {
+  for (const groundingIssue of groundingIssues) {
+    issues.push(issue(groundingIssue.path, groundingIssue.code, groundingIssue.message));
+  }
+}
+
+function requiredGroundedClaim(
+  input: unknown,
+  path: string,
+  allowedEvidenceIds: ReadonlySet<string>,
+  issues: ScanValidationIssue[],
+) {
+  const result = validateScanGroundedClaim(input, { path, allowedEvidenceIds });
+  pushGroundingIssues(issues, result.issues);
+  return result.claim;
+}
+
+function requiredGroundingArray(
+  value: Record<string, unknown>,
+  key: string,
+  expectedCount: number,
+  path: string,
+  allowedEvidenceIds: ReadonlySet<string>,
+  issues: ScanValidationIssue[],
+) {
+  const raw = value[key];
+  const fieldPath = `${path}.${key}`;
+  if (!Array.isArray(raw)) {
+    issues.push(issue(fieldPath, "model_grounding_missing", "Grounding array is required."));
+    return [] as ScanGroundedClaim[];
+  }
+  if (raw.length !== expectedCount) {
+    issues.push(issue(fieldPath, "model_grounding_mismatch", "Grounding array must align with the corresponding claim list."));
+  }
+  return raw.map((item, index) => requiredGroundedClaim(item, `${fieldPath}.${index}`, allowedEvidenceIds, issues)).filter((item): item is ScanGroundedClaim => Boolean(item));
 }
 
 function validateKnownKeys(
@@ -192,6 +277,7 @@ function requiredScore(
 
 export function validateAnalyzeEvidenceOutput(
   input: unknown,
+  options: { evidenceIds?: readonly string[] } = {},
 ): AnalyzeEvidenceOutput {
   const issues: ScanValidationIssue[] = [];
   if (!isRecord(input))
@@ -205,7 +291,7 @@ export function validateAnalyzeEvidenceOutput(
 
   validateKnownKeys(
     input,
-    [...ANALYZE_STRING_FIELDS, "confidence_score"],
+    [...ANALYZE_STRING_FIELDS, "confidence_score", "grounding", "groundingSummary"],
     "",
     issues,
   );
@@ -215,17 +301,42 @@ export function validateAnalyzeEvidenceOutput(
       field,
       requiredString(input, field, MAX_STRING_LENGTH, "", issues),
     ]),
-  ) as Omit<AnalyzeEvidenceOutput, "confidence_score">;
+  ) as Pick<AnalyzeEvidenceOutput, typeof ANALYZE_STRING_FIELDS[number]>;
   const confidence_score = requiredScore(input, "confidence_score", "", issues);
+  const allowedEvidenceIds = getAllowedEvidenceIds(options);
+  const rawGrounding = input.grounding;
+  let grounding = {} as AnalyzeEvidenceGrounding;
+  const groundingClaims: ScanGroundedClaim[] = [];
+  if (!isRecord(rawGrounding)) {
+    issues.push(issue("grounding", "model_grounding_missing", "Analyze Evidence grounding is required."));
+  } else {
+    validateKnownKeys(rawGrounding, [...ANALYZE_STRING_FIELDS, "confidence_score"], "grounding", issues);
+    const scalarFields = ["inferred_market", "audience_summary", "evidence_summary", "confidence_score"] as const;
+    const scalarClaims = Object.fromEntries(scalarFields.map((field) => {
+      const claim = requiredGroundedClaim(rawGrounding[field], `grounding.${field}`, allowedEvidenceIds, issues);
+      if (claim) groundingClaims.push(claim);
+      return [field, claim];
+    }));
+    const arrays = {
+      pain_points: requiredGroundingArray(rawGrounding, "pain_points", splitLegacyList(output.pain_points).length, "grounding", allowedEvidenceIds, issues),
+      repeated_patterns: requiredGroundingArray(rawGrounding, "repeated_patterns", splitLegacyList(output.repeated_patterns).length, "grounding", allowedEvidenceIds, issues),
+      workflow_problems: requiredGroundingArray(rawGrounding, "workflow_problems", splitLegacyList(output.workflow_problems).length, "grounding", allowedEvidenceIds, issues),
+      willingness_to_pay_signals: requiredGroundingArray(rawGrounding, "willingness_to_pay_signals", splitLegacyList(output.willingness_to_pay_signals).length, "grounding", allowedEvidenceIds, issues),
+      opportunity_angles: requiredGroundingArray(rawGrounding, "opportunity_angles", splitLegacyList(output.opportunity_angles).length, "grounding", allowedEvidenceIds, issues),
+    };
+    groundingClaims.push(...Object.values(arrays).flat());
+    grounding = Object.freeze({ ...scalarClaims, ...arrays }) as unknown as AnalyzeEvidenceGrounding;
+  }
 
   if (issues.length) throw new ScanOutputValidationError(issues);
-  return Object.freeze({ ...output, confidence_score });
+  return Object.freeze({ ...output, confidence_score, grounding, groundingSummary: summarizeScanGrounding(groundingClaims, allowedEvidenceIds) });
 }
 
 function validateOpportunity(
   input: unknown,
   index: number,
   issues: ScanValidationIssue[],
+  allowedEvidenceIds: ReadonlySet<string>,
 ): GeneratedOpportunity {
   const path = `opportunities.${index}`;
   if (!isRecord(input)) {
@@ -241,7 +352,7 @@ function validateOpportunity(
 
   validateKnownKeys(
     input,
-    [...OPPORTUNITY_STRING_FIELDS, "score", "difficulty"],
+    [...OPPORTUNITY_STRING_FIELDS, "score", "difficulty", "grounding"],
     path,
     issues,
   );
@@ -256,7 +367,7 @@ function validateOpportunity(
         issues,
       ),
     ]),
-  ) as Omit<GeneratedOpportunity, "score" | "difficulty">;
+  ) as Pick<GeneratedOpportunity, typeof OPPORTUNITY_STRING_FIELDS[number]>;
   const score = requiredScore(input, "score", path, issues);
   const rawDifficulty = input.difficulty;
   if (typeof rawDifficulty !== "string" || !DIFFICULTIES.has(rawDifficulty)) {
@@ -269,15 +380,30 @@ function validateOpportunity(
     );
   }
 
+  let grounding = {} as OpportunityGrounding;
+  const rawGrounding = input.grounding;
+  if (!isRecord(rawGrounding)) {
+    issues.push(issue(`${path}.grounding`, "model_grounding_missing", "Opportunity grounding is required."));
+  } else {
+    const groundingFields = ["pain", "customer", "rationale", "mvp", "pricing", "score", "difficulty"] as const;
+    validateKnownKeys(rawGrounding, groundingFields, `${path}.grounding`, issues);
+    grounding = Object.freeze(Object.fromEntries(groundingFields.map((field) => [
+      field,
+      requiredGroundedClaim(rawGrounding[field], `${path}.grounding.${field}`, allowedEvidenceIds, issues),
+    ]))) as OpportunityGrounding;
+  }
+
   return {
     ...strings,
     score,
     difficulty: rawDifficulty as GeneratedOpportunity["difficulty"],
+    grounding,
   };
 }
 
 export function validateGenerateOpportunitiesOutput(
   input: unknown,
+  options: { evidenceIds?: readonly string[] } = {},
 ): GenerateOpportunitiesOutput {
   const issues: ScanValidationIssue[] = [];
   if (!isRecord(input))
@@ -289,7 +415,7 @@ export function validateGenerateOpportunitiesOutput(
       ),
     ]);
 
-  validateKnownKeys(input, ["opportunities"], "", issues);
+  validateKnownKeys(input, ["opportunities", "groundingSummary"], "", issues);
   if (!Array.isArray(input.opportunities)) {
     throw new ScanOutputValidationError([
       issue(
@@ -310,14 +436,17 @@ export function validateGenerateOpportunitiesOutput(
     );
   }
 
+  const allowedEvidenceIds = getAllowedEvidenceIds(options);
   const opportunities = input.opportunities.map((item, index) =>
-    validateOpportunity(item, index, issues),
+    validateOpportunity(item, index, issues, allowedEvidenceIds),
   );
+  const claims = opportunities.flatMap((opportunity) => Object.values(opportunity.grounding || {}).filter((claim): claim is ScanGroundedClaim => Boolean(claim)));
 
   if (issues.length) throw new ScanOutputValidationError(issues);
   return Object.freeze({
     opportunities: Object.freeze(
       opportunities.map((item) => Object.freeze(item)),
     ) as GeneratedOpportunity[],
+    groundingSummary: summarizeScanGrounding(claims, allowedEvidenceIds),
   });
 }

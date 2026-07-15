@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     }
 
     const trustedIntent = buildTrustedUserIntent({ market, audience, region });
+    const evidenceIds = ["scan-user-evidence"] as const;
     const prompt = buildAnalyzeEvidencePrompt({
       intent: trustedIntent,
       evidence: [
@@ -65,6 +66,7 @@ export async function POST(request: Request) {
         },
       ],
     });
+    const startedAt = Date.now();
 
     const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
@@ -87,7 +89,7 @@ export async function POST(request: Request) {
 
     try {
       const parsed = parseStrictModelJson(content || "");
-      const analysis = validateAnalyzeEvidenceOutput(parsed);
+      const analysis = validateAnalyzeEvidenceOutput(parsed, { evidenceIds });
 
       console.info("Scan model output validation", {
         event: "scan_model_output_validation",
@@ -95,6 +97,13 @@ export async function POST(request: Request) {
         promptVersion: "scan-analyze-evidence@1",
         model: "openai/gpt-4.1-mini",
         validationStatus: "passed",
+        groundingStatus: "passed",
+        totalClaims: analysis.groundingSummary.totalClaims,
+        evidenceGroundedClaims: analysis.groundingSummary.evidenceGroundedClaims,
+        inferenceClaims: analysis.groundingSummary.inferenceClaims,
+        groundingCoverage: analysis.groundingSummary.groundingCoverage,
+        distinctEvidenceIdsReferenced: analysis.groundingSummary.distinctEvidenceIdsReferenced,
+        durationMs: Date.now() - startedAt,
       });
 
       return Response.json({ analysis });
@@ -109,7 +118,8 @@ export async function POST(request: Request) {
           promptVersion: "scan-analyze-evidence@1",
           model: "openai/gpt-4.1-mini",
           validationStatus: "failed",
-          errorCode: validationError.code,
+          groundingStatus: validationError.code.startsWith("model_grounding_") ? "failed" : "not_applicable",
+          validationErrorCode: validationError.code,
           invalidFieldCount:
             validationError instanceof ScanOutputValidationError
               ? validationError.issues.length

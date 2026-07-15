@@ -7,6 +7,18 @@ import {
   validateGenerateOpportunitiesOutput,
 } from "../lib/scan/output-validation.ts";
 
+const evidenceClaim = Object.freeze({
+  text: "Supported by pasted evidence.",
+  groundingMode: "evidence",
+  evidenceRefs: Object.freeze([{ evidenceId: "scan-user-evidence", relevance: "primary" }]),
+});
+const inferenceClaim = Object.freeze({
+  text: "Inferred recommendation.",
+  groundingMode: "inference",
+  evidenceRefs: Object.freeze([]),
+  inferenceReason: "This is inferred from the evidence pattern.",
+});
+
 const analysis = Object.freeze({
   inferred_market: "Agency operations",
   audience_summary: "Agency owners",
@@ -17,6 +29,17 @@ const analysis = Object.freeze({
   willingness_to_pay_signals: "Existing paid tool usage",
   opportunity_angles: "Reporting automation | Client portal",
   confidence_score: 8.2,
+  grounding: Object.freeze({
+    inferred_market: evidenceClaim,
+    audience_summary: evidenceClaim,
+    evidence_summary: evidenceClaim,
+    pain_points: Object.freeze([evidenceClaim, evidenceClaim]),
+    repeated_patterns: Object.freeze([evidenceClaim, evidenceClaim]),
+    workflow_problems: Object.freeze([evidenceClaim]),
+    willingness_to_pay_signals: Object.freeze([evidenceClaim]),
+    opportunity_angles: Object.freeze([inferenceClaim, inferenceClaim]),
+    confidence_score: evidenceClaim,
+  }),
 });
 
 const opportunity = Object.freeze({
@@ -37,6 +60,15 @@ const opportunity = Object.freeze({
     "Automate client reports without rebuilding spreadsheets every week.",
   acquisition_channels:
     "Agency communities | LinkedIn outreach | Founder newsletters",
+  grounding: Object.freeze({
+    pain: evidenceClaim,
+    customer: evidenceClaim,
+    rationale: inferenceClaim,
+    mvp: inferenceClaim,
+    pricing: inferenceClaim,
+    score: inferenceClaim,
+    difficulty: inferenceClaim,
+  }),
 });
 
 const opportunities = Object.freeze({
@@ -58,11 +90,13 @@ function validationError(fn: () => unknown) {
 }
 
 test("validates a fully valid analyze-evidence response", () => {
-  assert.deepEqual(validateAnalyzeEvidenceOutput(analysis), analysis);
+  const output = validateAnalyzeEvidenceOutput(analysis);
+  assert.equal(output.inferred_market, analysis.inferred_market);
+  assert.equal(output.groundingSummary.totalClaims, 12);
 });
 
 test("rejects missing analyze required field", () => {
-  const invalid: Partial<typeof analysis> = { ...analysis };
+  const invalid = { ...analysis } as Record<string, unknown>;
   delete invalid.inferred_market;
   validationError(() => validateAnalyzeEvidenceOutput(invalid));
 });
@@ -132,10 +166,9 @@ test("does not mutate analyze input object", () => {
 });
 
 test("validates fully valid three-opportunity output", () => {
-  assert.deepEqual(
-    validateGenerateOpportunitiesOutput(opportunities),
-    opportunities,
-  );
+  const output = validateGenerateOpportunitiesOutput(opportunities);
+  assert.equal(output.opportunities.length, 3);
+  assert.equal(output.opportunities[0].title, opportunity.title);
 });
 
 test("rejects missing opportunities array", () => {
@@ -165,7 +198,7 @@ test("rejects too few opportunities", () => {
 });
 
 test("rejects missing critical opportunity field", () => {
-  const invalidOpportunity: Partial<typeof opportunity> = { ...opportunity };
+  const invalidOpportunity = { ...opportunity } as Record<string, unknown>;
   delete invalidOpportunity.title;
   validationError(() =>
     validateGenerateOpportunitiesOutput({
