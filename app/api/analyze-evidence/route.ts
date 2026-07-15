@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildAnalyzeEvidencePrompt } from "@/lib/scan/safe-prompt-builders";
+import { computeScanQualityDiagnostics } from "@/lib/scan/quality-diagnostics";
 import {
   ModelJsonError,
   parseStrictModelJson,
@@ -90,6 +91,10 @@ export async function POST(request: Request) {
     try {
       const parsed = parseStrictModelJson(content || "");
       const analysis = validateAnalyzeEvidenceOutput(parsed, { evidenceIds });
+      const qualityDiagnostics = computeScanQualityDiagnostics({
+        output: analysis,
+        evidence: [{ evidenceId: "scan-user-evidence", sourceKind: "pasted_evidence" }],
+      });
 
       console.info("Scan model output validation", {
         event: "scan_model_output_validation",
@@ -103,6 +108,7 @@ export async function POST(request: Request) {
         inferenceClaims: analysis.groundingSummary.inferenceClaims,
         groundingCoverage: analysis.groundingSummary.groundingCoverage,
         distinctEvidenceIdsReferenced: analysis.groundingSummary.distinctEvidenceIdsReferenced,
+        qualityDiagnostics: qualityDiagnostics.qualitySummary,
         durationMs: Date.now() - startedAt,
       });
 
