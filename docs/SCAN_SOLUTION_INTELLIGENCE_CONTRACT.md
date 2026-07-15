@@ -101,3 +101,82 @@ This PR does not replace legacy Scan behavior, persist Solution Intelligence, ma
 - Service-first: productized service or consulting can win when customization, trust, or human judgment dominates.
 - Automation: automation can win when the workflow is repetitive and deterministic without needing a full software product.
 - Validate-first/no-build: validate-first or no-build can win when evidence is insufficient or existing alternatives may already satisfy the need.
+
+## PR 6.1 semantic and error-boundary hardening
+
+`scan-solution-intelligence@1` remains the contract version for this hardening because the route is still isolated, experimental, non-persistent, and not mapped into a public UI or Scan Artifact. Some previously accepted model outputs are now invalid; this is treated as pre-release v1 correction rather than a persisted contract break.
+
+### Claim semantic classes
+
+Evidence-required factual fields must use `groundingMode: "evidence"`, include at least one current-envelope evidence reference, and omit `inferenceReason`:
+
+- `problemFraming`
+- `existingSolutionAssessment.whatAppearsValidated[]`
+- `innovationAssessment.verifiedFoundation[]`
+- `validationReadiness.knownFacts[]`
+
+Flexible fields may be evidence-grounded or inference-labeled under the shared grounding validator:
+
+- category `rationale`
+- `advantages[]`
+- `limitations[]`
+- `prerequisites[]`
+- `whatAppearsPoorlySolved[]`
+- `replacementRisk`
+- `feasibilityConstraints[]`
+- `risks[]`
+
+Inference-expected recommendation, action, or future-unknown fields are validated as inference in v1 unless a future contract explicitly promotes them:
+
+- `recommendation`
+- `unverifiedAssumptions[]`
+- `criticalUnknowns[]`
+- `nextValidationAction`
+- `keyAssumptions[]`
+
+The prompt still asks normally inferred fields such as `proposedDifferentiation[]`, `testRationale`, `successSignal`, and `failureSignal` to be labeled as inference when they are proposed future actions or tests; the validator leaves these flexible so directly evidenced validation designs can still be represented without a v2 break.
+
+### Factual-array policy and readiness requirements
+
+- `problemFraming` is required and evidence-grounded.
+- `whatAppearsValidated[]` may be empty when no existing-solution fact is established.
+- `verifiedFoundation[]` may be empty only for `unproven_concept` and `no_innovation_needed`; all other innovation modes require at least one evidence-grounded foundation.
+- `knownFacts[]` may be empty only when readiness is `not_ready`.
+- `problem_validation_ready`, `solution_validation_ready`, and `demand_test_ready` require at least one evidence-grounded known fact.
+- `solution_validation_ready` and `demand_test_ready` require non-empty inference-labeled `criticalUnknowns[]`.
+- `demand_test_ready` also requires the concrete test contract fields already present in the schema: `cheapestNextTest`, `testRationale`, `successSignal`, and `failureSignal`.
+
+### Suitability-band policy
+
+Suitability is a 0-to-1 fit score under current evidence and assumptions. It is not success probability, market size, profitability, certainty, founder fit, or investment return. The v1 immutable threshold policy is:
+
+- `[0, 0.20)` => `poor`
+- `[0.20, 0.40)` => `weak`
+- `[0.40, 0.65)` => `possible`
+- `[0.65, 0.85)` => `strong`
+- `[0.85, 1]` => `best_fit`
+
+The model must still return `suitabilityBand` for contract compatibility, but validation rejects mismatches against the deterministic derived band.
+
+### Recommendation ranking rules
+
+`recommendedCategory` must be one of the evaluated categories and must tie for the highest suitability score. `secondaryCategory`, when present, must be evaluated, must differ from `recommendedCategory`, and must tie for the highest suitability among non-recommended categories. Ties are valid; the model is not silently reordered.
+
+### Existing-alternative and competitor policy
+
+Alternative `evidenceRefs[]` are strict and bounded. Each reference must contain a non-empty bounded `evidenceId` from the current evidence envelope, may include only `primary`, `supporting`, or `contradicting` relevance, must not duplicate another ref inside the same alternative, and must not include unknown fields. Invalid refs are rejected and are not retained in validated output.
+
+`direct_competitor` represents a named competitor only when at least one valid evidence reference supports the competitor existence or identity. Inferred named competitors are not allowed; no evidence means no named competitor. `category_level_alternative` may have no refs when represented as a category and observed claims are correctly inference-labeled. Manual workarounds, spreadsheets, services, generic tools, and doing nothing may use descriptive category names. The contract does not perform web search or competitor verification.
+
+### Public error and diagnostics response policy
+
+The authenticated experimental API route returns only `{ success: true, solutionIntelligence }` on success. Aggregate diagnostics are retained for safe server logs, not returned publicly, because no repository consumer currently depends on them.
+
+Unexpected route failures return the controlled generic public error `solution_intelligence_failed`; provider, network, SDK, stack, environment, prompt, raw output, evidence, private input, and configuration details are not exposed. Missing provider configuration returns a generic temporary-unavailable response that does not name the provider, environment variable, or API key. Safe logs contain aggregate metadata only: event, route, prompt version, model identifier, validation status, duration, category count, recommendation presence, validate-first consideration, grounding percentages, independent evidence-reference counts, alternative counts, innovation counts, critical unknown counts, readiness, cheapest next test, contradiction counts, and safe error category/name/status class.
+
+### Known limitations
+
+- Solution Intelligence remains isolated from legacy Analyze Evidence and Generate Opportunities.
+- The route still uses a single pasted-evidence envelope ID and does not retrieve, crawl, persist, or map artifacts.
+- Competitor semantics are contract-validation only; no external verification is performed.
+- The validator hardens the experimental v1 contract but does not introduce `scan-solution-intelligence@2`.

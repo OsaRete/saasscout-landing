@@ -240,13 +240,15 @@ Rules:
 - Compare 3 to 8 relevant categories.
 - Include at least one build-oriented category, one service/process-oriented category, and validate_first or no_build_recommended.
 - Known categories: software_product, ai_enabled_software, automation, api_or_infrastructure, productized_service, consulting, managed_service, marketplace, education_or_training, physical_product, operational_process, data_product, community, hybrid_solution, validate_first, no_build_recommended.
-- Suitability is a 0 to 1 fit score for the evidenced problem under current assumptions, not probability of success, market size, profitability, certainty, founder fit, or investment return.
+- Suitability is a 0 to 1 fit score for the evidenced problem under current assumptions, not probability of success, market size, profitability, certainty, founder fit, or investment return. Suitability bands are deterministic: [0,0.20)=poor, [0.20,0.40)=weak, [0.40,0.65)=possible, [0.65,0.85)=strong, [0.85,1]=best_fit.
 - Do not invent competitors, demand, willingness to pay, novelty, or market facts.
 - Named competitors require evidence support. Without evidence, use category-level alternatives and mark claims as inference.
-- Separate verified foundations from proposed innovation.
+- problemFraming, whatAppearsValidated, verifiedFoundation, and knownFacts are factual fields: use evidence grounding only, cite allowed evidence IDs, and omit inferenceReason.
+- Separate verified foundations from proposed innovation. VerifiedFoundation may be empty only for unproven_concept or no_innovation_needed; other innovation modes need at least one evidenced foundation.
 - Derived analysis is not independent evidence; cite only allowed evidence IDs or mark claims as inference.
 - Every material claim must use groundingMode "evidence" with valid evidenceRefs or groundingMode "inference" with no refs and inferenceReason.
-- Identify the cheapest real-world validation step.
+- recommendedCategory must tie for highest suitability. secondaryCategory, when present, must be evaluated, differ from recommendedCategory, and tie for second-highest suitability among non-recommended categories.
+- Identify the cheapest real-world validation step. Readiness beyond not_ready requires evidence-backed knownFacts; solution_validation_ready and demand_test_ready require criticalUnknowns.
 - Do not include markdown or prose outside JSON.
 
 JSON shape:
@@ -259,7 +261,7 @@ JSON shape:
   "recommendation": { "text": "recommended approach", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Recommendation compares category fit under current evidence." },
   "existingSolutionAssessment": { "knownAlternatives": [], "evidenceCoverage": "limited", "whatAppearsValidated": [], "whatAppearsPoorlySolved": [], "replacementRisk": { "text": "replacement risk", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Replacement risk needs more competitor evidence." } },
   "innovationAssessment": { "innovationMode": "unproven_concept", "verifiedFoundation": [], "proposedDifferentiation": [], "unverifiedAssumptions": [], "feasibilityConstraints": [], "noveltyRisk": "moderate" },
-  "validationReadiness": { "readiness": "problem_validation_ready", "knownFacts": [], "criticalUnknowns": [], "cheapestNextTest": "customer_interviews", "testRationale": { "text": "why this is cheapest", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Test choice is inferred from evidence gaps." }, "successSignal": { "text": "success signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." }, "failureSignal": { "text": "failure signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." } },
+  "validationReadiness": { "readiness": "problem_validation_ready", "knownFacts": [{ "text": "known fact from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "primary" }] }], "criticalUnknowns": [], "cheapestNextTest": "customer_interviews", "testRationale": { "text": "why this is cheapest", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Test choice is inferred from evidence gaps." }, "successSignal": { "text": "success signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." }, "failureSignal": { "text": "failure signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." } },
   "keyAssumptions": [],
   "risks": [],
   "nextValidationAction": { "text": "next action", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Next action follows from critical unknowns." }

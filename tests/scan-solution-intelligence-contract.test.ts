@@ -3,7 +3,11 @@ import test from "node:test";
 import { parseStrictModelJson } from "../lib/scan/model-json.ts";
 import { buildSolutionIntelligencePrompt } from "../lib/scan/safe-prompt-builders.ts";
 import {
+  buildSafeSolutionIntelligenceLog,
   computeSolutionIntelligenceDiagnostics,
+  deriveSuitabilityBand,
+  publicSolutionIntelligenceConfigurationFailure,
+  publicSolutionIntelligenceFailure,
   type SolutionCategory,
   SolutionIntelligenceValidationError,
   validateSolutionIntelligenceOutput,
@@ -28,13 +32,15 @@ function category(category: SolutionCategory, suitability = 0.5) {
     category,
     suitability,
     suitabilityBand:
-      suitability > 0.8
-        ? "best_fit"
-        : suitability > 0.65
-          ? "strong"
-          : suitability > 0.4
+      suitability < 0.2
+        ? "poor"
+        : suitability < 0.4
+          ? "weak"
+          : suitability < 0.65
             ? "possible"
-            : "weak",
+            : suitability < 0.85
+              ? "strong"
+              : "best_fit",
     rationale: inf(`${category} fit is inferred.`),
     advantages: [inf("Advantage")],
     limitations: [inf("Limitation")],
@@ -54,9 +60,9 @@ function base(
     problemFraming: e("Users describe a repeated workflow problem."),
     evaluatedCategories: categories,
     recommendedCategory,
-    secondaryCategory: categories.find(
-      (c) => c.category !== recommendedCategory,
-    )?.category,
+    secondaryCategory: [...categories]
+      .filter((c) => c.category !== recommendedCategory)
+      .sort((a, b) => b.suitability - a.suitability)[0]?.category,
     recommendation: inf("Recommendation compares evidenced problem fit."),
     existingSolutionAssessment: {
       knownAlternatives: [
@@ -337,6 +343,255 @@ test("strict JSON and schema validation reject prose, malformed JSON, missing fi
     () => valid({ ...base(), extra: true }),
     SolutionIntelligenceValidationError,
   );
+});
+
+test("hardens factual claim grounding and readiness floors", () => {
+  assert.throws(
+    () => valid({ ...base(), problemFraming: inf("Problem inferred") }),
+    SolutionIntelligenceValidationError,
+  );
+  const b = base();
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        existingSolutionAssessment: {
+          ...b.existingSolutionAssessment,
+          whatAppearsValidated: [inf("Validated inferred")],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        innovationAssessment: {
+          ...b.innovationAssessment,
+          innovationMode: "incremental_improvement",
+          verifiedFoundation: [inf("Foundation inferred")],
+          unverifiedAssumptions: [],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        validationReadiness: {
+          ...b.validationReadiness,
+          knownFacts: [inf("Fact inferred")],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.equal(valid(b).problemFraming.groundingMode, "evidence");
+  assert.equal(
+    valid({
+      ...b,
+      innovationAssessment: {
+        ...b.innovationAssessment,
+        innovationMode: "no_innovation_needed",
+        verifiedFoundation: [],
+        unverifiedAssumptions: [],
+      },
+    }).innovationAssessment.innovationMode,
+    "no_innovation_needed",
+  );
+  assert.equal(
+    valid({
+      ...b,
+      validationReadiness: { ...b.validationReadiness, readiness: "not_ready", knownFacts: [] },
+    }).validationReadiness.knownFacts.length,
+    0,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        validationReadiness: {
+          ...b.validationReadiness,
+          readiness: "demand_test_ready",
+          knownFacts: [],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+});
+
+test("derives suitability bands and rejects band mismatches", () => {
+  for (const [score, band] of [
+    [0, "poor"],
+    [0.19, "poor"],
+    [0.2, "weak"],
+    [0.39, "weak"],
+    [0.4, "possible"],
+    [0.64, "possible"],
+    [0.65, "strong"],
+    [0.84, "strong"],
+    [0.85, "best_fit"],
+    [1, "best_fit"],
+  ] as const) {
+    assert.equal(deriveSuitabilityBand(score), band);
+  }
+  assert.throws(
+    () =>
+      valid({
+        ...base("validate_first", [
+          category("software_product", 0.5),
+          category("productized_service", 0.4),
+          { ...category("validate_first", 0.85), suitabilityBand: "strong" },
+        ]),
+      }),
+    SolutionIntelligenceValidationError,
+  );
+});
+
+test("validates recommendation ordering, secondary presence, and ties", () => {
+  assert.throws(
+    () =>
+      valid({
+        ...base("software_product", [
+          category("software_product", 0.5),
+          category("productized_service", 0.7),
+          category("validate_first", 0.65),
+        ]),
+        secondaryCategory: "productized_service",
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...base(),
+        secondaryCategory: "consulting",
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...base("validate_first"),
+        secondaryCategory: "software_product",
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.equal(
+    valid(
+      base("validate_first", [
+        category("software_product", 0.85),
+        category("productized_service", 0.85),
+        category("validate_first", 0.85),
+      ]),
+    ).recommendedCategory,
+    "validate_first",
+  );
+});
+
+test("hardens existing alternative evidence refs and category-level alternatives", () => {
+  const b = base();
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        existingSolutionAssessment: {
+          ...b.existingSolutionAssessment,
+          knownAlternatives: [
+            {
+              nameOrCategory: "NamedCo",
+              alternativeType: "direct_competitor",
+              observedStrengths: [],
+              observedWeaknesses: [],
+              evidenceRefs: [{ evidenceId: "scan-user-evidence", relevance: "bad" }],
+            },
+          ],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        existingSolutionAssessment: {
+          ...b.existingSolutionAssessment,
+          knownAlternatives: [
+            {
+              nameOrCategory: "NamedCo",
+              alternativeType: "direct_competitor",
+              observedStrengths: [],
+              observedWeaknesses: [],
+              evidenceRefs: [
+                { evidenceId: "scan-user-evidence" },
+                { evidenceId: "scan-user-evidence" },
+              ],
+            },
+          ],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.throws(
+    () =>
+      valid({
+        ...b,
+        existingSolutionAssessment: {
+          ...b.existingSolutionAssessment,
+          knownAlternatives: [
+            {
+              nameOrCategory: "NamedCo",
+              alternativeType: "direct_competitor",
+              observedStrengths: [],
+              observedWeaknesses: [],
+              evidenceRefs: [{ evidenceId: "invented" }],
+            },
+          ],
+        },
+      }),
+    SolutionIntelligenceValidationError,
+  );
+  assert.equal(
+    valid({
+      ...b,
+      existingSolutionAssessment: {
+        ...b.existingSolutionAssessment,
+        knownAlternatives: [
+          {
+            nameOrCategory: "Generic workflow tools",
+            alternativeType: "category_level_alternative",
+            observedStrengths: [inf("Category may partially solve the workflow")],
+            observedWeaknesses: [],
+            evidenceRefs: [],
+          },
+        ],
+      },
+    }).existingSolutionAssessment.knownAlternatives[0].alternativeType,
+    "category_level_alternative",
+  );
+});
+
+test("public error helpers and safe logging do not expose private payloads", () => {
+  assert.equal(JSON.stringify(publicSolutionIntelligenceFailure()).includes("provider exploded"), false);
+  assert.equal(JSON.stringify(publicSolutionIntelligenceConfigurationFailure()).includes("OpenRouter"), false);
+  assert.equal(JSON.stringify(publicSolutionIntelligenceConfigurationFailure()).includes("API key"), false);
+  const output = valid(base());
+  const log = buildSafeSolutionIntelligenceLog({
+    event: "solution_intelligence_validation",
+    route: "solution-intelligence",
+    promptVersion: "scan-solution-intelligence@1",
+    model: "openai/gpt-4.1-mini",
+    validationStatus: "passed",
+    durationMs: 12,
+    diagnostics: computeSolutionIntelligenceDiagnostics(output),
+  });
+  const serialized = JSON.stringify(log);
+  assert.equal(serialized.includes("Users describe"), false);
+  assert.equal(serialized.includes("Manual spreadsheets"), false);
+  assert.equal(serialized.includes("scan-user-evidence"), false);
+  assert.equal(serialized.includes("Evidence supports"), false);
+  assert.equal(serialized.includes("This is inferred"), false);
+  assert.equal(serialized.includes("private input"), false);
 });
 
 test("prompt states neutrality and grounding boundaries", () => {
