@@ -1,6 +1,15 @@
 import OpenAI from "openai";
 import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildAnalyzeEvidencePrompt } from "@/lib/scan/safe-prompt-builders";
+import {
+  ModelJsonError,
+  parseStrictModelJson,
+  publicModelOutputError,
+} from "@/lib/scan/model-json";
+import {
+  ScanOutputValidationError,
+  validateAnalyzeEvidenceOutput,
+} from "@/lib/scan/output-validation";
 import { AuthError, requireUser } from "../_utils/auth";
 
 function getOpenRouterClient() {
@@ -13,13 +22,6 @@ function getOpenRouterClient() {
       "X-Title": "SaaSScout",
     },
   });
-}
-
-function cleanJsonResponse(content: string) {
-  return content
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
 }
 
 function safeString(value: unknown, fallback = "") {
@@ -83,45 +85,48 @@ export async function POST(request: Request) {
 
     const content = completion.choices[0]?.message?.content;
 
-    if (!content) {
-      return Response.json(
-        { error: "No evidence analysis generated." },
-        { status: 500 },
-      );
-    }
-
-    let parsed;
-
     try {
-      parsed = JSON.parse(cleanJsonResponse(content));
-    } catch {
-      return Response.json(
-        {
-          error: "Evidence analysis was not valid JSON.",
-          raw: content,
-        },
-        { status: 500 },
-      );
-    }
+      const parsed = parseStrictModelJson(content || "");
+      const analysis = validateAnalyzeEvidenceOutput(parsed);
 
-    return Response.json({
-      analysis: {
-        inferred_market: safeString(
-          parsed.inferred_market,
-          market || "Unknown",
-        ),
-        audience_summary: safeString(parsed.audience_summary, audience || ""),
-        evidence_summary: safeString(parsed.evidence_summary),
-        pain_points: safeString(parsed.pain_points),
-        repeated_patterns: safeString(parsed.repeated_patterns),
-        workflow_problems: safeString(parsed.workflow_problems),
-        willingness_to_pay_signals: safeString(
-          parsed.willingness_to_pay_signals,
-        ),
-        opportunity_angles: safeString(parsed.opportunity_angles),
-        confidence_score: Number(parsed.confidence_score) || 7,
-      },
-    });
+      console.info("Scan model output validation", {
+        event: "scan_model_output_validation",
+        route: "analyze-evidence",
+        promptVersion: "scan-analyze-evidence@1",
+        model: "openai/gpt-4.1-mini",
+        validationStatus: "passed",
+      });
+
+      return Response.json({ analysis });
+    } catch (validationError) {
+      if (
+        validationError instanceof ModelJsonError ||
+        validationError instanceof ScanOutputValidationError
+      ) {
+        console.warn("Scan model output validation", {
+          event: "scan_model_output_validation",
+          route: "analyze-evidence",
+          promptVersion: "scan-analyze-evidence@1",
+          model: "openai/gpt-4.1-mini",
+          validationStatus: "failed",
+          errorCode: validationError.code,
+          invalidFieldCount:
+            validationError instanceof ScanOutputValidationError
+              ? validationError.issues.length
+              : 0,
+          invalidFieldNames:
+            validationError instanceof ScanOutputValidationError
+              ? validationError.issues.map((issue) => issue.path).slice(0, 20)
+              : [],
+        });
+
+        return Response.json(publicModelOutputError(validationError.code), {
+          status: 502,
+        });
+      }
+
+      throw validationError;
+    }
   } catch (error) {
     console.error("Analyze evidence error:", error);
 

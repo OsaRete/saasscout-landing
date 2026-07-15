@@ -2,6 +2,15 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { buildTrustedUserIntent } from "@/lib/scan/evidence-envelope";
 import { buildGenerateOpportunitiesPrompt } from "@/lib/scan/safe-prompt-builders";
+import {
+  ModelJsonError,
+  parseStrictModelJson,
+  publicModelOutputError,
+} from "@/lib/scan/model-json";
+import {
+  ScanOutputValidationError,
+  validateGenerateOpportunitiesOutput,
+} from "@/lib/scan/output-validation";
 import { AuthError, requireUser } from "../_utils/auth";
 
 function getOpenRouterClient() {
@@ -17,59 +26,6 @@ function getOpenRouterClient() {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function cleanJsonResponse(content: string) {
-  return content
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
-}
-
-type RawOpportunity = {
-  title?: string;
-  score?: number | string;
-  pain?: string;
-  customer?: string;
-  target_customer?: string;
-  mvp?: string;
-  pricing?: string;
-  difficulty?: string;
-  problem_summary?: string;
-  mvp_roadmap?: string;
-  validation_questions?: string;
-  landing_page_idea?: string;
-  acquisition_channels?: string;
-};
-
-function normalizeOpportunities(rawOpportunities: RawOpportunity[]) {
-  return rawOpportunities.slice(0, 3).map((item, index) => ({
-    title: item.title || `SaaS Opportunity ${index + 1}`,
-    score: Number(item.score) || 7,
-    pain: item.pain || "A repeated pain point was detected in this market.",
-    customer: item.customer || item.target_customer || "Not specified",
-    mvp:
-      item.mvp || "Build a focused MVP that solves the main repeated problem.",
-    pricing: item.pricing || "$19/mo",
-    difficulty: item.difficulty || "Medium",
-    problem_summary:
-      item.problem_summary ||
-      item.pain ||
-      "Users show repeated frustration around this workflow.",
-    target_customer: item.target_customer || item.customer || "Not specified",
-    mvp_roadmap:
-      item.mvp_roadmap ||
-      "1. Validate the problem | 2. Build the core workflow | 3. Test with early users",
-    validation_questions:
-      item.validation_questions ||
-      "How often do users face this problem? | Are they currently paying for alternatives? | What workflow do they use today?",
-    landing_page_idea:
-      item.landing_page_idea ||
-      "A simple landing page focused on saving time and reducing manual work.",
-    acquisition_channels:
-      item.acquisition_channels ||
-      "Reddit communities | LinkedIn outreach | Founder communities",
-  }));
-}
 
 export async function POST(req: Request) {
   try {
@@ -127,25 +83,51 @@ export async function POST(req: Request) {
 
     const content = completion.choices[0]?.message?.content;
 
-    if (!content) {
-      throw new Error("No AI response generated.");
-    }
-
-    let parsed;
-
     try {
-      parsed = JSON.parse(cleanJsonResponse(content));
-    } catch {
-      console.error("Raw opportunities AI response:", content);
-      throw new Error("AI response was not valid JSON.");
+      const parsed = parseStrictModelJson(content || "");
+      const { opportunities } = validateGenerateOpportunitiesOutput(parsed);
+
+      console.info("Scan model output validation", {
+        event: "scan_model_output_validation",
+        route: "generate-opportunities",
+        promptVersion: "scan-generate-opportunities@1",
+        model: "openai/gpt-4.1-mini",
+        validationStatus: "passed",
+      });
+
+      return NextResponse.json({
+        success: true,
+        opportunities,
+      });
+    } catch (validationError) {
+      if (
+        validationError instanceof ModelJsonError ||
+        validationError instanceof ScanOutputValidationError
+      ) {
+        console.warn("Scan model output validation", {
+          event: "scan_model_output_validation",
+          route: "generate-opportunities",
+          promptVersion: "scan-generate-opportunities@1",
+          model: "openai/gpt-4.1-mini",
+          validationStatus: "failed",
+          errorCode: validationError.code,
+          invalidFieldCount:
+            validationError instanceof ScanOutputValidationError
+              ? validationError.issues.length
+              : 0,
+          invalidFieldNames:
+            validationError instanceof ScanOutputValidationError
+              ? validationError.issues.map((issue) => issue.path).slice(0, 20)
+              : [],
+        });
+
+        return NextResponse.json(publicModelOutputError(validationError.code), {
+          status: 502,
+        });
+      }
+
+      throw validationError;
     }
-
-    const opportunities = normalizeOpportunities(parsed.opportunities || []);
-
-    return NextResponse.json({
-      success: true,
-      opportunities,
-    });
   } catch (error) {
     console.error("Generate opportunities error:", error);
 
