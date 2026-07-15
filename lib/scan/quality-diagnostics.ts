@@ -31,16 +31,29 @@ export type ScanQualityDiagnostics = Readonly<{
   evidenceDiagnostics: Readonly<{
     evidenceReferenceCount: number;
     uniqueEvidenceIds: readonly string[];
-    evidenceDiversity: number;
-    duplicateEvidenceReferenceCount: number;
+    independentEvidenceCount: number;
+    evidenceCoverage: number;
+    evidenceSourceKindDiversity: number;
+    duplicateReferencesWithinClaims: number;
+    reusedEvidenceAcrossClaims: number;
+    maxClaimsPerEvidence: number;
+    evidenceConcentration: number;
     invalidReferences: readonly string[];
     missingReferences: readonly string[];
   }>;
   schemaCompleteness: Readonly<{
-    requiredSectionCount: number;
-    presentSectionCount: number;
-    completeness: number;
-    missingSections: readonly string[];
+    contractFieldCompleteness: Readonly<{
+      requiredFieldCount: number;
+      presentFieldCount: number;
+      completeness: number;
+      missingFields: readonly string[];
+    }>;
+    heuristicTopicCoverage: Readonly<{
+      requiredTopicCount: number;
+      presentTopicCount: number;
+      coverage: number;
+      missingTopics: readonly string[];
+    }>;
   }>;
   genericityIndicators: Readonly<{
     excessiveRepetition: boolean;
@@ -66,32 +79,61 @@ export type ScanQualityDiagnostics = Readonly<{
   }>;
   contradictionDiagnostics: Readonly<{
     contradictionCount: number;
+    contradictionPairCount: number;
+    evidenceVsEvidenceContradictions: number;
+    inferenceVsEvidenceContradictions: number;
+    inferenceVsInferenceContradictions: number;
     duplicatedOpportunities: number;
     duplicatedClaims: number;
   }>;
   qualitySummary: Readonly<{
     groundingCoverage: number;
-    schemaCompleteness: number;
+    contractFieldCompleteness: number;
+    heuristicTopicCoverage: number;
     specificityScore: number;
     genericityIndicators: number;
-    evidenceDiversity: number;
+    evidenceCoverage: number;
+    evidenceSourceKindDiversity: number;
+    independentEvidenceCount: number;
+    evidenceConcentration: number;
     sourceCoverage: number;
     contradictionCount: number;
+    duplicatedClaims: number;
+    duplicatedOpportunities: number;
     unsupportedClaims: number;
   }>;
 }>;
 
-const REQUIRED_SECTIONS = [
-  "problem",
-  "market",
-  "audience",
-  "recommendations",
-  "opportunities",
-  "competition",
-  "pricing",
-  "validation",
-  "risks",
+const ANALYZE_CONTRACT_FIELDS = [
+  "inferred_market",
+  "audience_summary",
+  "evidence_summary",
+  "pain_points",
+  "repeated_patterns",
+  "workflow_problems",
+  "willingness_to_pay_signals",
+  "opportunity_angles",
+  "confidence_score",
 ] as const;
+
+const OPPORTUNITY_CONTRACT_FIELDS = [
+  "title",
+  "score",
+  "pain",
+  "customer",
+  "mvp",
+  "pricing",
+  "difficulty",
+  "problem_summary",
+  "target_customer",
+  "mvp_roadmap",
+  "validation_questions",
+  "landing_page_idea",
+  "acquisition_channels",
+] as const;
+
+const HEURISTIC_TOPICS = ["competition", "market", "pricing", "risks", "validation"] as const;
+const KNOWN_SOURCE_KIND_COUNT = 5;
 
 const VAGUE_TERMS = /\b(leverage|optimize|streamline|robust|seamless|innovative|user-friendly|best practices|growth hacking|synergy|value proposition)\b/i;
 const PLACEHOLDER_TERMS = /\b(tbd|todo|placeholder|lorem ipsum|n\/a|insert|your company|example\.com)\b/i;
@@ -158,38 +200,48 @@ function collectOpportunities(output: AnalyzeEvidenceOutput | GenerateOpportunit
   return isAnalyzeOutput(output) ? [] : output.opportunities;
 }
 
-function sectionPresent(section: typeof REQUIRED_SECTIONS[number], output: AnalyzeEvidenceOutput | GenerateOpportunitiesOutput) {
+function computeContractFieldCompleteness(output: AnalyzeEvidenceOutput | GenerateOpportunitiesOutput) {
   if (isAnalyzeOutput(output)) {
-    const joined = collectTexts(output).join(" ").toLowerCase();
-    const map: Record<typeof section, boolean> = {
-      problem: Boolean(output.pain_points || output.workflow_problems),
-      market: Boolean(output.inferred_market),
-      audience: Boolean(output.audience_summary),
-      recommendations: Boolean(output.opportunity_angles),
-      opportunities: Boolean(output.opportunity_angles),
-      competition: joined.includes("compet"),
-      pricing: Boolean(output.willingness_to_pay_signals) || joined.includes("pricing"),
-      validation: joined.includes("validat"),
-      risks: joined.includes("risk"),
+    const missingFields = ANALYZE_CONTRACT_FIELDS.filter((field) => !Boolean(output[field]));
+    return {
+      requiredFieldCount: ANALYZE_CONTRACT_FIELDS.length,
+      presentFieldCount: ANALYZE_CONTRACT_FIELDS.length - missingFields.length,
+      completeness: (ANALYZE_CONTRACT_FIELDS.length - missingFields.length) / ANALYZE_CONTRACT_FIELDS.length,
+      missingFields,
     };
-    return map[section];
   }
 
-  const opportunities = output.opportunities;
-  const joined = collectTexts(output).join(" ").toLowerCase();
-  const hasEvery = (key: keyof GeneratedOpportunity) => opportunities.some((item) => Boolean(String(item[key] || "").trim()));
-  const map: Record<typeof section, boolean> = {
-    problem: hasEvery("pain") || hasEvery("problem_summary"),
-    market: joined.includes("market"),
-    audience: hasEvery("customer") || hasEvery("target_customer"),
-    recommendations: opportunities.length > 0,
-    opportunities: opportunities.length > 0,
-    competition: joined.includes("compet"),
-    pricing: hasEvery("pricing"),
-    validation: hasEvery("validation_questions"),
-    risks: joined.includes("risk"),
+  const missingFields = OPPORTUNITY_CONTRACT_FIELDS.filter((field) => !output.opportunities.some((opportunity) => Boolean(opportunity[field])));
+  return {
+    requiredFieldCount: OPPORTUNITY_CONTRACT_FIELDS.length,
+    presentFieldCount: OPPORTUNITY_CONTRACT_FIELDS.length - missingFields.length,
+    completeness: (OPPORTUNITY_CONTRACT_FIELDS.length - missingFields.length) / OPPORTUNITY_CONTRACT_FIELDS.length,
+    missingFields,
   };
-  return map[section];
+}
+
+function heuristicTopicPresent(topic: typeof HEURISTIC_TOPICS[number], output: AnalyzeEvidenceOutput | GenerateOpportunitiesOutput) {
+  const joined = collectTexts(output).join(" ").toLowerCase();
+  const opportunities = collectOpportunities(output);
+  const opportunityHas = (key: keyof GeneratedOpportunity) => opportunities.some((item) => Boolean(String(item[key] || "").trim()));
+  const map: Record<typeof topic, boolean> = {
+    competition: joined.includes("compet"),
+    market: isAnalyzeOutput(output) ? Boolean(output.inferred_market) : joined.includes("market"),
+    pricing: isAnalyzeOutput(output) ? Boolean(output.willingness_to_pay_signals) || joined.includes("pricing") : opportunityHas("pricing"),
+    risks: joined.includes("risk"),
+    validation: isAnalyzeOutput(output) ? joined.includes("validat") : opportunityHas("validation_questions"),
+  };
+  return map[topic];
+}
+
+function computeHeuristicTopicCoverage(output: AnalyzeEvidenceOutput | GenerateOpportunitiesOutput) {
+  const missingTopics = HEURISTIC_TOPICS.filter((topic) => !heuristicTopicPresent(topic, output));
+  return {
+    requiredTopicCount: HEURISTIC_TOPICS.length,
+    presentTopicCount: HEURISTIC_TOPICS.length - missingTopics.length,
+    coverage: (HEURISTIC_TOPICS.length - missingTopics.length) / HEURISTIC_TOPICS.length,
+    missingTopics,
+  };
 }
 
 function countDuplicateNormalized(values: readonly string[]) {
@@ -198,19 +250,35 @@ function countDuplicateNormalized(values: readonly string[]) {
   return [...counts.values()].reduce((total, count) => total + Math.max(0, count - 1), 0);
 }
 
-function countSimpleContradictions(claims: readonly ScanGroundedClaim[]) {
+function computeContradictionDiagnostics(claims: readonly ScanGroundedClaim[]) {
   const normalized = claims.map((claim) => normalizeText(claim.text));
-  let contradictions = 0;
+  let evidenceVsEvidenceContradictions = 0;
+  let inferenceVsEvidenceContradictions = 0;
+  let inferenceVsInferenceContradictions = 0;
+
   for (let index = 0; index < normalized.length; index += 1) {
     for (let other = index + 1; other < normalized.length; other += 1) {
       const a = normalized[index];
       const b = normalized[other];
       const sharedTokens = a.split(" ").filter((token) => token.length > 4 && b.includes(token)).length;
       if (sharedTokens < 2) continue;
-      if ((a.includes("increase") && b.includes("decrease")) || (a.includes("high") && b.includes("low")) || (a.includes("growing") && b.includes("declining"))) contradictions += 1;
+      const aTokens = new Set(a.split(" "));
+      const bTokens = new Set(b.split(" "));
+      const aRising = aTokens.has("increase") || aTokens.has("increasing") || aTokens.has("growing");
+      const bRising = bTokens.has("increase") || bTokens.has("increasing") || bTokens.has("growing");
+      const aFalling = aTokens.has("decrease") || aTokens.has("decreasing") || aTokens.has("declining");
+      const bFalling = bTokens.has("decrease") || bTokens.has("decreasing") || bTokens.has("declining");
+      const contradicts = (aRising && bFalling) || (bRising && aFalling) || (aTokens.has("high") && bTokens.has("low")) || (bTokens.has("high") && aTokens.has("low"));
+      if (!contradicts) continue;
+      const modes = [claims[index].groundingMode, claims[other].groundingMode];
+      if (modes[0] === "evidence" && modes[1] === "evidence") evidenceVsEvidenceContradictions += 1;
+      else if (modes.includes("evidence") && modes.includes("inference")) inferenceVsEvidenceContradictions += 1;
+      else if (modes[0] === "inference" && modes[1] === "inference") inferenceVsInferenceContradictions += 1;
     }
   }
-  return contradictions;
+
+  const contradictionPairCount = evidenceVsEvidenceContradictions + inferenceVsEvidenceContradictions + inferenceVsInferenceContradictions;
+  return { contradictionCount: contradictionPairCount, contradictionPairCount, evidenceVsEvidenceContradictions, inferenceVsEvidenceContradictions, inferenceVsInferenceContradictions };
 }
 
 export function computeScanQualityDiagnostics(input: ScanQualityDiagnosticsInput): ScanQualityDiagnostics {
@@ -220,13 +288,30 @@ export function computeScanQualityDiagnostics(input: ScanQualityDiagnosticsInput
   const sourceById = new Map(input.evidence.map((item) => [item.evidenceId, item.sourceKind]));
   const refs = claims.flatMap((claim) => claim.evidenceRefs.map((ref) => ref.evidenceId));
   const uniqueEvidenceIds = [...new Set(refs)].sort();
+  const validEvidenceIds = uniqueEvidenceIds.filter((id) => allowedEvidenceIds.has(id));
   const invalidReferences = uniqueEvidenceIds.filter((id) => !allowedEvidenceIds.has(id));
   const missingReferences = [...allowedEvidenceIds].filter((id) => !uniqueEvidenceIds.includes(id)).sort();
-  const duplicateEvidenceReferenceCount = refs.length - uniqueEvidenceIds.length;
+  const duplicateReferencesWithinClaims = claims.reduce((total, claim) => {
+    const ids = claim.evidenceRefs.map((ref) => ref.evidenceId);
+    return total + ids.length - new Set(ids).size;
+  }, 0);
+  const evidenceClaimCounts = new Map<string, number>();
+  for (const claim of claims) {
+    for (const evidenceId of new Set(claim.evidenceRefs.map((ref) => ref.evidenceId).filter((id) => allowedEvidenceIds.has(id)))) {
+      evidenceClaimCounts.set(evidenceId, (evidenceClaimCounts.get(evidenceId) || 0) + 1);
+    }
+  }
+  const reusedEvidenceAcrossClaims = [...evidenceClaimCounts.values()].filter((count) => count > 1).length;
+  const maxClaimsPerEvidence = Math.max(0, ...evidenceClaimCounts.values());
+  const evidenceConcentration = claims.length === 0 ? 0 : clamp01(maxClaimsPerEvidence / claims.length);
+  const evidenceCoverage = allowedEvidenceIds.size === 0 ? 0 : validEvidenceIds.length / allowedEvidenceIds.size;
+  const sourceCoverageKinds = new Set(validEvidenceIds.map((id) => sourceById.get(id)).filter((kind): kind is EvidenceSourceKind => Boolean(kind)));
+  const evidenceSourceKindDiversity = clamp01(sourceCoverageKinds.size / KNOWN_SOURCE_KIND_COUNT);
   const groundedClaims = claims.filter((claim) => claim.groundingMode === "evidence").length;
   const inferenceClaims = claims.filter((claim) => claim.groundingMode === "inference").length;
   const unsupportedClaims = Math.max(0, claims.length - groundedClaims - inferenceClaims) + claims.filter((claim) => claim.groundingMode === "evidence" && claim.evidenceRefs.length === 0).length;
-  const missingSections = REQUIRED_SECTIONS.filter((section) => !sectionPresent(section, input.output));
+  const contractFieldCompleteness = computeContractFieldCompleteness(input.output);
+  const heuristicTopicCoverage = computeHeuristicTopicCoverage(input.output);
   const vagueRecommendations = texts.filter((text) => VAGUE_TERMS.test(text)).length;
   const emptyReasoning = claims.filter((claim) => claim.groundingMode === "inference" && !claim.inferenceReason?.trim()).length;
   const placeholderLikeLanguage = texts.filter((text) => PLACEHOLDER_TERMS.test(text)).length;
@@ -238,9 +323,7 @@ export function computeScanQualityDiagnostics(input: ScanQualityDiagnosticsInput
   const concreteEntityCount = texts.reduce((total, text) => total + (text.match(ENTITY_TERMS)?.length || 0), 0);
   const groundedDetailPercentage = claims.length === 0 ? 0 : groundedClaims / claims.length;
   const specificityScore = clamp01((Math.min(averageExplanationLength, 80) / 80 + Math.min(averageReasoningDepth, 6) / 6 + Math.min(concreteEntityCount, 12) / 12 + groundedDetailPercentage) / 4);
-  const sourceIds = uniqueEvidenceIds.filter((id) => allowedEvidenceIds.has(id));
-  const sourceCoverageKinds = new Set(sourceIds.map((id) => sourceById.get(id)).filter(Boolean));
-  const contradictionCount = countSimpleContradictions(claims) + duplicatedClaims + duplicatedOpportunities;
+  const contradictionDiagnostics = computeContradictionDiagnostics(claims);
   const genericityIndicatorCount = [repetitionRatio > 0.2, vagueRecommendations > 0, emptyReasoning > 0, placeholderLikeLanguage > 0, duplicatedOpportunities > 0].filter(Boolean).length;
 
   return Object.freeze({
@@ -255,16 +338,25 @@ export function computeScanQualityDiagnostics(input: ScanQualityDiagnosticsInput
     evidenceDiagnostics: Object.freeze({
       evidenceReferenceCount: refs.length,
       uniqueEvidenceIds: Object.freeze(uniqueEvidenceIds),
-      evidenceDiversity: allowedEvidenceIds.size === 0 ? 0 : sourceIds.length / allowedEvidenceIds.size,
-      duplicateEvidenceReferenceCount,
+      independentEvidenceCount: validEvidenceIds.length,
+      evidenceCoverage,
+      evidenceSourceKindDiversity,
+      duplicateReferencesWithinClaims,
+      reusedEvidenceAcrossClaims,
+      maxClaimsPerEvidence,
+      evidenceConcentration,
       invalidReferences: Object.freeze(invalidReferences),
       missingReferences: Object.freeze(missingReferences),
     }),
     schemaCompleteness: Object.freeze({
-      requiredSectionCount: REQUIRED_SECTIONS.length,
-      presentSectionCount: REQUIRED_SECTIONS.length - missingSections.length,
-      completeness: (REQUIRED_SECTIONS.length - missingSections.length) / REQUIRED_SECTIONS.length,
-      missingSections: Object.freeze(missingSections),
+      contractFieldCompleteness: Object.freeze({
+        ...contractFieldCompleteness,
+        missingFields: Object.freeze(contractFieldCompleteness.missingFields),
+      }),
+      heuristicTopicCoverage: Object.freeze({
+        ...heuristicTopicCoverage,
+        missingTopics: Object.freeze(heuristicTopicCoverage.missingTopics),
+      }),
     }),
     genericityIndicators: Object.freeze({
       excessiveRepetition: repetitionRatio > 0.2,
@@ -282,21 +374,27 @@ export function computeScanQualityDiagnostics(input: ScanQualityDiagnosticsInput
       specificityScore,
     }),
     sourceCoverage: Object.freeze({
-      externalSourcesUsed: sourceCoverageKinds.has("external_snippet") ? sourceIds.filter((id) => sourceById.get(id) === "external_snippet").length : 0,
-      uploadedDocumentsUsed: sourceCoverageKinds.has("uploaded_document") ? sourceIds.filter((id) => sourceById.get(id) === "uploaded_document").length : 0,
-      userEvidenceUsed: sourceCoverageKinds.has("pasted_evidence") ? sourceIds.filter((id) => sourceById.get(id) === "pasted_evidence").length : 0,
+      externalSourcesUsed: validEvidenceIds.filter((id) => sourceById.get(id) === "external_snippet").length,
+      uploadedDocumentsUsed: validEvidenceIds.filter((id) => sourceById.get(id) === "uploaded_document").length,
+      userEvidenceUsed: validEvidenceIds.filter((id) => sourceById.get(id) === "pasted_evidence").length,
       derivedAnalysisUsed: input.derivedAnalysisUsed ? 1 : 0,
-      sourceIds: Object.freeze(sourceIds),
+      sourceIds: Object.freeze(validEvidenceIds),
     }),
-    contradictionDiagnostics: Object.freeze({ contradictionCount, duplicatedOpportunities, duplicatedClaims }),
+    contradictionDiagnostics: Object.freeze({ ...contradictionDiagnostics, duplicatedOpportunities, duplicatedClaims }),
     qualitySummary: Object.freeze({
       groundingCoverage: claims.length === 0 ? 0 : groundedClaims / claims.length,
-      schemaCompleteness: (REQUIRED_SECTIONS.length - missingSections.length) / REQUIRED_SECTIONS.length,
+      contractFieldCompleteness: contractFieldCompleteness.completeness,
+      heuristicTopicCoverage: heuristicTopicCoverage.coverage,
       specificityScore,
       genericityIndicators: genericityIndicatorCount,
-      evidenceDiversity: allowedEvidenceIds.size === 0 ? 0 : sourceIds.length / allowedEvidenceIds.size,
-      sourceCoverage: allowedEvidenceIds.size === 0 ? 0 : sourceIds.length / allowedEvidenceIds.size,
-      contradictionCount,
+      evidenceCoverage,
+      evidenceSourceKindDiversity,
+      independentEvidenceCount: validEvidenceIds.length,
+      evidenceConcentration,
+      sourceCoverage: evidenceCoverage,
+      contradictionCount: contradictionDiagnostics.contradictionCount,
+      duplicatedClaims,
+      duplicatedOpportunities,
       unsupportedClaims,
     }),
   });

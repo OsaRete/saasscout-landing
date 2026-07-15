@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { computeScanQualityDiagnostics } from "../lib/scan/quality-diagnostics.ts";
+import type { ScanQualityDiagnosticEvidence } from "../lib/scan/quality-diagnostics.ts";
 import type { GenerateOpportunitiesOutput, GeneratedOpportunity } from "../lib/scan/output-validation.ts";
 import type { ScanGroundedClaim } from "../lib/scan/grounding.ts";
 
-const evidence = [
-  { evidenceId: "ev-1", sourceKind: "pasted_evidence" as const },
-  { evidenceId: "ev-2", sourceKind: "uploaded_document" as const },
-  { evidenceId: "ev-3", sourceKind: "external_snippet" as const },
+const evidence: ScanQualityDiagnosticEvidence[] = [
+  { evidenceId: "ev-1", sourceKind: "pasted_evidence" },
+  { evidenceId: "ev-2", sourceKind: "uploaded_document" },
+  { evidenceId: "ev-3", sourceKind: "external_snippet" },
 ];
 const evidenceWithUnused = [...evidence, { evidenceId: "ev-4", sourceKind: "external_snippet" as const }];
 
@@ -16,7 +17,7 @@ function grounded(text: string, evidenceId = "ev-1"): ScanGroundedClaim {
   return { text, groundingMode: "evidence", evidenceRefs: [{ evidenceId, relevance: "primary" }] };
 }
 
-function inferred(text: string, reason = "Pattern inferred from the supplied evidence context."): ScanGroundedClaim {
+function inferred(text: string, reason = "Pattern inferred from supplied aggregate evidence context."): ScanGroundedClaim {
   return { text, groundingMode: "inference", evidenceRefs: [], inferenceReason: reason };
 }
 
@@ -47,82 +48,157 @@ function opportunity(title: string, claim: ScanGroundedClaim): GeneratedOpportun
   };
 }
 
+function singleSourceOpportunity(title: string, claim: ScanGroundedClaim, evidenceId = "ev-1"): GeneratedOpportunity {
+  const item = opportunity(title, claim);
+  item.grounding.customer = grounded("Single source supports the customer claim.", evidenceId);
+  item.grounding.rationale = grounded("Single source supports the rationale claim.", evidenceId);
+  item.grounding.mvp = grounded("Single source supports the mvp claim.", evidenceId);
+  item.grounding.pricing = grounded("Single source supports the pricing claim.", evidenceId);
+  item.grounding.score = grounded("Single source supports the score claim.", evidenceId);
+  item.grounding.difficulty = grounded("Single source supports the difficulty claim.", evidenceId);
+  return item;
+}
+
 function output(opportunities: GeneratedOpportunity[]): GenerateOpportunitiesOutput {
   return { opportunities, groundingSummary: { totalClaims: 0, evidenceGroundedClaims: 0, inferenceClaims: 0, unsupportedClaims: 0, groundingCoverage: 0, distinctEvidenceIdsReferenced: 0, contradictingReferenceCount: 0, invalidReferenceCount: 0 } };
 }
 
-test("computes high-quality diagnostics for fully grounded scan responses", () => {
+test("same evidence reused across claims is not a within-claim duplicate", () => {
   const diagnostics = computeScanQualityDiagnostics({
     output: output([
-      opportunity("Reporting workflow monitor", grounded("Reporting delays increased by 42% at Acme Corp.", "ev-1")),
-      opportunity("Approval bottleneck alerts", grounded("Approval bottlenecks are reported by finance teams.", "ev-2")),
-      opportunity("CSV reconciliation assistant", grounded("CSV reconciliation is cited as a repeated workflow problem.", "ev-3")),
+      singleSourceOpportunity("One evidence A", grounded("Reporting delays increased in finance operations.", "ev-1")),
+      singleSourceOpportunity("One evidence B", grounded("Approval delays increased in finance operations.", "ev-1")),
     ]),
-    evidence,
-    derivedAnalysisUsed: true,
+    evidence: [{ evidenceId: "ev-1", sourceKind: "pasted_evidence" }],
   });
 
-  assert.equal(diagnostics.groundingCoverage.evidenceGroundedPercentage, 1);
-  assert.equal(diagnostics.groundingCoverage.inferenceClaims, 0);
-  assert.equal(diagnostics.evidenceDiagnostics.invalidReferences.length, 0);
-  assert.equal(diagnostics.evidenceDiagnostics.missingReferences.length, 0);
-  assert.equal(diagnostics.sourceCoverage.userEvidenceUsed, 1);
-  assert.equal(diagnostics.sourceCoverage.uploadedDocumentsUsed, 1);
-  assert.equal(diagnostics.sourceCoverage.externalSourcesUsed, 1);
-  assert.equal(diagnostics.sourceCoverage.derivedAnalysisUsed, 1);
-  assert.ok(diagnostics.specificityMetrics.specificityScore > 0.3);
+  assert.equal(diagnostics.evidenceDiagnostics.duplicateReferencesWithinClaims, 0);
+  assert.ok(diagnostics.evidenceDiagnostics.reusedEvidenceAcrossClaims > 0);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceConcentration, 1);
 });
 
-test("measures inference-heavy and incomplete schema outputs without rejecting them", () => {
-  const diagnostics = computeScanQualityDiagnostics({
-    output: output([
-      opportunity("Generic helper", inferred("Teams may need a better tool.")),
-      opportunity("Generic helper two", inferred("Users may benefit from workflow automation.")),
-      opportunity("Generic helper three", inferred("A dashboard could help.")),
-    ]),
-    evidence,
-  });
-
-  assert.equal(diagnostics.groundingCoverage.evidenceGroundedClaims, 18);
-  assert.equal(diagnostics.groundingCoverage.inferenceClaims, 3);
-  assert.ok(diagnostics.groundingCoverage.inferencePercentage > 0);
-  assert.ok(diagnostics.schemaCompleteness.missingSections.includes("competition"));
-  assert.ok(diagnostics.schemaCompleteness.completeness < 1);
-});
-
-test("reports missing evidence, duplicated evidence ids, and invalid evidence ids", () => {
-  const duplicateAndInvalid: ScanGroundedClaim = {
-    text: "Evidence references include repeated and unknown IDs.",
+test("same evidence repeated twice inside one claim counts as duplicate", () => {
+  const repeated: ScanGroundedClaim = {
+    text: "Evidence references repeat one private source inside the same claim.",
     groundingMode: "evidence",
     evidenceRefs: [{ evidenceId: "ev-1" }, { evidenceId: "ev-1" }, { evidenceId: "missing-ev" }],
   };
-  const diagnostics = computeScanQualityDiagnostics({ output: output([opportunity("Bad references", duplicateAndInvalid)]), evidence: evidenceWithUnused });
+  const diagnostics = computeScanQualityDiagnostics({ output: output([opportunity("Bad references", repeated)]), evidence: evidenceWithUnused });
 
-  assert.equal(diagnostics.evidenceDiagnostics.duplicateEvidenceReferenceCount, 5);
+  assert.equal(diagnostics.evidenceDiagnostics.duplicateReferencesWithinClaims, 1);
   assert.deepEqual(diagnostics.evidenceDiagnostics.invalidReferences, ["missing-ev"]);
   assert.ok(diagnostics.evidenceDiagnostics.missingReferences.includes("ev-4"));
 });
 
-test("detects generic response indicators", () => {
-  const generic = opportunity("Placeholder", inferred("Leverage seamless best practices to optimize your company workflow.", ""));
-  generic.pain = "Leverage seamless best practices.";
-  generic.customer = "Leverage seamless best practices.";
-  generic.mvp = "TODO placeholder";
-  const diagnostics = computeScanQualityDiagnostics({ output: output([generic, generic, generic]), evidence });
+test("three evidence IDs from one source kind separates independent count from source-kind diversity", () => {
+  const sameKindEvidence: ScanQualityDiagnosticEvidence[] = ["ev-1", "ev-2", "ev-3"].map((evidenceId) => ({ evidenceId, sourceKind: "pasted_evidence" as const }));
+  const diagnostics = computeScanQualityDiagnostics({
+    output: output([
+      opportunity("Pasted one", grounded("First pasted source supports reporting delays.", "ev-1")),
+      opportunity("Pasted two", grounded("Second pasted source supports approval delays.", "ev-2")),
+      opportunity("Pasted three", grounded("Third pasted source supports reconciliation delays.", "ev-3")),
+    ]),
+    evidence: sameKindEvidence,
+  });
 
-  assert.equal(diagnostics.genericityIndicators.excessiveRepetition, true);
-  assert.ok(diagnostics.genericityIndicators.vagueRecommendations > 0);
-  assert.ok(diagnostics.genericityIndicators.placeholderLikeLanguage > 0);
-  assert.ok(diagnostics.genericityIndicators.repeatedOpportunityStructures > 0);
+  assert.equal(diagnostics.evidenceDiagnostics.independentEvidenceCount, 3);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceCoverage, 1);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceSourceKindDiversity, 0.2);
 });
 
-test("detects obvious contradictions and duplicated claims", () => {
+test("pasted, uploaded, and external evidence increase source-kind diversity", () => {
+  const diagnostics = computeScanQualityDiagnostics({
+    output: output([
+      opportunity("Mixed one", grounded("Pasted evidence supports reporting delays.", "ev-1")),
+      opportunity("Mixed two", grounded("Uploaded evidence supports approval delays.", "ev-2")),
+      opportunity("Mixed three", grounded("External evidence supports reconciliation delays.", "ev-3")),
+    ]),
+    evidence,
+  });
+
+  assert.equal(diagnostics.evidenceDiagnostics.independentEvidenceCount, 3);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceSourceKindDiversity, 0.6);
+});
+
+test("one source supporting every claim shows complete coverage but full concentration", () => {
+  const diagnostics = computeScanQualityDiagnostics({ output: output([singleSourceOpportunity("Single source", grounded("One source supports every generated claim.", "ev-1"))]), evidence: [{ evidenceId: "ev-1", sourceKind: "pasted_evidence" }] });
+
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceCoverage, 1);
+  assert.equal(diagnostics.evidenceDiagnostics.independentEvidenceCount, 1);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceSourceKindDiversity, 0.2);
+  assert.equal(diagnostics.evidenceDiagnostics.evidenceConcentration, 1);
+});
+
+test("duplicated claims do not inflate contradiction counts", () => {
+  const duplicate = opportunity("Duplicate claim", grounded("Finance teams report high reporting workload.", "ev-1"));
+  const diagnostics = computeScanQualityDiagnostics({ output: output([duplicate, duplicate]), evidence });
+
+  assert.ok(diagnostics.contradictionDiagnostics.duplicatedClaims > 0);
+  assert.equal(diagnostics.contradictionDiagnostics.contradictionCount, 0);
+});
+
+test("contradictory claims are counted independently from duplication", () => {
   const first = opportunity("Churn increase monitor", grounded("Customer churn is increasing in the finance market.", "ev-1"));
   const second = opportunity("Churn decrease monitor", grounded("Customer churn is decreasing in the finance market.", "ev-2"));
-  const third = opportunity("Churn duplicate monitor", grounded("Customer churn is decreasing in the finance market.", "ev-2"));
+  for (const [index, item] of [first, second].entries()) {
+    item.grounding.customer = grounded(`Unique customer claim ${index} for churn workflow.`, "ev-2");
+    item.grounding.rationale = grounded(`Unique rationale claim ${index} for churn workflow.`, "ev-3");
+    item.grounding.mvp = grounded(`Unique mvp claim ${index} for churn workflow.`, "ev-1");
+    item.grounding.pricing = grounded(`Unique pricing claim ${index} for churn workflow.`, "ev-2");
+    item.grounding.score = grounded(`Unique score claim ${index} for churn workflow.`, "ev-3");
+    item.grounding.difficulty = grounded(`Unique difficulty claim ${index} for churn workflow.`, "ev-1");
+  }
+  const diagnostics = computeScanQualityDiagnostics({ output: output([first, second]), evidence });
 
-  const diagnostics = computeScanQualityDiagnostics({ output: output([first, second, third]), evidence });
+  assert.ok(diagnostics.contradictionDiagnostics.contradictionCount > 0);
+  assert.equal(diagnostics.contradictionDiagnostics.contradictionPairCount, diagnostics.contradictionDiagnostics.contradictionCount);
+  assert.equal(diagnostics.contradictionDiagnostics.duplicatedClaims, 0);
+});
 
-  assert.ok(diagnostics.contradictionDiagnostics.contradictionCount >= 2);
-  assert.ok(diagnostics.contradictionDiagnostics.duplicatedClaims >= 1);
+test("duplicated opportunities remain separate from contradictions", () => {
+  const duplicate = opportunity("Repeated opportunity", grounded("Finance teams report repeated approval delays.", "ev-1"));
+  const diagnostics = computeScanQualityDiagnostics({ output: output([duplicate, duplicate]), evidence });
+
+  assert.ok(diagnostics.contradictionDiagnostics.duplicatedOpportunities > 0);
+  assert.equal(diagnostics.contradictionDiagnostics.contradictionCount, 0);
+});
+
+test("contract completeness and heuristic topic coverage are separate metrics", () => {
+  const sparse = opportunity("Sparse", inferred("Teams may need a better tool."));
+  sparse.pricing = "";
+  sparse.validation_questions = "";
+  sparse.pain = "";
+  const diagnostics = computeScanQualityDiagnostics({ output: output([sparse]), evidence });
+
+  assert.ok(diagnostics.schemaCompleteness.contractFieldCompleteness.missingFields.includes("pain"));
+  assert.ok(diagnostics.schemaCompleteness.contractFieldCompleteness.completeness < 1);
+  assert.ok(diagnostics.schemaCompleteness.heuristicTopicCoverage.missingTopics.includes("competition"));
+  assert.ok(diagnostics.schemaCompleteness.heuristicTopicCoverage.coverage < 1);
+});
+
+test("quality summary remains compact and excludes private claim text, evidence content, and inference reasons", () => {
+  const privateText = "PRIVATE_CUSTOMER_CONTENT_123";
+  const privateReason = "PRIVATE_INFERENCE_REASON_456";
+  const diagnostics = computeScanQualityDiagnostics({ output: output([opportunity("Safe logging", inferred(privateText, privateReason))]), evidence });
+  const serialized = JSON.stringify(diagnostics.qualitySummary);
+
+  assert.equal(serialized.includes(privateText), false);
+  assert.equal(serialized.includes(privateReason), false);
+  assert.equal(serialized.includes("normalizedContent"), false);
+  assert.deepEqual(Object.keys(diagnostics.qualitySummary).sort(), [
+    "contractFieldCompleteness",
+    "contradictionCount",
+    "duplicatedClaims",
+    "duplicatedOpportunities",
+    "evidenceConcentration",
+    "evidenceCoverage",
+    "evidenceSourceKindDiversity",
+    "genericityIndicators",
+    "groundingCoverage",
+    "heuristicTopicCoverage",
+    "independentEvidenceCount",
+    "sourceCoverage",
+    "specificityScore",
+    "unsupportedClaims",
+  ].sort());
 });
