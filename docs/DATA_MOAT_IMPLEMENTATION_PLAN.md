@@ -869,3 +869,41 @@ Explicit non-goals for this milestone:
 Next milestone:
 
 Grounding and evidence-reference contracts should define how Scan outputs cite and bind claims to evidence without exposing untrusted content as instructions. Scan output is safer after this milestone, but it is not yet fully Data-Moat-ready until grounding, evidence references, and later canonical Scan Artifact work are completed.
+
+---
+
+# Scan Grounding and Evidence Reference Milestone
+
+Status:
+
+Implemented as a compatibility-layer milestone for the Scan Safety and Quality Program.
+
+Goal:
+
+Establish a route-level and validation-level grounding contract for Scan AI outputs before any Scan result can be considered safe for canonical Data Moat knowledge.
+
+Scope:
+
+- Analyze Evidence and Generate Opportunities outputs now distinguish evidence-grounded claims from inference claims.
+- Evidence-grounded claims must cite evidence IDs from the current prompt envelope.
+- Inference claims must not cite evidence IDs and must include a short reason.
+- Prior Analyze Evidence model output used by opportunity generation is treated as derived analysis context, not independent evidence.
+- Grounding metadata is additive to existing route response shapes so existing UI and persistence mappings can continue using legacy fields.
+
+Out of scope for this milestone:
+
+- No database schema changes.
+- No migration changes.
+- No UI citation rendering.
+- No Retrieval.
+- No Knowledge Fusion.
+- No Scan Snapshot persistence.
+- No persistence of claim-level grounding metadata.
+
+Current persistence position:
+
+Grounding metadata is validated and may be returned by Scan AI routes, but it is not persisted as canonical Data Moat knowledge in this milestone. This protects the Data Moat from unsupported model-generated claims while preserving existing production behavior.
+
+Next milestone:
+
+Scan response quality diagnostics, confidence calibration, and solution neutrality should build on top of these grounding contracts without claiming that Scan output is Data-Moat-ready yet.
