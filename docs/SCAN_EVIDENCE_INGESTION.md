@@ -1,84 +1,117 @@
-# Scan Evidence Ingestion
+# Scan Evidence Ingestion @1
 
-## Architecture
+`scan-evidence-ingestion@1` remains an experimental, server-only Ingestion Layer resource. PR 7.1 hardens the existing additive PR 7 foundation without introducing the Scan Server Workflow, persistence, retrieval, Knowledge Fusion, OCR, antivirus scanning, model/provider changes, UI migration, or legacy route replacement.
 
-PR 7 adds a server-only Ingestion Layer foundation in `lib/scan/evidence-ingestion.ts`. It is additive: legacy Scan UI and API routes can continue passing a single combined evidence string while future Scan Server Workflow code can ingest granular evidence sources before prompt construction.
+## Repository audit findings
 
-## Repository ingestion audit
+The repository-visible ingestion path is `app/api/scan/evidence-ingestion/route.ts`, `lib/scan/evidence-ingestion.ts`, and `tests/scan-evidence-ingestion.test.ts`. `ingestScanEvidence()` is called by the experimental route and tests only. A repository search shows no current client consumer of `/api/scan/evidence-ingestion`; the legacy Scan page still uses `/api/extract-file-text`, and `analyze-evidence`, `generate-opportunities`, and `solution-intelligence` remain on the existing `scan-user-evidence` flow. `contentHash` is consumed internally by ingestion tests and unrelated Snapshot storage modules, but no authenticated client in this repository needs the ingestion route to return it. `normalizedContent` is still returned by the experimental route as private authenticated data for testability and future bridge work only; it should disappear from public intermediate responses once ingestion and analysis run in one server-side Scan Server Workflow execution. `byteLength` can be supplied by non-route canonical callers, so canonical ingestion treats it as declared metadata and verifies it against actual bytes. No framework-level multipart/body-size limit is configured in visible repository code; `next.config.ts` contains no body-size configuration, and Next route handlers use the Web `Request` API.
 
-Verified from repository code:
+## Multipart metadata preflight
 
-- `app/scan/page.tsx` accepts one selected file, restricts extensions to `.txt`, `.pdf`, and `.docx`, and caps the browser-selected file at 5 MB.
-- TXT extraction currently happens client-side through `File.text()` before the text is merged into `cleanEvidence`.
-- PDF and DOCX extraction currently happen server-side through `app/api/extract-file-text/route.ts` using `pdf-parse` and `mammoth`.
-- The legacy extraction route accepts only PDF and DOCX MIME types and exposes raw parser failure messages through generic catch handling.
-- External source snippets and raw text are formatted client-side into the same `cleanEvidence` string.
-- `cleanEvidence` is truncated to 6,000 characters before legacy analysis/generation routes.
-- `analyze-evidence`, `generate-opportunities`, and `solution-intelligence` currently build prompts with one evidence ID: `scan-user-evidence`.
-- Supabase storage upload happens after Scan row creation and after analysis/source insertion. The client uploads original files to bucket `evidence-files` under `${userId}/${scanId}/${Date.now()}-${safeFileName}`.
-- Repository code does not show a storage bucket migration or policy for `evidence-files`; public/private status, RLS, lifecycle deletion, and signed URL behavior remain externally configured/unknown.
-- Failed scans after upload failure may leave the already-created `scan`, `evidence_analysis`, and `scan_sources` rows. Failed scans before upload do not upload the selected file. The code does not delete already-uploaded files after a later failure.
-- Extracted text is persisted in the `scan.evidence` legacy combined string; external sources are persisted in `scan_sources`; evidence analysis is persisted in `evidence_analysis`.
-- No temporary files are written to disk by the audited code.
+The route now performs defense-in-depth metadata preflight before reading any file bytes:
 
-## Versioned contract
+1. require authentication;
+2. parse multipart form data;
+3. collect `files` entries without `arrayBuffer()`;
+4. reject non-file entries;
+5. enforce `maxFilesPerRequest`;
+6. validate each declared `File.size` is finite, integer, greater than zero, and at or below `maxFileBytes`;
+7. sum declared sizes and enforce `maxTotalFileBytes`;
+8. validate filename length, sanitized extension, and MIME compatibility via the reusable canonical type validator;
+9. only then read `arrayBuffer()` for each accepted file;
+10. invoke canonical ingestion.
 
-The canonical contract is `scan-evidence-ingestion@1`. Each source becomes a `ScanNormalizedEvidenceItem` with stable `evidenceId`, `sourceKind`, trust class, privacy class, normalized content, SHA-256 content hash, bounded counts, extraction status, and provenance ordinal. Canonical items retain no `File`, `Buffer`, storage URL, bucket path, or mutable upload state.
+`preflightScanEvidenceMultipartFiles()` is exported from the server ingestion module for deterministic tests. Canonical ingestion still independently enforces all byte, type, signature, and content limits.
 
-## Supported formats and limits
+## Actual-byte authority
 
-The immutable policy `SCAN_DOCUMENT_INGESTION_POLICY_V1` supports only TXT, PDF, and DOCX. Conservative limits are: 5 files/request, 5 MB/file, 12 MB total uploaded bytes, 12,000 extracted characters/file, 24,000 total normalized characters, 120-character filenames, 12,000 pasted-evidence characters, 4,000 external-snippet/discover/derived characters, 20 minimum useful characters, and a 10 second extraction policy target. These limits keep prompt-ready evidence bounded, prevent large parser inputs, and preserve compatibility with current product usage.
+Policy: declared `byteLength` must be a finite non-negative integer and must exactly match `Buffer.byteLength` after the input bytes are converted to a single `Buffer`. The actual buffer length is authoritative for per-file limits, total upload limits, canonical `byteCount`, and safe aggregate logs. A mismatch is rejected as `scan_evidence_request_invalid`; declared or actual byte values are not included in public error messages.
 
-## Trust and privacy classes
+## Extraction ordering
 
-- User pasted evidence and uploaded TXT/PDF/DOCX are `user_supplied_untrusted` and `private_user`.
-- External snippets are `external_public_untrusted` and `public_external`.
-- Discover context and derived analysis are `internal_derived_non_independent`; derived analysis is not independent evidence.
+Canonical file extraction follows this order:
 
-## Evidence ID policy
+1. construct `Buffer` once;
+2. validate actual byte length;
+3. sanitize and validate filename;
+4. validate extension and MIME compatibility;
+5. validate PDF/DOCX signatures or TXT binary heuristic;
+6. parse/extract;
+7. normalize;
+8. enforce extracted-character and useful-content limits.
 
-IDs are deterministic request-local counters using safe lowercase source prefixes, for example `pasted-evidence-001`, `uploaded-pdf-001`, `uploaded-docx-001`, `uploaded-txt-001`, `external-snippet-001`, `discover-context-001`, and `derived-analysis-001`. IDs never include filenames, user names, emails, company names, hashes, or content. Duplicate files remain separate items by ordinal.
+Parsers are not invoked for oversized files, MIME mismatches, unsupported extensions, invalid filenames, invalid signatures, TXT binary content, or malformed TXT UTF-8.
 
-## Extraction behavior
+## Timeout architecture and limitation
 
-TXT extraction is server-side in the canonical module. It handles UTF-8 BOM, normalizes line endings, rejects null-byte/binary-looking content and obvious HTML/script payloads, enforces limits, and never returns raw binary data.
+PR 7.1 keeps `extractionTimeoutMs` active through `withExtractionTimeout()`. This is a cooperative wait timeout: it limits how long the request awaits a parser and maps timeout to `scan_evidence_extraction_timeout`. It does **not** guarantee cancellation of CPU work already running in the same Node process. Strong parser termination requires future worker-thread or process isolation. Raw timeout or parser errors are not returned to clients.
 
-PDF extraction is server-side through the existing `pdf-parse` dependency. It validates bytes before parsing, checks the `%PDF-` signature, bounds input and extracted text, maps encrypted/password-protected and no-text cases to controlled public errors, and does not render pages or perform OCR.
+## PDF and DOCX extraction coverage
 
-DOCX extraction is server-side through the existing `mammoth` dependency. It validates a ZIP signature, relies on successful DOCX extraction to reject malformed/renamed ZIP containers, bounds extracted text, and does not expose embedded media or raw library errors.
+Tests now include deterministic synthetic fixtures created specifically for this repository:
 
-## MIME and signature validation
+- a minimal extractable PDF containing `SaaSScout synthetic PDF extraction evidence` that passes extension, MIME, and `%PDF-` signature validation and exercises the real installed PDF parser;
+- a minimal real DOCX/ZIP package containing `SaaSScout synthetic DOCX extraction evidence` that exercises the real installed Mammoth parser.
 
-Validation combines normalized extension, reported MIME type, size, filename hardening, and basic signatures: `%PDF-` for PDF, `PK` ZIP signature plus successful Mammoth extraction for DOCX, and binary/null-byte heuristics for TXT. Unsupported, mismatched, executable, script, archive, image, HTML, unknown, empty, oversized, and malformed files are rejected with controlled public codes. Antivirus scanning is not included and is a recommended production follow-up.
+Corrupt PDF/DOCX and renamed-ZIP rejection coverage remains.
 
-## Normalization and hashing
+## PDF error classification
 
-`normalizeScanEvidenceContent()` deterministically converts CRLF/CR to LF, removes unsafe controls except useful whitespace, collapses excessive spaces/tabs, limits blank lines, trims boundaries, preserves paragraphs, and never summarizes or calls an LLM. Hashing uses SHA-256 over a stable JSON representation containing contract version, source kind, normalized content, and safe MIME metadata. Hashes are not authentication or authorization tokens.
+Encrypted PDF detection is conservative and library-message-dependent. It only maps parser messages containing password/encryption indicators to `scan_evidence_pdf_encrypted`; unknown parser failures remain `scan_evidence_extraction_failed`. Raw parser messages, paths, stack traces, filenames, hashes, IDs, and content are never logged or returned publicly.
 
-## Prompt adapter
+## TXT UTF-8 policy
 
-`toEvidenceEnvelopeInputs()` converts independent canonical items to existing Untrusted Evidence Boundary envelope inputs while preserving granular IDs and source kinds where supported. Derived context is returned separately as non-independent `DerivedAnalysisContext` and is excluded from `allowedEvidenceIds`.
+TXT evidence is UTF-8 only. UTF-8 BOM is accepted and removed during normalization. Valid UTF-8 is accepted. Materially malformed UTF-8 byte sequences are rejected with `scan_evidence_text_encoding_invalid` rather than silently replacing large sections with replacement characters. Binary-looking TXT and HTML/script-looking TXT remain rejected.
 
-## Route/service-boundary decision
+## Collection-count limits
 
-A new authenticated isolated route exists at `app/api/scan/evidence-ingestion/route.ts` for future integration and tests. It accepts multipart form data and returns normalized contents only because the current client would need contents for a follow-up legacy request. It does not persist files or extracted text. Current legacy routes are not rewired in this PR to avoid breaking response shapes and UI flow.
+The centralized policy now bounds non-file collections before processing:
 
-## Public errors
+- `maxPastedEvidenceItems: 1`
+- `maxExternalSnippets: 20`
+- `maxDiscoverContextItems: 20`
+- `maxDerivedAnalysisItems: 1`
 
-Public errors use controlled codes: `scan_evidence_request_invalid`, `scan_evidence_file_count_exceeded`, `scan_evidence_file_too_large`, `scan_evidence_total_size_exceeded`, `scan_evidence_type_unsupported`, `scan_evidence_mime_mismatch`, `scan_evidence_signature_invalid`, `scan_evidence_text_binary`, `scan_evidence_empty`, `scan_evidence_extraction_failed`, `scan_evidence_pdf_encrypted`, `scan_evidence_pdf_no_text`, `scan_evidence_docx_invalid`, `scan_evidence_total_content_exceeded`, and `scan_evidence_configuration_failed`. Responses must not expose parser messages, stack traces, contents, paths, buckets, provider details, or environment data.
+Per-item and total normalized-character limits still apply. Excessive counts are rejected; sources are not silently discarded.
 
-## Logging policy
+## Route response minimization
 
-`buildSafeScanEvidenceIngestionLog()` returns aggregate diagnostics only: version, counts, input bytes, normalized characters, truncation count, rejected/failure counts, duration, error code, file count, and boolean source presence. It intentionally excludes filenames, evidence IDs, hashes, contents, pasted evidence, user IDs, document titles, storage paths, and raw parser messages.
+Because no current repository client consumes `/api/scan/evidence-ingestion`, the route remains experimental and returns only:
 
-## Current retention behavior
+- `version`
+- `evidenceItems[].evidenceId`
+- `evidenceItems[].sourceKind`
+- `evidenceItems[].normalizedContent`
+- `evidenceItems[].characterCount`
+- `evidenceItems[].truncated`
+- `evidenceItems[].extractionStatus`
+- `allowedEvidenceIds`
+- `derivedContextIds`
+- `totals`
 
-Verified from code: original files are uploaded only after the scan row and analysis/source records are created; upload target is bucket name `evidence-files`; file paths include user ID, scan ID, timestamp, and sanitized original filename; extracted text is stored in `scan.evidence`; external sources and analysis are stored separately; no temp files are written. Unknown external configuration: whether `evidence-files` is public/private, storage RLS/policies, lifecycle retention, signed URL requirements, and bucket deletion automation. Known risks: failed post-upload operations can leave uploaded files, paths contain sanitized user-controlled filenames, and legacy combined evidence stores private extracted text. Required future changes before public document-heavy usage: private bucket verification, lifecycle cleanup, server-only upload/extraction orchestration, removal of filename from storage paths, artifact retention policy, antivirus scanning option, and granular artifact persistence.
+It does not return hashes, filenames, byte counts, MIME details, trust/privacy internals, provenance internals, or parser diagnostics.
 
-## Compatibility mode and migration path
+## Filename privacy policy
 
-This PR keeps legacy UI, extraction route, Analyze Evidence request shape, Generate Opportunities request shape, Solution Intelligence request shape, Supabase inserts, and file upload UX unchanged. Migration path: legacy evidence aggregation → canonical granular ingestion → Scan Server Workflow adoption → Artifact persistence → legacy removal.
+Canonical items keep a sanitized `originalFilename` only as private in-memory provenance. Filenames are Unicode-normalized, path components are removed, control characters are stripped, and maximum length is enforced. Filenames are never included in IDs, hashes, prompt adapter output, public route responses, or safe logs. This PR does not broaden persistence.
 
-## Known limitations and non-goals
+## HTTP status policy
 
-No OCR, no antivirus scanning, no persistence changes, no database migrations, no Retrieval, no Knowledge Fusion, no UI redesign, no provider/model changes, no external crawling, and no Scan Server Workflow are implemented in this PR.
+The route uses deterministic status mapping:
+
+- `400`: malformed request, empty evidence, unsupported type, MIME mismatch, invalid signature, binary or invalid TXT encoding, and request-content count/character problems;
+- `413`: per-file size, total upload size, or total normalized-content limit exceeded;
+- `422`: structurally accepted document extraction problems, encrypted PDF, no-text PDF, invalid DOCX, extraction failure, or extraction timeout;
+- `500`: internal configuration failure.
+
+## Safe logging
+
+Accepted-request logs use actual canonical file byte totals. Preflight rejection logs use only safe aggregate metadata available before reading bytes, such as file count, total declared bytes, error code, and duration. Logs intentionally omit filenames, evidence IDs, hashes, normalized content, raw content, user identifiers, paths, parser messages, and stack traces.
+
+## Contract version decision
+
+The contract remains `scan-evidence-ingestion@1` because the module is experimental, non-persisted, not integrated into the legacy UI, and not consumed by artifact persistence. This is pre-release hardening of `@1`. Some previously accepted internal inputs are now rejected when declared byte length mismatches actual bytes, TXT bytes are malformed UTF-8, or external/Discover context counts exceed policy.
+
+## Known limitations and future work
+
+The route still parses multipart form data through the framework before route-level metadata preflight; no repository-visible framework body-size configuration is present. Cooperative parser timeout is not hard cancellation. Future work should add worker/process-isolated parsing, remove intermediate public `normalizedContent` once Scan Server Workflow performs ingestion and analysis in one server-side execution, and consider antivirus/OCR only in separate scoped PRs.
