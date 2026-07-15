@@ -27,6 +27,21 @@ function getOpenRouterClient() {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function splitDerivedAnalysisContext(evidence: string) {
+  const marker = "Evidence Intelligence:";
+  const markerIndex = evidence.indexOf(marker);
+  if (markerIndex === -1) return { evidence };
+
+  const originalPrefix = "Original evidence:";
+  const original = evidence.slice(0, markerIndex).replace(originalPrefix, "").trim();
+  const derived = evidence.slice(markerIndex + marker.length).trim();
+  return {
+    evidence: original || evidence,
+    derivedAnalysis: derived ? { content: derived } : undefined,
+  };
+}
+
+
 export async function POST(req: Request) {
   try {
     await requireUser(req);
@@ -40,7 +55,8 @@ export async function POST(req: Request) {
     const market = String(body.market || "").trim();
     const audience = String(body.audience || "").trim();
     const region = String(body.region || "").trim();
-    const evidence = String(body.evidence || "").trim();
+    const rawEvidence = String(body.evidence || "").trim();
+    const { evidence, derivedAnalysis } = splitDerivedAnalysisContext(rawEvidence);
 
     if (!market && !evidence) {
       return NextResponse.json(
@@ -53,6 +69,7 @@ export async function POST(req: Request) {
     }
 
     const trustedIntent = buildTrustedUserIntent({ market, audience, region });
+    const evidenceIds = ["scan-user-evidence"] as const;
     const prompt = buildGenerateOpportunitiesPrompt({
       intent: trustedIntent,
       evidence: [
@@ -62,7 +79,9 @@ export async function POST(req: Request) {
           content: evidence,
         },
       ],
+      derivedAnalysis,
     });
+    const startedAt = Date.now();
 
     const completion = await getOpenRouterClient().chat.completions.create({
       model: "openai/gpt-4.1-mini",
@@ -85,7 +104,7 @@ export async function POST(req: Request) {
 
     try {
       const parsed = parseStrictModelJson(content || "");
-      const { opportunities } = validateGenerateOpportunitiesOutput(parsed);
+      const { opportunities, groundingSummary } = validateGenerateOpportunitiesOutput(parsed, { evidenceIds });
 
       console.info("Scan model output validation", {
         event: "scan_model_output_validation",
@@ -93,11 +112,19 @@ export async function POST(req: Request) {
         promptVersion: "scan-generate-opportunities@1",
         model: "openai/gpt-4.1-mini",
         validationStatus: "passed",
+        groundingStatus: "passed",
+        totalClaims: groundingSummary.totalClaims,
+        evidenceGroundedClaims: groundingSummary.evidenceGroundedClaims,
+        inferenceClaims: groundingSummary.inferenceClaims,
+        groundingCoverage: groundingSummary.groundingCoverage,
+        distinctEvidenceIdsReferenced: groundingSummary.distinctEvidenceIdsReferenced,
+        durationMs: Date.now() - startedAt,
       });
 
       return NextResponse.json({
         success: true,
         opportunities,
+        grounding: { opportunities: opportunities.map((opportunity) => opportunity.grounding) },
       });
     } catch (validationError) {
       if (
@@ -110,7 +137,8 @@ export async function POST(req: Request) {
           promptVersion: "scan-generate-opportunities@1",
           model: "openai/gpt-4.1-mini",
           validationStatus: "failed",
-          errorCode: validationError.code,
+          groundingStatus: validationError.code.startsWith("model_grounding_") ? "failed" : "not_applicable",
+          validationErrorCode: validationError.code,
           invalidFieldCount:
             validationError instanceof ScanOutputValidationError
               ? validationError.issues.length

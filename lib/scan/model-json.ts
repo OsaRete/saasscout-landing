@@ -59,7 +59,11 @@ export function publicModelOutputError(
   code:
     | ModelJsonErrorCode
     | "model_schema_validation_failed"
-    | "model_output_out_of_range",
+    | "model_output_out_of_range"
+    | "model_grounding_missing"
+    | "model_grounding_invalid"
+    | "model_grounding_unknown_evidence_id"
+    | "model_grounding_mismatch",
 ) {
   return {
     success: false,
