@@ -25,8 +25,12 @@ function buildAllowedEvidenceIdList(evidence: EvidenceEnvelopeInput[]) {
   return createUntrustedEvidenceEnvelope(evidence);
 }
 
-function formatAllowedEvidenceIds(evidenceItems: ReturnType<typeof createUntrustedEvidenceEnvelope>) {
-  return evidenceItems.map((item) => `- ${item.evidenceId}`).join("\n") || "- none";
+function formatAllowedEvidenceIds(
+  evidenceItems: ReturnType<typeof createUntrustedEvidenceEnvelope>,
+) {
+  return (
+    evidenceItems.map((item) => `- ${item.evidenceId}`).join("\n") || "- none"
+  );
 }
 
 function formatDerivedAnalysisContext(context?: DerivedAnalysisContext) {
@@ -120,7 +124,9 @@ export function buildGenerateOpportunitiesPrompt(input: {
 }): string {
   const evidenceItems = buildAllowedEvidenceIdList(input.evidence);
   const evidenceBlock = formatUntrustedEvidenceForPrompt(evidenceItems);
-  const derivedAnalysisBlock = formatDerivedAnalysisContext(input.derivedAnalysis);
+  const derivedAnalysisBlock = formatDerivedAnalysisContext(
+    input.derivedAnalysis,
+  );
 
   return `You are SaaSScout, an AI SaaS opportunity analyst.
 
@@ -192,5 +198,70 @@ JSON format:
       }
     }
   ]
+}`;
+}
+
+export function buildSolutionIntelligencePrompt(input: {
+  intent: TrustedUserIntent;
+  evidence: EvidenceEnvelopeInput[];
+  derivedAnalysis?: DerivedAnalysisContext;
+}): string {
+  const evidenceItems = buildAllowedEvidenceIdList(input.evidence);
+  const evidenceBlock = formatUntrustedEvidenceForPrompt(evidenceItems);
+  const derivedAnalysisBlock = formatDerivedAnalysisContext(
+    input.derivedAnalysis,
+  );
+
+  return `You are SaaSScout Solution Intelligence.
+
+Evaluate which solution category best fits the evidenced problem. Do not assume software is correct.
+
+${UNTRUSTED_EVIDENCE_BOUNDARY_RULES}
+
+Trusted user intent:
+Market:
+${input.intent.market || "Infer from evidence."}
+
+Audience:
+${input.intent.audience || "Infer from evidence."}
+
+Region:
+${input.intent.region || "Global"}
+
+${evidenceBlock}
+
+Allowed evidence IDs for citations:
+${formatAllowedEvidenceIds(evidenceItems)}
+
+${derivedAnalysisBlock}
+
+Rules:
+- Return only strict JSON for version "scan-solution-intelligence@1".
+- Compare 3 to 8 relevant categories.
+- Include at least one build-oriented category, one service/process-oriented category, and validate_first or no_build_recommended.
+- Known categories: software_product, ai_enabled_software, automation, api_or_infrastructure, productized_service, consulting, managed_service, marketplace, education_or_training, physical_product, operational_process, data_product, community, hybrid_solution, validate_first, no_build_recommended.
+- Suitability is a 0 to 1 fit score for the evidenced problem under current assumptions, not probability of success, market size, profitability, certainty, founder fit, or investment return.
+- Do not invent competitors, demand, willingness to pay, novelty, or market facts.
+- Named competitors require evidence support. Without evidence, use category-level alternatives and mark claims as inference.
+- Separate verified foundations from proposed innovation.
+- Derived analysis is not independent evidence; cite only allowed evidence IDs or mark claims as inference.
+- Every material claim must use groundingMode "evidence" with valid evidenceRefs or groundingMode "inference" with no refs and inferenceReason.
+- Identify the cheapest real-world validation step.
+- Do not include markdown or prose outside JSON.
+
+JSON shape:
+{
+  "version": "scan-solution-intelligence@1",
+  "problemFraming": { "text": "problem stated from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "primary" }] },
+  "evaluatedCategories": [{ "category": "software_product", "suitability": 0.62, "suitabilityBand": "possible", "rationale": { "text": "why this category fits or does not fit", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Category fit is inferred from the evidenced workflow." }, "advantages": [], "limitations": [], "prerequisites": [] }],
+  "recommendedCategory": "validate_first",
+  "secondaryCategory": "productized_service",
+  "recommendation": { "text": "recommended approach", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Recommendation compares category fit under current evidence." },
+  "existingSolutionAssessment": { "knownAlternatives": [], "evidenceCoverage": "limited", "whatAppearsValidated": [], "whatAppearsPoorlySolved": [], "replacementRisk": { "text": "replacement risk", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Replacement risk needs more competitor evidence." } },
+  "innovationAssessment": { "innovationMode": "unproven_concept", "verifiedFoundation": [], "proposedDifferentiation": [], "unverifiedAssumptions": [], "feasibilityConstraints": [], "noveltyRisk": "moderate" },
+  "validationReadiness": { "readiness": "problem_validation_ready", "knownFacts": [], "criticalUnknowns": [], "cheapestNextTest": "customer_interviews", "testRationale": { "text": "why this is cheapest", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Test choice is inferred from evidence gaps." }, "successSignal": { "text": "success signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." }, "failureSignal": { "text": "failure signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." } },
+  "keyAssumptions": [],
+  "risks": [],
+  "nextValidationAction": { "text": "next action", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Next action follows from critical unknowns." }
 }`;
 }
