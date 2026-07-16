@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       console.warn("Scan model output validation", { event: "scan_model_output_validation", route: "analyze-evidence", promptVersion: PROBLEM_INTELLIGENCE_PROMPT_VERSION, model: SCAN_MODEL_ID, validationStatus: "failed", groundingStatus: error.kind === "grounding" ? "failed" : "not_applicable", validationErrorCode: error.code });
       return Response.json(publicModelOutputError(publicCode(error)), { status: error.kind === "configuration" ? 500 : 502 });
     }
-    console.error("Analyze evidence error:", error);
-    return Response.json({ error: error instanceof Error ? error.message : "Failed to analyze evidence." }, { status: 500 });
+    console.error("Analyze evidence error", { event: "analyze_evidence_unexpected_error", route: "analyze-evidence", errorCategory: "unexpected", errorName: error instanceof Error ? error.name : typeof error });
+    return Response.json({ error: "Failed to analyze evidence." }, { status: 500 });
   }
 }
