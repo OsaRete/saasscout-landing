@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
+import { SCAN_ARTIFACT_ROLE_MARKER, SCAN_ARTIFACT_TEST_ROLES, assertScanArtifactTestRole, stripScanArtifactRoleMarker, type ScanArtifactTestRole } from "./support/scan-artifact-psql-role-output.ts";
 import { buildScanArtifactPersistenceFixture, buildValidScanArtifactFixture, scanArtifactAuthA, scanArtifactOwnerA, scanArtifactOwnerB } from "./scan-artifact-fixture.ts";
 import { canonicalSerializeScanIntelligenceArtifact } from "../lib/scan/intelligence-artifact.ts";
 import { ScanArtifactPersistenceError, validateStoredScanArtifactRow } from "../lib/scan/artifact-persistence.ts";
@@ -23,40 +24,51 @@ function safeUrl() {
   if (parsed.searchParams.size > 0) throw new Error("Scan Artifact DB tests reject URL query parameters such as SSL settings.");
   return parsed;
 }
-function wrapRole(sql: string, role?: string) {
-  return role ? `set role ${role};\nselect current_user;\n${sql}\nreset role;` : sql;
+function wrapRole(sql: string, role?: ScanArtifactTestRole) {
+  if (!role) return sql;
+  assertScanArtifactTestRole(role);
+  return `set role ${role};
+select ${q(SCAN_ARTIFACT_ROLE_MARKER)} || current_user;
+${sql}
+reset role;`;
 }
-function stripRoleEcho(out: string, role?: string) {
-  const trimmed = out.trim();
-  if (!role) return trimmed;
-  const lines = trimmed.split("\n");
-  assert.equal(lines[0], role, `psql current_user should match requested role ${role}`);
-  return lines.slice(1).join("\n").trim();
-}
-function psql(sql: string, role?: string) {
-  const res = spawnSync("docker", ["exec", "-i", DB_CONTAINER, "psql", "-U", "postgres", "-d", "postgres", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t"], { input: wrapRole(sql, role), encoding: "utf8", maxBuffer: 10_000_000 });
+function psql(sql: string, role?: ScanArtifactTestRole) {
+  const res = spawnSync("docker", ["exec", "-i", DB_CONTAINER, "psql", "-q", "-U", "postgres", "-d", "postgres", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t"], { input: wrapRole(sql, role), encoding: "utf8", maxBuffer: 10_000_000 });
   if (res.status !== 0) throw new Error(`local_postgres_sql_failed:${String(res.stderr || res.stdout || res.error?.message || "docker_or_psql_unavailable").split("\n")[0]}`);
-  return stripRoleEcho(res.stdout, role);
+  return stripScanArtifactRoleMarker(res.stdout, role);
 }
-async function psqlAsync(sql: string, role?: string) {
+async function psqlAsync(sql: string, role?: ScanArtifactTestRole) {
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn("docker", ["exec", "-i", DB_CONTAINER, "psql", "-U", "postgres", "-d", "postgres", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t"], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("docker", ["exec", "-i", DB_CONTAINER, "psql", "-q", "-U", "postgres", "-d", "postgres", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t"], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
-    child.on("error", err => reject(new Error(`local_postgres_sql_failed:${err.message.split("\n")[0]}`)));
+    let settled = false;
+    const finish = (err?: Error, value?: string) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve(value ?? "");
+    };
+    child.on("error", err => finish(new Error(`local_postgres_sql_failed:${err.message.split("\n")[0]}`)));
     child.on("close", code => {
-      if (code !== 0) reject(new Error(`local_postgres_sql_failed:${String(stderr || stdout || "docker_or_psql_unavailable").split("\n")[0]}`));
-      else resolve(stripRoleEcho(stdout, role));
+      if (code !== 0) finish(new Error(`local_postgres_sql_failed:${String(stderr || stdout || "docker_or_psql_unavailable").split("\n")[0]}`));
+      else {
+        try {
+          finish(undefined, stripScanArtifactRoleMarker(stdout, role));
+        } catch (err) {
+          finish(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
     });
     child.stdin.end(wrapRole(sql, role));
   });
 }
-function json(sql: string, role?: string) { const out = psql(sql, role); return out ? JSON.parse(out.split("\n").at(-1) ?? "null") : null; }
-async function jsonAsync(sql: string, role?: string) { const out = await psqlAsync(sql, role); return out ? JSON.parse(out.split("\n").at(-1) ?? "null") : null; }
+function json(sql: string, role?: ScanArtifactTestRole) { const out = psql(sql, role); return out ? JSON.parse(out.split("\n").at(-1) ?? "null") : null; }
+async function jsonAsync(sql: string, role?: ScanArtifactTestRole) { const out = await psqlAsync(sql, role); return out ? JSON.parse(out.split("\n").at(-1) ?? "null") : null; }
 function q(s: unknown) { return `'${String(s).replaceAll("'", "''")}'`; }
 function rpcSql(f: PersistFixture) { const p = f.projection; return `select public.persist_scan_intelligence_artifact_shadow(${q(f.ownerId)}::uuid,${q(f.artifact.artifactId)},${q(f.artifact.execution.executionId)},${q(f.artifact.version)},${q(f.artifact.execution.workflowVersion)},${q(f.artifact.integrity.canonicalizationVersion)},${q(f.artifact.integrity.artifactHash)},${q(f.idempotencyKey)},${q(JSON.stringify(f.payload))}::jsonb,${q(p.reliabilityClassification)},${q(p.validationReadiness)},${q(p.recommendedCategory)},${p.sourceCount},${p.independentSourceCount},${p.score10},${p.score100});`; }
 function upsertUsers() { psql(`insert into auth.users(id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at) values (${q(scanArtifactOwnerA)}::uuid,'authenticated','authenticated','scan-artifact-a@example.test','',now(),now(),now()),(${q(scanArtifactOwnerB)}::uuid,'authenticated','authenticated','scan-artifact-b@example.test','',now(),now(),now()) on conflict(id) do nothing;`); }
@@ -68,7 +80,7 @@ test.after(() => truncateLocalOnly());
 
 test("real migration objects, grants, indexes, trigger and RLS are installed", () => { const r = json(`select jsonb_build_object('table', to_regclass('public.scan_intelligence_artifacts')::text, 'rpc', to_regprocedure('public.persist_scan_intelligence_artifact_shadow(uuid,text,text,text,text,text,text,text,jsonb,text,text,text,integer,integer,numeric,numeric)') is not null, 'prevent', to_regprocedure('public.prevent_scan_artifact_mutation()') is not null, 'trigger', exists(select 1 from pg_trigger where tgname='scan_artifacts_append_only' and not tgisinternal and tgenabled='O'), 'rls', (select relrowsecurity from pg_class where oid='public.scan_intelligence_artifacts'::regclass), 'constraints', (select jsonb_agg(conname order by conname) from pg_constraint where conrelid='public.scan_intelligence_artifacts'::regclass and conname like 'scan_artifacts_owner%unique'), 'indexes', (select jsonb_agg(indexname order by indexname) from pg_indexes where schemaname='public' and tablename='scan_intelligence_artifacts'), 'tablePrivs', (select jsonb_object_agg(role, jsonb_build_object('select', has_table_privilege(role,'public.scan_intelligence_artifacts','select'), 'insert', has_table_privilege(role,'public.scan_intelligence_artifacts','insert'), 'update', has_table_privilege(role,'public.scan_intelligence_artifacts','update'), 'delete', has_table_privilege(role,'public.scan_intelligence_artifacts','delete'))) from (values ('anon'),('authenticated'),('service_role')) v(role)), 'rpcExec', (select jsonb_object_agg(role, has_function_privilege(role,'public.persist_scan_intelligence_artifact_shadow(uuid,text,text,text,text,text,text,text,jsonb,text,text,text,integer,integer,numeric,numeric)','execute')) from (values ('anon'),('authenticated'),('service_role')) v(role)));`); assert.equal(r.table, "scan_intelligence_artifacts"); assert.equal(r.rpc, true); assert.equal(r.prevent, true); assert.equal(r.trigger, true); assert.equal(r.rls, true); assert.deepEqual(r.constraints, ["scan_artifacts_owner_artifact_unique", "scan_artifacts_owner_execution_unique", "scan_artifacts_owner_idempotency_unique"]); assert.ok(r.indexes.includes("scan_artifacts_owner_created_idx")); assert.ok(r.indexes.includes("scan_artifacts_version_idx")); assert.equal(r.indexes.includes("scan_artifacts_owner_artifact_idx"), false); assert.equal(r.tablePrivs.anon.select || r.tablePrivs.authenticated.select, false); assert.equal(r.rpcExec.anon || r.rpcExec.authenticated, false); assert.equal(r.rpcExec.service_role, true); });
 
-test("anon/authenticated cannot directly read or mutate and service role can persist/read owner-scoped rows", async () => { truncateLocalOnly(); for (const role of ["postgres", "anon", "authenticated", "service_role"]) { const p = json(`select jsonb_build_object('sel', has_table_privilege(current_user,'public.scan_intelligence_artifacts','select'), 'ins', has_table_privilege(current_user,'public.scan_intelligence_artifacts','insert'), 'upd', has_table_privilege(current_user,'public.scan_intelligence_artifacts','update'), 'del', has_table_privilege(current_user,'public.scan_intelligence_artifacts','delete'), 'rpc', has_function_privilege(current_user,'public.persist_scan_intelligence_artifact_shadow(uuid,text,text,text,text,text,text,text,jsonb,text,text,text,integer,integer,numeric,numeric)','execute'));`, role); if (role === "postgres" || role === "service_role") assert.equal(p.rpc, true); else assert.deepEqual(p, { sel: false, ins: false, upd: false, del: false, rpc: false }); } const f = await fixture("000000000101"); const res = json(rpcSql(f), "service_role"); assert.equal(res.status, "inserted"); const count = psql(`select count(*) from public.scan_intelligence_artifacts where owner_id=${q(f.ownerId)}::uuid and artifact_id=${q(f.artifact.artifactId)};`, "service_role"); assert.equal(count, "1"); });
+test("anon/authenticated cannot directly read or mutate and service role can persist/read owner-scoped rows", async () => { truncateLocalOnly(); for (const role of SCAN_ARTIFACT_TEST_ROLES) { const p = json(`select jsonb_build_object('sel', has_table_privilege(current_user,'public.scan_intelligence_artifacts','select'), 'ins', has_table_privilege(current_user,'public.scan_intelligence_artifacts','insert'), 'upd', has_table_privilege(current_user,'public.scan_intelligence_artifacts','update'), 'del', has_table_privilege(current_user,'public.scan_intelligence_artifacts','delete'), 'rpc', has_function_privilege(current_user,'public.persist_scan_intelligence_artifact_shadow(uuid,text,text,text,text,text,text,text,jsonb,text,text,text,integer,integer,numeric,numeric)','execute'));`, role); if (role === "postgres" || role === "service_role") assert.equal(p.rpc, true); else assert.deepEqual(p, { sel: false, ins: false, upd: false, del: false, rpc: false }); } const f = await fixture("000000000101"); const res = json(rpcSql(f), "service_role"); assert.equal(res.status, "inserted"); const count = psql(`select count(*) from public.scan_intelligence_artifacts where owner_id=${q(f.ownerId)}::uuid and artifact_id=${q(f.artifact.artifactId)};`, "service_role"); assert.equal(count, "1"); });
 
 test("insert and exact replay preserve one immutable canonical row", async () => { truncateLocalOnly(); const f = await fixture("000000000201"); const first = json(rpcSql(f), "service_role"); const row1 = json(`select to_jsonb(t) from public.scan_intelligence_artifacts t where artifact_id=${q(f.artifact.artifactId)};`, "service_role"); const replay = json(rpcSql(f), "service_role"); const row2 = json(`select to_jsonb(t) from public.scan_intelligence_artifacts t where artifact_id=${q(f.artifact.artifactId)};`, "service_role"); assert.equal(first.status, "inserted"); assert.equal(replay.status, "replayed"); assert.equal(replay.record_id, first.record_id); assert.equal(replay.persisted_at, first.persisted_at); assert.equal(row1.artifact_hash, f.artifact.integrity.artifactHash); assert.deepEqual(row1.artifact_payload, f.payload); assert.deepEqual(row2, row1); assert.equal(psql("select count(*) from public.scan_intelligence_artifacts;", "service_role"), "1"); });
 
@@ -87,4 +99,11 @@ test("read and corruption probes classify owner scope and stored-row inconsisten
   ] as const;
   for (const [name, set] of corruptions) { psql("alter table public.scan_intelligence_artifacts disable trigger scan_artifacts_append_only;", "service_role"); try { psql(`update public.scan_intelligence_artifacts set ${set};`, "service_role"); const row = json("select * from public.scan_intelligence_artifacts;", "service_role"); assert.throws(() => validateStoredScanArtifactRow(row), (e) => e instanceof ScanArtifactPersistenceError && e.code === "scan_artifact_persistence_corrupt", name); } finally { psql("alter table public.scan_intelligence_artifacts enable trigger scan_artifacts_append_only; truncate table public.scan_intelligence_artifacts restart identity;", "service_role"); json(rpcSql(f), "service_role"); } } });
 
-test("real PostgreSQL concurrent equal and conflicting RPC calls serialize deterministically", async () => { truncateLocalOnly(); const equal = await fixture("000000000701"); const call = () => jsonAsync(rpcSql(equal), "service_role"); const firstEqual = call(); const secondEqual = call(); const equalResults = await Promise.all([firstEqual, secondEqual]); assert.deepEqual(equalResults.map(r => r.status).sort(), ["inserted", "replayed"]); assert.equal(psql("select count(*) from public.scan_intelligence_artifacts;", "service_role"), "1"); truncateLocalOnly(); const a = await fixture("000000000702"); const b = await fixture("000000000703"); const firstConflict = jsonAsync(rpcSql(a), "service_role"); const secondConflict = jsonAsync(rpcSql({ ...b, ownerId: a.ownerId, idempotencyKey: a.idempotencyKey }), "service_role"); const conflictResults = await Promise.all([firstConflict, secondConflict]); assert.deepEqual(conflictResults.map(r => r.status).sort(), ["conflict", "inserted"]); assert.equal(psql("select count(*) from public.scan_intelligence_artifacts;", "service_role"), "1"); });
+async function settledJsonPair<T>(promises: [Promise<T>, Promise<T>]) {
+  const settled = await Promise.allSettled(promises);
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
+  return settled.map(result => (result as PromiseFulfilledResult<T>).value);
+}
+
+test("real PostgreSQL concurrent equal and conflicting RPC calls serialize deterministically", async () => { truncateLocalOnly(); const equal = await fixture("000000000701"); const call = () => jsonAsync(rpcSql(equal), "service_role"); const equalResults = await settledJsonPair([call(), call()]); assert.deepEqual(equalResults.map(r => r.status).sort(), ["inserted", "replayed"]); assert.equal(psql("select count(*) from public.scan_intelligence_artifacts;", "service_role"), "1"); truncateLocalOnly(); const a = await fixture("000000000702"); const b = await fixture("000000000703"); const conflictResults = await settledJsonPair([jsonAsync(rpcSql(a), "service_role"), jsonAsync(rpcSql({ ...b, ownerId: a.ownerId, idempotencyKey: a.idempotencyKey }), "service_role")]); assert.deepEqual(conflictResults.map(r => r.status).sort(), ["conflict", "inserted"]); assert.equal(psql("select count(*) from public.scan_intelligence_artifacts;", "service_role"), "1"); });
