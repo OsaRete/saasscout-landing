@@ -265,3 +265,117 @@ The test-only workflow authorization fixture is no longer exported from producti
 Tests now include parsed-JSON/adversarial cases that mutate independently of the mapper: missing keys, unknown keys, wrong primitive types, duplicate and derived evidence IDs, summary/manifest mismatches, invalid enums and hashes, calibration mismatches, diagnostics mismatches, validation projection drift, processing timestamp overlaps and duration mismatches, provenance/version drift, malformed Artifact/execution IDs, forbidden structural fields, integrity mismatches, oversized JSON parsing, and nested immutability after parse. A valid claim mentioning the word “content” remains accepted.
 
 This prepares the Artifact for a future Persistence Shadow phase by making validation durable and deterministic without adding persistence.
+
+## PR 9.2 canonical classification, diagnostics, and error-boundary hardening
+
+`scan-intelligence-artifact@1` remains the active contract. This phase is the final planned pre-persistence semantic hardening step before Scan Artifact Persistence Shadow. No Artifact rows, migrations, RPCs, Supabase writes, result routes, UI integration, Retrieval, Knowledge Fusion, validation campaigns, outcome capture, usage mutation, provider/model changes, or background jobs are introduced.
+
+### Audit findings closed by this phase
+
+The pre-implementation audit confirmed these durable-boundary gaps in the experimental parsed-JSON validator:
+
+- `intent.submitted` was only required to be a plain object, so unknown keys, non-string values, oversized values, and empty submitted intent could pass until integrity or downstream checks.
+- Evidence enum values were individually checked, but contradictory `sourceKind`, `trustClass`, and `privacyClass` combinations were not rejected as non-canonical ingestion classifications.
+- `extractionStatus` could contradict `sourceKind` and `truncated` metadata.
+- Problem diagnostics used generic recursive non-negative-number scanning rather than the exact `ScanQualityDiagnostics` contract.
+- Solution diagnostics checked only a subset of deterministic relationships and did not fully validate primitive types, integer counts, percentage ranges, enums, or unknown fields.
+- Owning Problem/Solution validators could throw their own validation errors through the Artifact validator.
+- Prompt and validator versions were bounded as safe identifiers but were not all cross-checked against known internal constants.
+- Adversarial tests did not cover all semantic contradictions with rehashed payloads.
+
+### Canonical trusted-intent policy
+
+Trusted Scan intent is now validated through one reusable trusted-intent validator shared by workflow validation and Artifact durable validation. The canonical keys are exactly:
+
+- `market`
+- `niche`
+- `audience`
+- `region`
+- `description`
+
+Unknown keys are rejected. Present values must be strings, already trimmed, non-empty, and within canonical bounds: `market`, `niche`, and `audience` are limited to 120 characters, `region` to 80 characters, and `description` to 600 characters. At least one canonical intent value is required. Artifact validation never silently truncates parsed JSON. Invalid Artifact intent maps only to `scan_artifact_intent_invalid`, not `ScanWorkflowError`.
+
+### Canonical evidence classification
+
+Evidence Ingestion owns the canonical classification helper. Given a `sourceKind`, it returns the only valid `trustClass`, `privacyClass`, `independence`, and `origin` combination. Ingestion uses this helper when creating items, source-independence classification delegates to it, and Artifact validation calls it for parsed JSON.
+
+Canonical classifications are:
+
+- `pasted_evidence`, `uploaded_txt`, `uploaded_pdf`, and `uploaded_docx`: user-supplied, private, independent evidence.
+- `external_snippet`: public external, independent evidence.
+- `discover_context`: internal derived private context, not independent current evidence.
+- `derived_analysis`: internal derived private context, not independent current evidence.
+
+Artifacts are rejected when `trustClass` or `privacyClass` disagrees with `sourceKind`, or when manifest-derived independence disagrees with summary counts or `allowedEvidenceIds`.
+
+### Extraction-status semantics
+
+Extraction status describes content-processing state, not evidence reliability. The canonical policy is:
+
+- Uploaded TXT/PDF/DOCX with `truncated: false` must be `extracted`.
+- Uploaded TXT/PDF/DOCX with `truncated: true` must be `partially_extracted`.
+- Pasted evidence, external snippets, Discover context, and derived analysis with `truncated: false` must be `not_required`.
+- Those non-file sources with `truncated: true` must be `partially_extracted`.
+
+Impossible combinations are rejected while current ingestion behavior is preserved.
+
+### Owning diagnostics validators
+
+Problem diagnostics validation is owned by the Scan Quality Diagnostics module. The Artifact validator reuses `validateScanQualityDiagnostics()` instead of recursively scanning numbers. The validator enforces exact durable keys, primitive types, non-negative integer counts, 0-1 percentages/rates, string-list arrays, boolean fields, nested quality-summary shape, and deterministic relationships such as total grounded/inference/unsupported claim counts and quality-summary alignment.
+
+Solution diagnostics validation is owned by the Solution Intelligence module. `validateSolutionIntelligenceDiagnostics()` enforces the exact diagnostics fields, rejects unknown fields, validates non-negative integer counts, booleans, 0-1 percentages, readiness/test enums, and deterministic relationships with the validated Solution Intelligence result. It also enforces `uniqueCategoryCount <= categoryCount`, `namedAlternativesWithEvidence <= existingAlternativeCount`, zero invalid references for a validated Artifact, and the current grounded-plus-inference percentage policy.
+
+### Calibration ownership
+
+Calibration threshold and projection checks are owned by `lib/scan/score-calibration.ts`. The Artifact validator calls the canonical calibration projection validator instead of maintaining a second independent threshold table. The mapper still preserves the existing Artifact quality projection: calibrated support score, `score10`, `score100`, score band, reliability classification, and model score comparison.
+
+### Unified Artifact error boundary
+
+`validateScanIntelligenceArtifact()` now catches validation failures from Analyze Evidence, Solution Intelligence, diagnostics, solution diagnostics, and calibration helpers and maps invalid parsed Artifact input into the Artifact taxonomy. Invalid Problem shape or grounding maps to `scan_artifact_grounding_invalid`; invalid Solution Intelligence maps to `scan_artifact_solution_invalid`; invalid diagnostics or calibration maps to `scan_artifact_quality_invalid`; invalid intent maps to `scan_artifact_intent_invalid`.
+
+Owning-validator messages, raw objects, claim text, evidence IDs, private intent values, and evidence content are not embedded in Artifact validation errors. Programmer/runtime failures remain internally distinguishable in owning modules, but parsed invalid Artifact payloads cross the durable boundary as `ScanIntelligenceArtifactValidationError`.
+
+### Exact provenance constants
+
+Stable internal versions are now cross-checked exactly:
+
+- workflow version;
+- evidence ingestion version;
+- Problem prompt version;
+- Problem validator version;
+- diagnostics version;
+- calibration version;
+- Solution Intelligence contract version;
+- Solution prompt version;
+- Solution validator version;
+- Artifact mapper version;
+- Artifact version.
+
+Model identifiers remain bounded flexible provenance values for interpretation and diagnostics. They are not exact replay guarantees and must not be treated as proof that a provider will reproduce identical output.
+
+### Final validation order
+
+The durable Artifact validation order is:
+
+1. plain-object and structural privacy scan;
+2. top-level required keys and primitive section types;
+3. trusted intent;
+4. execution IDs and timing;
+5. provenance basics and exact stable-version checks;
+6. evidence manifest canonical classification and extraction consistency;
+7. Problem/Solution contract and grounding validation behind the Artifact error boundary;
+8. diagnostics and calibration through owning validators;
+9. validation projection consistency;
+10. processing history;
+11. canonicalization eligibility;
+12. SHA-256 integrity verification.
+
+Semantic validation intentionally runs before integrity verification in adversarial tests by rehashing mutated payloads. This proves contradictions are rejected semantically rather than merely by stale hashes.
+
+### Focused adversarial coverage
+
+Tests now cover trusted-intent unknown keys, non-string values, oversized values, and empty intent; impossible evidence classifications; extraction-status contradictions; strict Problem diagnostics fields, types, counts, percentages, and summary relationships; strict Solution diagnostics counts, booleans, percentages, enums, and deterministic mismatches; owning-validator error taxonomy; exact Problem/Solution prompt and validator versions; canonical calibration projection mismatches; and mapper-produced projection compatibility.
+
+### Readiness for Persistence Shadow
+
+This hardening makes the in-memory Artifact validator suitable as the future JSON/JSONB read boundary for Persistence Shadow. Previously accepted contradictory experimental objects may now be rejected without a contract-version bump because no Artifact has been persisted, no UI consumes the contract, and the conceptual schema remains unchanged. Future Persistence Shadow work should add storage ownership, privacy enforcement, idempotent writes, read validation, and safe shadow diagnostics without changing the Artifact contract unless the conceptual schema changes.

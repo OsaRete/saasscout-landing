@@ -1202,9 +1202,7 @@ export function computeSolutionIntelligenceDiagnostics(
       result.existingSolutionAssessment.knownAlternatives.length,
     namedAlternativesWithEvidence:
       result.existingSolutionAssessment.knownAlternatives.filter(
-        (a) =>
-          a.alternativeType === "direct_competitor" &&
-          a.evidenceRefs.length > 0,
+        (a) => a.evidenceRefs.length > 0,
       ).length,
     innovationVerifiedFoundationCount:
       result.innovationAssessment.verifiedFoundation.length,
@@ -1283,4 +1281,21 @@ export function publicSolutionIntelligenceConfigurationFailure() {
     error: "solution_intelligence_configuration_failed",
     message: "Solution Intelligence is temporarily unavailable. Please try again later.",
   };
+}
+
+export class SolutionIntelligenceDiagnosticsValidationError extends Error { readonly path: string; constructor(path = "solutionDiagnostics") { super("Solution Intelligence diagnostics are invalid."); this.name = "SolutionIntelligenceDiagnosticsValidationError"; this.path = path; } }
+function sdRec(v: unknown, path: string): Record<string, unknown> { if (typeof v !== "object" || v === null || Array.isArray(v)) throw new SolutionIntelligenceDiagnosticsValidationError(path); return v as Record<string, unknown>; }
+function sdInt(v: unknown, path: string) { if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) throw new SolutionIntelligenceDiagnosticsValidationError(path); return v; }
+function sdPct(v: unknown, path: string) { if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) throw new SolutionIntelligenceDiagnosticsValidationError(path); return v; }
+function sdBool(v: unknown, path: string) { if (typeof v !== "boolean") throw new SolutionIntelligenceDiagnosticsValidationError(path); return v; }
+export function validateSolutionIntelligenceDiagnostics(value: unknown, result?: SolutionIntelligenceResult): asserts value is SolutionIntelligenceDiagnostics {
+  const d=sdRec(value,"solutionDiagnostics"); const keys=["categoryCount","uniqueCategoryCount","recommendedCategoryPresent","validateFirstConsidered","evidenceGroundedClaimPercentage","inferenceClaimPercentage","independentEvidenceIdsReferenced","invalidReferenceCount","existingAlternativeCount","namedAlternativesWithEvidence","innovationVerifiedFoundationCount","innovationAssumptionCount","criticalUnknownCount","validationReadiness","cheapestNextTest","contradictionReferenceCount"];
+  for (const k of keys) if (!(k in d)) throw new SolutionIntelligenceDiagnosticsValidationError(`solutionDiagnostics.${k}`); for (const k of Object.keys(d)) if (!keys.includes(k)) throw new SolutionIntelligenceDiagnosticsValidationError(`solutionDiagnostics.${k}`);
+  ["categoryCount","uniqueCategoryCount","independentEvidenceIdsReferenced","invalidReferenceCount","existingAlternativeCount","namedAlternativesWithEvidence","innovationVerifiedFoundationCount","innovationAssumptionCount","criticalUnknownCount","contradictionReferenceCount"].forEach(k=>sdInt(d[k],`solutionDiagnostics.${k}`));
+  sdBool(d.recommendedCategoryPresent,"solutionDiagnostics.recommendedCategoryPresent"); sdBool(d.validateFirstConsidered,"solutionDiagnostics.validateFirstConsidered"); sdPct(d.evidenceGroundedClaimPercentage,"solutionDiagnostics.evidenceGroundedClaimPercentage"); sdPct(d.inferenceClaimPercentage,"solutionDiagnostics.inferenceClaimPercentage");
+  if (!(["not_ready","problem_validation_ready","solution_validation_ready","demand_test_ready"] as string[]).includes(String(d.validationReadiness))) throw new SolutionIntelligenceDiagnosticsValidationError("solutionDiagnostics.validationReadiness");
+  if (!(["customer_interviews","email_outreach","survey","landing_page","waitlist","social_post","community_post","concierge_test","manual_service_pilot","prototype_test","pricing_test","competitor_research","additional_evidence_collection"] as string[]).includes(String(d.cheapestNextTest))) throw new SolutionIntelligenceDiagnosticsValidationError("solutionDiagnostics.cheapestNextTest");
+  if ((d.uniqueCategoryCount as number) > (d.categoryCount as number) || (d.namedAlternativesWithEvidence as number) > (d.existingAlternativeCount as number)) throw new SolutionIntelligenceDiagnosticsValidationError("solutionDiagnostics.relationships");
+  if (Math.abs(((d.evidenceGroundedClaimPercentage as number)+(d.inferenceClaimPercentage as number))-1)>0.000001 && ((d.evidenceGroundedClaimPercentage as number)+(d.inferenceClaimPercentage as number))!==0) throw new SolutionIntelligenceDiagnosticsValidationError("solutionDiagnostics.percentages");
+  if (result) { const expected=computeSolutionIntelligenceDiagnostics(result); for (const k of keys) if (d[k] !== (expected as unknown as Record<string, unknown>)[k]) throw new SolutionIntelligenceDiagnosticsValidationError(`solutionDiagnostics.${k}`); }
 }
