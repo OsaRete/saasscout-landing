@@ -175,7 +175,7 @@ The suite requires the disposable local `postgres` user, the expected local Supa
 The suite verifies real database behavior for:
 
 - migration objects: table, RPC, append-only trigger, RLS, unique constraints, retained indexes, removed redundant indexes, direct grants, and RPC execute grants;
-- internal-only read isolation for `anon` and `authenticated`, plus `service_role` RPC/read behavior;
+- internal-only read isolation for `anon`, `authenticated`, and `service_role`, plus `service_role` RPC execution behavior;
 - valid insert status, UUID record ID, Artifact/hash/timestamp echoes, owner, stored JSONB payload, projection columns, and persistence contract version behavior;
 - exact replay equality with stable row count, record ID, timestamp, and stored row;
 - deterministic conflict on idempotency collision with contradictory valid metadata;
@@ -226,6 +226,16 @@ RESET ROLE;
 ```
 
 The test asserts that the first row returned by `SELECT current_user` matches the requested role, and it distinguishes `postgres`, `anon`, `authenticated`, and `service_role`. Failed role-scoped commands terminate that disposable `psql` process, so no pooled or reused session can retain ambiguous role state.
+
+
+#### Local test actor model
+
+The local PostgreSQL integration suite intentionally separates application-boundary behavior from disposable test administration:
+
+- `service_role` represents the application RPC caller. It is used only to execute `public.persist_scan_intelligence_artifact_shadow(...)` and to prove that `anon`/`authenticated` cannot execute that RPC.
+- `postgres` represents the disposable Supabase Local verification administrator. It is used for row counts, stored-row inspection, cleanup/truncation, corruption fixture setup, temporary append-only trigger disable/restore, and direct append-only mutation probes.
+
+Direct SQL table reads by `service_role` are expected to fail with `permission denied for table scan_intelligence_artifacts`. The suite must not grant direct table privileges to `service_role` and must not treat a permission denial as proof that the append-only trigger works; append-only behavior is verified through direct `postgres` update/delete attempts that must fail with `Scan Artifact persistence rows are append-only`.
 
 #### True asynchronous PostgreSQL concurrency
 
