@@ -197,3 +197,61 @@ npx supabase db reset
 ```
 
 Never point `SCAN_ARTIFACT_TEST_DATABASE_URL` at staging, production, or any remote database.
+
+### PR 10.2 corrective local PostgreSQL verification update
+
+This corrective PR keeps production persistence behavior, contract versions, flags, routes, UI, Retrieval, Knowledge Fusion, and remote Supabase configuration unchanged. It narrows the change to local verification correctness for `scan-artifact-persistence@1`.
+
+#### Node test bootstrap for `server-only`
+
+`tests/scan-artifact-persistence-db.ts` and `tests/scan-artifact-persistence-shadow.test.ts` import production Scan modules that intentionally contain the Next.js-only marker `import "server-only"`. Direct Node test execution does not run through Next.js module handling, so the package marker can fail before tests reach PostgreSQL on some local installations.
+
+The `test:scan-artifact-db` and `test:scan-artifact-shadow` package scripts now use a test-only Node loader:
+
+```text
+--loader ./tests/support/server-only-loader.mjs
+```
+
+The loader aliases only the bare `server-only` specifier to an empty local module under `tests/support/`. It is used only by these test commands. Production `import "server-only"` statements remain in place, no fake production dependency is added, and server-only runtime boundaries are not weakened.
+
+#### True role-switch verification
+
+The local DB suite no longer uses `SET LOCAL ROLE` outside a transaction. Role-scoped SQL now uses one disposable `psql` session per check with:
+
+```sql
+SET ROLE <role>;
+SELECT current_user;
+-- verification SQL
+RESET ROLE;
+```
+
+The test asserts that the first row returned by `SELECT current_user` matches the requested role, and it distinguishes `postgres`, `anon`, `authenticated`, and `service_role`. Failed role-scoped commands terminate that disposable `psql` process, so no pooled or reused session can retain ambiguous role state.
+
+#### True asynchronous PostgreSQL concurrency
+
+The real PostgreSQL concurrency checks now launch independent `docker exec ... psql` child processes with asynchronous `spawn` before awaiting either result. Equal concurrent RPC calls must produce one `inserted`, one `replayed`, and one stored row. Conflicting concurrent RPC calls must produce one `inserted`, one `conflict`, and one stored row.
+
+This replaces the previous synchronous child-process helper for the concurrency path. The synchronous helper remains available only for ordinary single-statement setup and assertions.
+
+#### Real corruption classification scope
+
+The suite now exercises the production stored-row validation path instead of merely proving that a corrupted row exists. Production repository validation is exposed as a pure helper, `validateStoredScanArtifactRow()`, and the repository read path uses that helper unchanged. The local DB suite selects the real corrupted PostgreSQL row and asserts that the helper raises `scan_artifact_persistence_corrupt` for:
+
+- malformed payload;
+- Artifact ID mismatch;
+- execution mismatch;
+- hash mismatch;
+- projection mismatch.
+
+This avoids adding local Supabase service-role key requirements while preserving production read-validation semantics.
+
+#### Exact Windows PowerShell command
+
+```powershell
+$env:SCAN_ARTIFACT_TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+npm run test:scan-artifact-db
+```
+
+#### No remote execution warning
+
+Run this suite only against disposable Supabase Local PostgreSQL. It refuses non-local hosts, unexpected ports unless explicitly overridden for local use, non-disposable database names, URL query parameters, and non-`postgres` local users. It does not run `supabase link`, `supabase db push`, remote resets, or automatic database resets, and it must never be pointed at staging or production credentials.
