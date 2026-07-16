@@ -1,7 +1,7 @@
 # Scan Intelligence Artifact
 
 Version: `scan-intelligence-artifact@1`  
-Status: Implemented as an additive, in-memory contract. Persistence is a future PR.
+Status: Implemented as an additive Artifact contract. Optional Persistence Shadow exists under `scan-artifact-persistence@1`; the Artifact contract remains unchanged.
 
 ## Audit summary
 
@@ -18,7 +18,7 @@ Relevant implemented Scan behavior:
 Schema/persistence audit:
 
 - Existing Supabase migrations define Knowledge Evolution and Snapshot persistence schemas/RPCs.
-- No Scan Artifact tables, rows, RPCs, inserts, updates, upserts, storage uploads, or usage-counter mutations exist or are added by this PR.
+- Scan Artifact Persistence Shadow now adds one append-only table and controlled RPC, but only behind a disabled-by-default server flag; legacy Scan persistence, storage uploads, saved Scan behavior, and usage-counter mutations are unchanged.
 - Snapshot contracts are useful patterns but remain Discover-specific; Scan Artifact does not copy Snapshot storage records or persistence identity.
 
 Discrepancies and decisions:
@@ -31,7 +31,7 @@ Discrepancies and decisions:
 
 The Scan Intelligence Artifact is the immutable, deterministic record of one successful Scan intelligence execution. It preserves evidence provenance, grounded/inferred claims, Problem Intelligence, deterministic diagnostics/calibration, Solution Intelligence, validation readiness, processing history, and safe technical versions.
 
-It is designed to become the future unit for result display, historical comparison, Retrieval Shadow Mode, Knowledge Fusion, validation planning, and outcome capture, but this PR keeps it non-persistent.
+It is designed to become the future unit for result display, historical comparison, Retrieval Shadow Mode, Knowledge Fusion, validation planning, and outcome capture, and this PR adds optional Shadow Mode persistence without making persisted rows the current UI source.
 
 ## Contract
 
@@ -76,7 +76,7 @@ The Artifact preserves only the already validated submitted intent fields:
 - `region`
 - `description`
 
-Intent is classified as `private_user_context`. Inferred market/audience remain in Problem Intelligence and are not merged into trusted input. Future persistence must add user ownership and privacy protection.
+Intent is classified as `private_user_context`. Inferred market/audience remain in Problem Intelligence and are not merged into trusted input. Persistence Shadow adds user ownership and privacy protection without embedding owner identity inside the Artifact.
 
 ## Evidence manifest decision
 
@@ -179,15 +179,17 @@ The helper is not integrated into the UI or routes in this PR.
 
 `buildSafeScanArtifactMapperLog()` returns aggregate-only diagnostics: counts, reliability classification, validation readiness, integrity verified, and mapping duration. It excludes claims, evidence IDs, hashes, intent text, alternatives, recommendations, competitors, filenames, and user identity. The pure mapper does not log automatically.
 
-## Compatibility and non-persistence
+## Persistence Shadow compatibility
 
-This PR does not change the Scan page, legacy Analyze Evidence response, Generate Opportunities behavior, Solution Intelligence route response, Supabase writes, saved Scan behavior, usage counters, feature flags, model/provider selection, or public UI.
+`scan-artifact-persistence@1` can persist completed, validated Artifacts in Shadow Mode after experimental workflow completion. Persistence is owner-scoped, append-only, idempotent, validated on read, and isolated from public responses. The persisted row is not the current UI/result source.
 
-No migrations, tables, RPCs, inserts, updates, upserts, storage uploads, Artifact rows, or usage mutations are added.
+This persistence change does not change the Scan page, legacy Analyze Evidence response, Generate Opportunities behavior, Solution Intelligence route response, Supabase writes, saved Scan behavior, usage counters, feature flags, model/provider selection, or public UI.
+
+This PR adds only the Persistence Shadow migration/RPC path; it does not add legacy Scan inserts/updates, upserts, storage uploads, usage mutations, or public-result reads from Artifact rows.
 
 ## Known limitations
 
-- The Artifact is in-memory only.
+- The Artifact contract is unchanged; durable rows exist only when Persistence Shadow is explicitly enabled.
 - Public projection is a helper only and is not route-integrated.
 - Content hashes verify Artifact payload integrity/deduplication context but do not authorize access to private evidence.
 - Replay comparison can compare versions and structured outputs, but exact provider reproduction is not guaranteed.
@@ -197,7 +199,6 @@ No migrations, tables, RPCs, inserts, updates, upserts, storage uploads, Artifac
 
 Planned later PRs may add:
 
-- Scan Artifact Persistence Shadow;
 - database ownership and privacy enforcement;
 - `/results/{scanId}` route migration;
 - Retrieval Shadow Mode;

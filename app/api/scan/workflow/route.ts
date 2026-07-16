@@ -1,6 +1,8 @@
 import { AuthError, requireUser } from "../../_utils/auth";
 import { buildSafeScanWorkflowLog, executeScanWorkflow, isScanWorkflowFailure, scanWorkflowHttpStatusForFailure, type ScanWorkflowAuthorizationContext, type ScanWorkflowInput } from "@/lib/scan/workflow";
 import { preflightScanEvidenceMultipartFiles, ScanEvidenceIngestionError, scanEvidenceHttpStatusForCode, type ScanDiscoverContextInput, type ScanEvidenceFileInput, type ScanExternalSnippetInput } from "@/lib/scan/evidence-ingestion";
+import { mapCompletedScanWorkflowToArtifact } from "@/lib/scan/intelligence-artifact";
+import { buildSafeScanArtifactPersistenceShadowLog, persistAndVerifyScanArtifactShadow, ScanArtifactPersistenceError } from "@/lib/scan/artifact-persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +14,7 @@ const ALLOWED_ITEM = new Set(["title", "content"]);
 const FORBIDDEN_CLIENT_FIELDS = new Set(["userId", "executionId", "status", "allowedEvidenceIds", "derivedAnalysis", "calibration", "diagnostics", "workflowVersion", "technicalContext", "authorization", "authorizationMode"]);
 
 function enabled() { return process.env.SCAN_SERVER_WORKFLOW_ENABLED === "true"; }
+function persistenceShadowEnabled() { return process.env.SCAN_ARTIFACT_PERSISTENCE_SHADOW_ENABLED === "true"; }
 function objectRecord(value: unknown) { return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype); }
 function failInvalid(): never { throw new ScanEvidenceIngestionError("scan_evidence_request_invalid"); }
 function validateKeys(record: Record<string, unknown>, allowed: Set<string>) { for (const key of Object.keys(record)) if (!allowed.has(key) || FORBIDDEN_CLIENT_FIELDS.has(key)) failInvalid(); }
@@ -36,6 +39,19 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") || "";
     const input = contentType.includes("multipart/form-data") ? await parseMultipartScanWorkflowInput(request) : parseJsonScanWorkflowInput(await request.json());
     const result = await executeScanWorkflow(input, authorization);
+    if (persistenceShadowEnabled()) {
+      const started = Date.now();
+      let artifact;
+      try {
+        artifact = mapCompletedScanWorkflowToArtifact(result);
+        const shadow = await persistAndVerifyScanArtifactShadow({ ownerId: String((user as { id?: string }).id ?? ""), artifact });
+        console.info("Scan artifact persistence shadow", buildSafeScanArtifactPersistenceShadowLog({ artifact, status: shadow.verificationStatus, durationMs: Date.now() - started, replayed: shadow.replayed, integrityVerified: true }));
+      } catch (shadowError) {
+        const code = shadowError instanceof ScanArtifactPersistenceError ? shadowError.code : "scan_artifact_persistence_write_failed";
+        const status = code === "scan_artifact_persistence_conflict" ? "conflict" : code === "scan_artifact_persistence_read_failed" ? "read_failed" : code === "scan_artifact_persistence_corrupt" ? "verification_failed" : "write_failed";
+        console.warn("Scan artifact persistence shadow", buildSafeScanArtifactPersistenceShadowLog({ artifact, status, durationMs: Date.now() - started, errorCode: code, integrityVerified: false }));
+      }
+    }
     console.info("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_completed", result }));
     return Response.json(publicSuccess(result));
   } catch (error) {
