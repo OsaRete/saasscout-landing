@@ -1,8 +1,8 @@
 import { AuthError, requireUser } from "../../_utils/auth";
 import { buildSafeScanWorkflowLog, executeScanWorkflow, isScanWorkflowFailure, scanWorkflowHttpStatusForFailure, type ScanWorkflowAuthorizationContext, type ScanWorkflowInput } from "@/lib/scan/workflow";
 import { preflightScanEvidenceMultipartFiles, ScanEvidenceIngestionError, scanEvidenceHttpStatusForCode, type ScanDiscoverContextInput, type ScanEvidenceFileInput, type ScanExternalSnippetInput } from "@/lib/scan/evidence-ingestion";
-import { mapCompletedScanWorkflowToArtifact } from "@/lib/scan/intelligence-artifact";
-import { buildSafeScanArtifactPersistenceShadowLog, persistAndVerifyScanArtifactShadow, ScanArtifactPersistenceError } from "@/lib/scan/artifact-persistence";
+import { createScanArtifactPersistenceAuthorizationContext, type ScanArtifactPersistenceAuthorizationContext } from "@/lib/scan/artifact-persistence";
+import { runScanArtifactPersistenceShadow } from "@/lib/scan/artifact-persistence-shadow-runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +29,6 @@ function authorizationFor(user: { id?: string } | null): ScanWorkflowAuthorizati
 function publicSuccess(workflow: Awaited<ReturnType<typeof executeScanWorkflow>>) { return { success: true, workflow: { version: workflow.version, executionId: workflow.executionId, status: workflow.status, problemIntelligence: workflow.problemIntelligence, problemCalibration: { version: workflow.problemCalibration.version, score10: workflow.problemCalibration.score10, score100: workflow.problemCalibration.score100, scoreBand: workflow.problemCalibration.scoreBand, reliabilityClassification: workflow.problemCalibration.reliabilityClassification }, solutionIntelligence: workflow.solutionIntelligence, evidenceSummary: workflow.evidence, processingHistory: workflow.processingHistory, technicalContext: workflow.technicalContext } }; }
 function publicFailure(failure: import("@/lib/scan/workflow").ScanWorkflowFailureResult) { return { success:false, error:{ code: failure.error.code, stage: failure.error.stage, message: failure.error.message }, execution:{ version:failure.version, executionId:failure.executionId, status:failure.status, processingHistory:failure.processingHistory } }; }
 function unavailable() { return Response.json({ success:false, error:{ code:"scan_workflow_temporarily_unavailable", message:"The Scan workflow is temporarily unavailable." } }, { status: 503 }); }
-
 export async function POST(request: Request) {
   try {
     if (!enabled()) return unavailable();
@@ -39,19 +38,9 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") || "";
     const input = contentType.includes("multipart/form-data") ? await parseMultipartScanWorkflowInput(request) : parseJsonScanWorkflowInput(await request.json());
     const result = await executeScanWorkflow(input, authorization);
-    if (persistenceShadowEnabled()) {
-      const started = Date.now();
-      let artifact;
-      try {
-        artifact = mapCompletedScanWorkflowToArtifact(result);
-        const shadow = await persistAndVerifyScanArtifactShadow({ ownerId: String((user as { id?: string }).id ?? ""), artifact });
-        console.info("Scan artifact persistence shadow", buildSafeScanArtifactPersistenceShadowLog({ artifact, status: shadow.verificationStatus, durationMs: Date.now() - started, replayed: shadow.replayed, integrityVerified: true }));
-      } catch (shadowError) {
-        const code = shadowError instanceof ScanArtifactPersistenceError ? shadowError.code : "scan_artifact_persistence_write_failed";
-        const status = code === "scan_artifact_persistence_conflict" ? "conflict" : code === "scan_artifact_persistence_read_failed" ? "read_failed" : code === "scan_artifact_persistence_corrupt" ? "verification_failed" : "write_failed";
-        console.warn("Scan artifact persistence shadow", buildSafeScanArtifactPersistenceShadowLog({ artifact, status, durationMs: Date.now() - started, errorCode: code, integrityVerified: false }));
-      }
-    }
+    let persistenceAuthorization: ScanArtifactPersistenceAuthorizationContext | null = null;
+    try { persistenceAuthorization = createScanArtifactPersistenceAuthorizationContext(user as { id?: string }); } catch { persistenceAuthorization = null; }
+    await runScanArtifactPersistenceShadow({ enabled:persistenceShadowEnabled(), authorization:persistenceAuthorization, completedWorkflow:result });
     console.info("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_completed", result }));
     return Response.json(publicSuccess(result));
   } catch (error) {
