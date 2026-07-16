@@ -121,3 +121,79 @@ Manual SQL verification should cover migration application, RPC compilation, app
 ## Compatibility
 
 The persisted Artifact still does not influence current Scan results, opportunity generation, exactly-three opportunity behavior, displayed score, plan checks, usage increments, saved Scan behavior, result pages, UI, legacy routes, Retrieval, Knowledge Fusion, validation campaigns, outcome capture, payments, queues, retries, backfills, or public result sourcing. `scan-artifact-persistence@1`, `scan-intelligence-artifact@1`, and `scan-workflow@1` remain unchanged.
+
+## PR 10.2 local PostgreSQL integration verification
+
+PR 10.2 adds an opt-in Supabase Local verification suite for `scan-artifact-persistence@1`. This suite is intentionally separate from `npm run test` and is intended only for a disposable local database. It does not enable Scan feature flags, does not use production or staging credentials, does not run `supabase link`, and does not run `supabase db push`.
+
+### Verification types
+
+- **Source assertions** remain in `tests/scan-artifact-persistence-shadow.test.ts` for migration text, route isolation, and compatibility checks.
+- **Mock/repository tests** remain in `tests/scan-artifact-persistence-shadow.test.ts` for idempotency derivation, replay/conflict mapping, read corruption mapping, safe logging, and route Shadow helper behavior.
+- **Local PostgreSQL integration tests** live in `tests/scan-artifact-persistence-db.ts` and verify real Supabase Local database behavior through `psql` inside the local Supabase PostgreSQL container.
+
+### Prerequisites
+
+- Docker Desktop running.
+- Supabase CLI available through `npx supabase`.
+- A clean local Supabase database with migrations applied.
+- The local PostgreSQL container for this project, normally `supabase_db_saasscout-landing`.
+
+Windows Docker recovery if Supabase Local becomes stuck:
+
+```powershell
+wsl --shutdown
+# Restart Docker Desktop, then run the start/reset commands again.
+```
+
+Studio and Analytics may be disabled locally for Windows compatibility. The integration suite only requires the local PostgreSQL container.
+
+### Start, reset, and run
+
+```powershell
+npx supabase start
+npx supabase status
+npx supabase db reset
+$env:SCAN_ARTIFACT_TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+npm run test:scan-artifact-db
+```
+
+The test command performs a preflight check for PostgreSQL reachability, migration `20260716000000`, `public.scan_intelligence_artifacts`, and `public.persist_scan_intelligence_artifact_shadow(...)`. If the database is not ready, it prints safe local instructions and exits. It never resets the database automatically.
+
+### Local URL safety
+
+`SCAN_ARTIFACT_TEST_DATABASE_URL` is validated before any SQL runs. The suite refuses non-local hosts and accepts only `127.0.0.1`, `localhost`, or `host.docker.internal`. The default documented local URL is:
+
+```text
+postgresql://postgres:postgres@127.0.0.1:54322/postgres
+```
+
+The suite requires the disposable local `postgres` user, the expected local Supabase port unless explicitly overridden with `SCAN_ARTIFACT_TEST_DATABASE_PORT`, and a local database name such as `postgres`. URL query parameters, including unexpected SSL settings, are rejected. The command prints only the local host, port, and safe status/error classifications; it does not print full connection strings, passwords, keys, JWT secrets, owner IDs, Artifact IDs, hashes, or raw payloads.
+
+### Real PostgreSQL coverage
+
+The suite verifies real database behavior for:
+
+- migration objects: table, RPC, append-only trigger, RLS, unique constraints, retained indexes, removed redundant indexes, direct grants, and RPC execute grants;
+- internal-only read isolation for `anon` and `authenticated`, plus `service_role` RPC/read behavior;
+- valid insert status, UUID record ID, Artifact/hash/timestamp echoes, owner, stored JSONB payload, projection columns, and persistence contract version behavior;
+- exact replay equality with stable row count, record ID, timestamp, and stored row;
+- deterministic conflict on idempotency collision with contradictory valid metadata;
+- scalar/JSONB mismatch rejection for identity, versions, hash, counts, scores, reliability, readiness, and recommended category;
+- append-only update/delete denial;
+- owner-scoped read isolation and controlled corrupt-row fixture probes using local-only trigger disable/restore;
+- real concurrent equal and conflicting RPC calls using separate `psql` executions against PostgreSQL advisory-lock behavior.
+
+### What remains unverified
+
+This local suite does not verify remote Supabase deployment, production/staging credentials, public durable result routes, UI migration, Retrieval, Knowledge Fusion, validation campaigns, outcome capture, usage behavior, queues, retries, backfills, Artifact editing, or Artifact deletion APIs. Persistence remains disabled by default after this verification phase.
+
+### Cleanup/reset guidance
+
+Tests use synthetic owner UUIDs and deterministic synthetic Artifacts. Each test truncates `public.scan_intelligence_artifacts` in the disposable local database; corruption probes temporarily disable the append-only trigger only inside the local test database and restore it in `finally`. Because this is test-only privileged cleanup, run the suite only against Supabase Local. To return to a completely clean state, run:
+
+```powershell
+npx supabase db reset
+```
+
+Never point `SCAN_ARTIFACT_TEST_DATABASE_URL` at staging, production, or any remote database.
