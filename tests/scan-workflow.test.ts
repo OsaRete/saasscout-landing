@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
-import { executeScanWorkflow, buildSafeScanWorkflowLog, buildDerivedProblemContext, isScanWorkflowFailure, validateScanWorkflowIntent, ScanWorkflowRecorder, TEST_SCAN_WORKFLOW_AUTHORIZATION, type ScanWorkflowDependencies } from "../lib/scan/workflow.ts";
+import { executeScanWorkflow, buildSafeScanWorkflowLog, buildDerivedProblemContext, isScanWorkflowFailure, validateScanWorkflowIntent, ScanWorkflowRecorder, type ScanWorkflowDependencies, type ScanWorkflowAuthorizationContext } from "../lib/scan/workflow.ts";
+const TEST_SCAN_WORKFLOW_AUTHORIZATION: ScanWorkflowAuthorizationContext = Object.freeze({ authenticated: true, authorizationMode: "internal_user" });
 import { validateAnalyzeEvidenceOutput } from "../lib/scan/output-validation.ts";
 import { validateSolutionIntelligenceOutput } from "../lib/scan/solution-intelligence.ts";
 import { ingestScanEvidence } from "../lib/scan/evidence-ingestion.ts";
