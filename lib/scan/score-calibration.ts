@@ -88,3 +88,17 @@ export function buildScanCalibrationShadowLog(input: { route: "analyze-evidence"
   if (input.route === "analyze-evidence") { const d = input.calibration.confidence.diagnostics; return Object.freeze({ event: "scan_score_calibration_shadow", route: input.route, calibrationVersion: d.calibrationVersion, model: input.model, promptVersion: input.promptVersion, modelScore10: d.originalModelScore10, calibratedScore10: d.calibratedScore10, absoluteDelta10: d.absoluteDelta10, scoreBand: d.scoreBand, reliabilityClassification: d.reliabilityClassification, positiveSignalCount: d.positiveSignalCount, penaltyCount: d.penaltyCount, durationMs: input.durationMs }); }
   return Object.freeze({ event: "scan_score_calibration_shadow", route: input.route, model: input.model, promptVersion: input.promptVersion, ...input.calibration.aggregateDiagnostics, durationMs: input.durationMs });
 }
+
+export class ScanCalibrationValidationError extends Error { readonly path: string; constructor(path = "calibration") { super("Scan calibration projection is invalid."); this.name = "ScanCalibrationValidationError"; this.path = path; } }
+export function projectScanCalibrationQuality(score: Pick<ScanCalibratedScore,"score01"|"score10"|"score100"|"scoreBand"|"reliabilityClassification"|"modelScore10"|"absoluteDelta10">) { return Object.freeze({ calibratedSupportScore: score.score01, score10: score.score10, score100: score.score100, scoreBand: score.scoreBand, reliabilityClassification: score.reliabilityClassification, modelScoreComparison: Object.freeze({ modelScore10: score.modelScore10, absoluteDelta10: score.absoluteDelta10 }) }); }
+export function validateScanCalibrationQualityProjection(value: unknown): void {
+  const v=value as Record<string, unknown>; const round=(n:number)=>Number(n.toFixed(2));
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new ScanCalibrationValidationError();
+  const score01=v.calibratedSupportScore; if (typeof score01!=="number"||!Number.isFinite(score01)||score01<0||score01>1) throw new ScanCalibrationValidationError("quality.calibratedSupportScore");
+  const band = score01 < .2 ? "very_low" : score01 < .4 ? "low" : score01 < .7 ? "moderate" : score01 < .85 ? "high" : "very_high";
+  if (v.score10!==round(score01*10)||v.score100!==round(score01*100)||v.scoreBand!==band) throw new ScanCalibrationValidationError("quality.score");
+  if (!["insufficient_evidence","single_source","limited_support","corroborated","contradicted"].includes(String(v.reliabilityClassification))) throw new ScanCalibrationValidationError("quality.reliabilityClassification");
+  const m=v.modelScoreComparison as Record<string, unknown>; if (!m || typeof m!=="object" || Array.isArray(m)) throw new ScanCalibrationValidationError("quality.modelScoreComparison");
+  if (typeof m.modelScore10!=="number"||!Number.isFinite(m.modelScore10)||m.modelScore10<0||m.modelScore10>10) throw new ScanCalibrationValidationError("quality.modelScoreComparison.modelScore10");
+  if (m.absoluteDelta10!==round(Math.abs((v.score10 as number)-m.modelScore10))) throw new ScanCalibrationValidationError("quality.modelScoreComparison.absoluteDelta10");
+}
