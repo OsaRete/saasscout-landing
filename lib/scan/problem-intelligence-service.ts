@@ -12,34 +12,60 @@ export const PROBLEM_INTELLIGENCE_PROMPT_VERSION = "scan-analyze-evidence@1" as 
 export const SCAN_MODEL_ID = "openai/gpt-4.1-mini" as const;
 
 type ChatClient = Pick<OpenAI["chat"]["completions"], "create">;
-export type ProblemIntelligenceFailureKind = "generation" | "json" | "validation" | "grounding" | "configuration";
+export type ProblemIntelligenceFailureKind = "generation" | "json" | "validation" | "grounding" | "diagnostics" | "calibration" | "configuration";
 export class ProblemIntelligenceServiceError extends Error { readonly kind: ProblemIntelligenceFailureKind; readonly code: string; constructor(kind: ProblemIntelligenceFailureKind, code: string) { super("Problem Intelligence could not be safely generated."); this.name = "ProblemIntelligenceServiceError"; this.kind = kind; this.code = code; } }
 export type ProblemIntelligenceServiceInput = Readonly<{ intent: TrustedUserIntent; evidence: readonly EvidenceEnvelopeInput[]; allowedEvidenceIds: readonly string[]; model?: string; client?: ChatClient; now?: () => number }>;
-export type ProblemIntelligenceServiceResult = Readonly<{ output: AnalyzeEvidenceOutput; diagnostics: ScanQualityDiagnostics; calibration: ScanCalibratedScore; technicalMetadata: Readonly<{ promptVersion: typeof PROBLEM_INTELLIGENCE_PROMPT_VERSION; model: string; validatorVersion: "scan-output-validation@1"; calibrationVersion: "scan-calibration@1" }>; durationMs: number }>;
+export type ProblemIntelligenceModelOutput = string;
+export type ProblemIntelligenceTechnicalMetadata = Readonly<{ promptVersion: typeof PROBLEM_INTELLIGENCE_PROMPT_VERSION; model: string; validatorVersion: "scan-output-validation@1"; calibrationVersion: "scan-calibration@1" }>;
+export type ProblemIntelligenceServiceResult = Readonly<{ output: AnalyzeEvidenceOutput; diagnostics: ScanQualityDiagnostics; calibration: ScanCalibratedScore; technicalMetadata: ProblemIntelligenceTechnicalMetadata; durationMs: number }>;
 
 export function createOpenRouterClient() { return new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1", defaultHeaders: { "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "https://trysaasscout.com", "X-Title": "SaaSScout" } }); }
 
 function sourceKindForDiagnostics(kind: EvidenceEnvelopeInput["sourceKind"]): ScanQualityDiagnosticEvidence["sourceKind"] { return kind === "uploaded_document" || !kind ? "pasted_evidence" : kind; }
 
-export async function generateProblemIntelligence(input: ProblemIntelligenceServiceInput): Promise<ProblemIntelligenceServiceResult> {
-  const startedAt = input.now?.() ?? Date.now();
+export async function generateProblemIntelligenceModelOutput(input: ProblemIntelligenceServiceInput): Promise<ProblemIntelligenceModelOutput> {
   const model = input.model ?? SCAN_MODEL_ID;
   const client = input.client ?? createOpenRouterClient().chat.completions;
   if (!process.env.OPENROUTER_API_KEY && !input.client) throw new ProblemIntelligenceServiceError("configuration", "provider_configuration_missing");
-  let content = "";
   try {
     const completion = await client.create({ model, messages: [{ role: "system", content: "You analyze evidence and return structured SaaS market intelligence as valid JSON only." }, { role: "user", content: buildAnalyzeEvidencePrompt({ intent: input.intent, evidence: [...input.evidence] }) }], temperature: 0.25, max_tokens: 1200 });
-    content = String(completion.choices[0]?.message?.content ?? "");
+    return String(completion.choices[0]?.message?.content ?? "");
   } catch { throw new ProblemIntelligenceServiceError("generation", "provider_generation_failed"); }
+}
+
+export function validateProblemIntelligenceModelOutput(input: ProblemIntelligenceServiceInput, modelOutput: ProblemIntelligenceModelOutput): AnalyzeEvidenceOutput {
   try {
-    const parsed = parseStrictModelJson(content);
-    const output = validateAnalyzeEvidenceOutput(parsed, { evidenceIds: input.allowedEvidenceIds });
-    const diagnostics = computeScanQualityDiagnostics({ output, evidence: input.evidence.map((item) => ({ evidenceId: item.evidenceId ?? "scan-user-evidence", sourceKind: sourceKindForDiagnostics(item.sourceKind) })) });
-    const calibration = calibrateAnalyzeEvidenceConfidence({ output, diagnostics }).confidence;
-    return Object.freeze({ output, diagnostics, calibration, technicalMetadata: Object.freeze({ promptVersion: PROBLEM_INTELLIGENCE_PROMPT_VERSION, model, validatorVersion: "scan-output-validation@1" as const, calibrationVersion: calibration.version }), durationMs: Math.max(0, (input.now?.() ?? Date.now()) - startedAt) });
+    const parsed = parseStrictModelJson(modelOutput);
+    return validateAnalyzeEvidenceOutput(parsed, { evidenceIds: input.allowedEvidenceIds });
   } catch (error) {
     if (error instanceof ModelJsonError) throw new ProblemIntelligenceServiceError("json", error.code);
     if (error instanceof ScanOutputValidationError) throw new ProblemIntelligenceServiceError(error.code.startsWith("model_grounding_") ? "grounding" : "validation", error.code);
     throw error;
   }
+}
+
+export function computeProblemIntelligenceDiagnostics(input: ProblemIntelligenceServiceInput, output: AnalyzeEvidenceOutput): ScanQualityDiagnostics {
+  try {
+    return computeScanQualityDiagnostics({ output, evidence: input.evidence.map((item) => ({ evidenceId: item.evidenceId ?? "scan-user-evidence", sourceKind: sourceKindForDiagnostics(item.sourceKind) })) });
+  } catch { throw new ProblemIntelligenceServiceError("diagnostics", "problem_diagnostics_failed"); }
+}
+
+export function computeProblemIntelligenceCalibration(output: AnalyzeEvidenceOutput, diagnostics: ScanQualityDiagnostics): ScanCalibratedScore {
+  try {
+    return calibrateAnalyzeEvidenceConfidence({ output, diagnostics }).confidence;
+  } catch { throw new ProblemIntelligenceServiceError("calibration", "problem_calibration_failed"); }
+}
+
+export function problemIntelligenceTechnicalMetadata(input: ProblemIntelligenceServiceInput, calibration: ScanCalibratedScore): ProblemIntelligenceTechnicalMetadata {
+  return Object.freeze({ promptVersion: PROBLEM_INTELLIGENCE_PROMPT_VERSION, model: input.model ?? SCAN_MODEL_ID, validatorVersion: "scan-output-validation@1" as const, calibrationVersion: calibration.version });
+}
+
+export async function generateProblemIntelligence(input: ProblemIntelligenceServiceInput): Promise<ProblemIntelligenceServiceResult> {
+  const startedAt = input.now?.() ?? Date.now();
+  let raw: ProblemIntelligenceModelOutput | undefined = await generateProblemIntelligenceModelOutput(input);
+  const output = validateProblemIntelligenceModelOutput(input, raw);
+  raw = undefined;
+  const diagnostics = computeProblemIntelligenceDiagnostics(input, output);
+  const calibration = computeProblemIntelligenceCalibration(output, diagnostics);
+  return Object.freeze({ output, diagnostics, calibration, technicalMetadata: problemIntelligenceTechnicalMetadata(input, calibration), durationMs: Math.max(0, (input.now?.() ?? Date.now()) - startedAt) });
 }
