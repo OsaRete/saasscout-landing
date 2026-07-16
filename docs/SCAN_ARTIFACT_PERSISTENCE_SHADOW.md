@@ -1,96 +1,123 @@
 # Scan Artifact Persistence Shadow
 
 Version: `scan-artifact-persistence@1`  
-Status: Implemented in Shadow Mode only.
+Status: Implemented in Shadow Mode only. Flags remain disabled by default.
 
-## Audit summary
+## PR 10.1 operational hardening summary
 
-The audit treated code/tests as behavior, Scan docs as architectural intent, and Supabase migrations/RPCs as persistence truth. Current production Scan routes still write no Artifact rows and legacy usage counters are unchanged. The experimental `scan-workflow@1` route creates an in-memory `scan-intelligence-artifact@1`; this PR adds optional shadow persistence after completion only.
+PR 10.1 keeps the existing Artifact, workflow, UI, and public response contracts unchanged while hardening the database boundary before controlled internal Shadow execution. The audit found that code/tests are behavioral truth, this document captures architectural intent, and `supabase/migrations/20260716000000_create_scan_artifact_persistence_shadow.sql` is persistence truth.
 
-Snapshot persistence patterns were classified as follows:
+Confirmed discrepancies resolved in this PR:
 
-- Safely reusable: server-only data access modules, stable canonical serialization before hashing, append-only tables, replay/conflict semantics, controlled error mapping, safe aggregate logs, source-level migration assertions.
-- Reusable after adaptation: idempotency and conflict handling. Scan uses owner-scoped Artifact/execution identity rather than Discover Snapshot/discovery identity, and stores one canonical JSONB Artifact plus safe projections rather than decomposed Snapshot records.
-- Discover-specific: Snapshot section/evidence/provenance table decomposition, Snapshot storage mapping keys, Discover lifecycle states, Retrieval candidate repositories, and Discover persistence quality gates.
+- The service-role RPC cannot authenticate through `auth.uid()` because it runs through the server admin client. Ownership is now modeled honestly as a route-derived internal authorization context, not as database-authenticated end-user identity.
+- Pure Shadow Mode now uses internal-only reads. Authenticated direct table `SELECT` is revoked and no owner-select policy is created until a reviewed durable result API exists.
+- SQL cross-checks RPC scalar parameters against the JSONB Artifact payload before insert.
+- Replay requires full deterministic row/payload/projection equality, not only identity and hash.
+- Owner-scoped unique races are re-read and mapped to `replayed` or `conflict` deterministically.
+- Redundant unique-backed owner/artifact and owner/execution indexes were removed.
+- Stored read records no longer claim `replayed`; replay remains a write outcome only.
+- Safe logs use the canonical Artifact `quality.scoreBand` and bounded duration normalization.
 
-No disagreement required changing legacy behavior. Snapshot RPCs use service-role writes without user ownership because Discover persistence is system-owned; Scan Artifact Shadow adds explicit `owner_id` and authenticated route-derived ownership.
+## Service-role ownership boundary
 
-## Contract and identities
+Persistence is executed only by the server-admin repository through `persist_scan_intelligence_artifact_shadow`, which is granted only to `service_role`. The RPC does **not** execute as the end-user JWT, cannot use `auth.uid()` as the owner source, and does not independently authenticate the owner. It trusts a server route-derived owner supplied by the internal repository.
 
-The persistence contract is `scan-artifact-persistence@1`. It does not bump `scan-intelligence-artifact@1` or `scan-workflow@1`.
+The repository now requires `ScanArtifactPersistenceAuthorizationContext`:
 
-Identity separation:
+```ts
+type ScanArtifactPersistenceAuthorizationContext = Readonly<{
+  authenticatedOwnerId: string;
+  source: "require_user";
+}>;
+```
 
-- Artifact identity: `artifactId`, `execution.executionId`, and `integrity.artifactHash`.
-- Database identity: table row UUID.
-- Idempotency identity: `scan-artifact-shadow:v1:<sha256>`, derived server-side from persistence version, Artifact version, Artifact ID, workflow execution ID, and a one-way hash of owner scope.
+This context is constructed only from `requireUser()`, is separate from request body and Artifact payloads, validates the owner as a UUID, accepts no caller-provided idempotency key, accepts no owner field from HTTP input, and never returns or logs owner identity publicly.
 
-The idempotency key never uses raw owner ID, client input, or Artifact hash alone.
+## Shadow read-isolation policy
 
-## Schema, constraints, indexes, RLS
+Chosen policy: internal-only reads during pure Shadow Mode.
 
-Migration `20260716000000_create_scan_artifact_persistence_shadow.sql` adds `scan_intelligence_artifacts` with owner, Artifact metadata, canonical JSONB payload, safe projections, and `created_at`. Constraints enforce owner-scoped uniqueness for Artifact ID, execution ID, and idempotency key; bounded ID formats; SHA-256 hash format; version values; non-negative source counts; and score ranges.
+- RLS remains enabled.
+- `anon` and `authenticated` receive no table privileges.
+- No authenticated owner-select policy is active yet.
+- Server-admin repository reads remain explicitly owner-filtered for read-after-write verification.
+- Public durable reads are deferred until a reviewed result API exists.
 
-Indexes are limited to expected future reads: owner + created date, owner + Artifact ID, owner + execution ID, and Artifact version.
+## SQL payload and metadata consistency
 
-RLS is enabled. Authenticated users can select only rows where `owner_id = auth.uid()`. Direct authenticated inserts, updates, and deletes are not granted. A trigger rejects updates and deletes so rows are append-only even through privileged accidental mutation paths.
+The RPC validates bounded scalar fields and cross-checks the JSONB Artifact payload before insert. It verifies object shape, version, Artifact ID, execution ID, workflow version, canonicalization version, Artifact hash, evidence summary counts, quality scores, reliability classification, validation readiness, and recommended category. This is intentionally not a duplicate of the full TypeScript Artifact validator; TypeScript remains the complete contract validator and SQL is the persistence boundary guard.
 
-## RPC/repository architecture
+The RPC also validates owner existence, Artifact/execution ID formats and relationship, idempotency key format, hash format, count ranges, and score ranges. Invalid inputs return a bounded status and are mapped by the repository to safe persistence errors without exposing SQL text, SQLSTATE, constraint names, Supabase messages, or owner identity.
 
-Persistence uses a controlled server repository in `lib/scan/artifact-persistence.ts` and a service-role RPC `persist_scan_intelligence_artifact_shadow`. The route obtains `ownerId` from `requireUser`; owner is never read from the request body and is never embedded in or returned by public Artifact projections.
+## Replay, race, and conflict behavior
 
-The RPC obtains the owner from a scalar supplied by the server repository because the current service-role admin client does not execute with the end-user JWT. This is a deliberate adaptation of the audited Snapshot pattern. Direct client execution is revoked; only `service_role` can call it.
+Replay now requires the persisted row to match the incoming write across identity, versions, canonicalization, hash, JSONB payload structural equality, and deterministic projection columns. If any value differs under the same owner-scoped identity, the RPC returns `conflict` rather than replaying or updating.
 
-## Write, replay, conflict, and read validation
+For owner-scoped unique races, the RPC re-reads the owner row and classifies it as:
 
-Before writing, the repository validates the Artifact, verifies integrity, canonicalizes the payload, derives the idempotency key, and sends only bounded metadata plus JSONB payload to the RPC.
+- `replayed` when all persisted values match;
+- `conflict` when any persisted value differs.
 
-Replay behavior:
+Rows are append-only. Updates and deletes remain blocked by trigger.
 
-- Same owner + same Artifact execution + same hash returns `replayed` and writes no row.
-- Same idempotency identity + different Artifact ID/execution/hash returns a controlled conflict and leaves the existing row unchanged.
-- Different owner scope derives a different idempotency identity.
+## Index decision
 
-Reads by Artifact ID or execution ID are owner-scoped. The repository parses JSON, calls `parseAndValidateScanIntelligenceArtifact()`, verifies integrity, compares row metadata and projections against the payload, and treats disagreement as stored-data corruption. It never repairs or overwrites rows.
+The unique constraints already create indexes for:
 
-## Shadow route integration
+- `owner_id + artifact_id`;
+- `owner_id + execution_id`;
+- `owner_id + idempotency_key`.
 
-The experimental workflow route sequence is:
+Therefore explicit duplicate owner/artifact and owner/execution indexes were removed. The owner/created-at index remains for future owner-scoped operational inspection, and the Artifact-version index remains as a low-cardinality rollout/audit helper while the contract is young.
 
-1. feature flag and allowlist checks;
-2. authenticated request parsing;
-3. execute `scan-workflow@1`;
-4. map and validate `scan-intelligence-artifact@1`;
-5. if `SCAN_ARTIFACT_PERSISTENCE_SHADOW_ENABLED=true`, attempt persistence;
-6. read after write and compare canonical serialized Artifact;
-7. return the existing workflow response shape.
+## Read-result semantics
 
-Default is disabled. When disabled, no persistence repository call or database access occurs. Shadow failures are isolated: workflow success still returns success, and only safe internal diagnostics are logged.
+`ScanArtifactPersistenceResult` represents only write outcomes: `inserted` or `replayed`. `ScanArtifactStoredRecord` represents reads and contains only record ID, Artifact ID, Artifact hash, persisted timestamp, and Artifact. Read functions never report `status: replayed` or `replayed: true`; replay is only reported when a write actually replayed.
 
-## Safe logs and monitoring
+Read validation independently detects not found, Supabase read failure, malformed payload, invalid Artifact integrity, row/payload identity mismatch, execution mismatch, version mismatch, hash mismatch, projection mismatch, malformed record ID, and malformed timestamp. Corrupt stored data maps to `scan_artifact_persistence_corrupt` and is never repaired in place.
 
-`buildSafeScanArtifactPersistenceShadowLog()` emits aggregate-only diagnostics: event, versions, status, duration, source counts, score band, reliability, validation readiness, recommended category, processing stage count, integrity flag, replay flag, and safe error code.
+## Safe logging
 
-It excludes owner ID, Artifact ID, execution ID, idempotency key, hashes, evidence IDs, claims, intent, competitors, recommendations, raw payload, and Supabase/SQL details.
+Safe logs emit bounded aggregate diagnostics only. They use `artifact.quality.scoreBand` directly, normalize non-finite or negative durations to `0`, and emit only controlled statuses and safe error codes. Logs exclude owner ID, Artifact ID, execution ID, idempotency key, hashes, evidence IDs, claims, intent text, competitors, recommendations, raw payloads, Supabase errors, SQLSTATEs, and constraint names.
 
-Minimum monitoring before broader enablement: attempted writes, inserted, replayed, conflicts, write failures, read failures, verification failures, average and p95 duration if available, corrupt-row count, and flag-disabled count. No external analytics vendor is added.
+## Route Shadow helper
 
-## Deployment and non-goals
+`runScanArtifactPersistenceShadow()` is a server-only helper that executes only after a completed workflow. Inputs are the enabled decision, verified persistence authorization context, completed workflow, injected repository, and optional clock/logger. Outputs are `disabled`, `inserted_verified`, `replay_verified`, or controlled failure statuses. The route ignores this result for the public response and never exposes Artifact or persistence metadata.
 
-Deployment order:
+## Verification scope
 
-1. deploy the additive migration;
-2. deploy code with the shadow flag false;
-3. enable for internal users only;
-4. monitor safe logs and verification outcomes;
-5. expand carefully.
+Current automated coverage is deliberately labeled by scope:
 
-Non-goals: current UI migration, public Artifact result routes, legacy flow removal, Artifact as response source, editing/deletion UI, retention automation, Retrieval, Knowledge Fusion, validation campaigns, outcome capture, Feedback Moat, payment changes, usage-counter changes, model/provider changes, retries, queues, background jobs, and backfill.
+- Source-asserted: migration grants/RLS/index policy and route compatibility assertions.
+- Mock-tested/repository-consistent: idempotency derivation, insert/replay/read verification, safe conflict mapping, read corruption mapping, RPC response validation, safe logging, route Shadow helper behavior, and repository-level Promise concurrency semantics.
+- PostgreSQL-tested: not executed in this CI run. The Snapshot persistence docs record prior local Supabase conventions, but Scan Artifact Shadow still requires opt-in local Supabase verification before enabling.
+- Not yet verified: remote Supabase deployment, real PostgreSQL concurrent unique-race behavior for this migration, public durable result reads, Retrieval, Knowledge Fusion, UI migration, validation campaigns, outcome capture, queues, retries, and backfills.
 
-Retention/deletion is a future privileged policy. Account deletion or regulatory deletion must be handled by a separate controlled process.
+Opt-in local database verification command once Supabase local is available:
 
-## Compatibility and limitations
+```bash
+supabase db reset && npm run test -- tests/scan-artifact-persistence-shadow.test.ts
+```
 
-The persisted Artifact does not influence current Scan results, opportunity generation, exactly-three opportunity behavior, displayed score, plan checks, usage increments, saved Scan behavior, result pages, UI, or legacy routes. Read-after-write exists only for verification.
+Manual SQL verification should cover migration application, RPC compilation, append-only update/delete denial, authenticated direct insert denial, authenticated direct select denial, anonymous denial, service-role RPC insert, replay, conflict, cross-owner repository read isolation, and payload mismatch rejection.
 
-Known limitations: no public durable result read, no UI source migration, no automated retention/deletion, and no Retrieval/Knowledge Fusion consumption yet.
+## Rollout checklist
+
+1. Apply migration in staging/local.
+2. Execute database integration verification.
+3. Confirm service-role environment exists.
+4. Keep both flags false.
+5. Add one internal user to workflow allowlist.
+6. Enable workflow flag.
+7. Execute workflow without persistence.
+8. Enable persistence-shadow flag.
+9. Execute one controlled Scan.
+10. Verify one row.
+11. Replay same execution and verify no duplicate.
+12. Inspect safe logs.
+13. Test a controlled Shadow failure.
+14. Keep public/legacy flow unchanged.
+
+## Compatibility
+
+The persisted Artifact still does not influence current Scan results, opportunity generation, exactly-three opportunity behavior, displayed score, plan checks, usage increments, saved Scan behavior, result pages, UI, legacy routes, Retrieval, Knowledge Fusion, validation campaigns, outcome capture, payments, queues, retries, backfills, or public result sourcing. `scan-artifact-persistence@1`, `scan-intelligence-artifact@1`, and `scan-workflow@1` remain unchanged.
