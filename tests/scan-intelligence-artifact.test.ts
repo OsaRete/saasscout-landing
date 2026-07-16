@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
-import { executeScanWorkflow, TEST_SCAN_WORKFLOW_AUTHORIZATION, type ScanWorkflowDependencies } from "../lib/scan/workflow.ts";
+import { createHash } from "node:crypto";
+import { executeScanWorkflow, type ScanWorkflowDependencies, type ScanWorkflowAuthorizationContext } from "../lib/scan/workflow.ts";
+const TEST_SCAN_WORKFLOW_AUTHORIZATION: ScanWorkflowAuthorizationContext = Object.freeze({ authenticated: true, authorizationMode: "internal_user" });
 import { validateAnalyzeEvidenceOutput } from "../lib/scan/output-validation.ts";
 import { validateSolutionIntelligenceOutput } from "../lib/scan/solution-intelligence.ts";
 import { ingestScanEvidence } from "../lib/scan/evidence-ingestion.ts";
 import { computeScanQualityDiagnostics } from "../lib/scan/quality-diagnostics.ts";
 import { calibrateAnalyzeEvidenceConfidence } from "../lib/scan/score-calibration.ts";
-import { buildSafeScanArtifactMapperLog, canonicalSerializeScanIntelligenceArtifact, mapCompletedScanWorkflowToArtifact, scanScanIntelligenceArtifactPrivacy, toPublicScanIntelligenceArtifact, validateScanIntelligenceArtifact, verifyScanIntelligenceArtifactIntegrity } from "../lib/scan/intelligence-artifact.ts";
+import { buildSafeScanArtifactMapperLog, canonicalSerializeScanIntelligenceArtifact, mapCompletedScanWorkflowToArtifact, scanScanIntelligenceArtifactPrivacy, toPublicScanIntelligenceArtifact, validateScanIntelligenceArtifact, verifyScanIntelligenceArtifactIntegrity, parseAndValidateScanIntelligenceArtifact, ScanIntelligenceArtifactValidationError } from "../lib/scan/intelligence-artifact.ts";
 
 const claim = (id: string) => ({ text:"Supported by evidence.", groundingMode:"evidence", evidenceRefs:[{ evidenceId:id, relevance:"primary" }] });
 const inf = { text:"Inferred from evidence.", groundingMode:"inference", evidenceRefs:[], inferenceReason:"This is inferred from evidence gaps." };
@@ -32,3 +34,55 @@ test("integrity detects nested, history, solution and algorithm mutations", asyn
 test("structural privacy guard, public projection, safe log and compatibility", async () => { const { artifact }=await makeArtifact(); for (const key of ["userId","email","authorization","authorizationMode","accessToken","refreshToken","apiKey","providerRequestId","rawModelOutput","rawOutput","prompt","fileBuffer","bytes","storagePath","signedUrl"]) assert.throws(()=>scanScanIntelligenceArtifactPrivacy({ [key]:"x" })); const pub=toPublicScanIntelligenceArtifact(artifact); const ps=JSON.stringify(pub); assert.equal(ps.includes("contentHash"), false); assert.equal(ps.includes("privacyClass"), false); assert.equal(ps.includes("userId"), false); assert.equal(ps.includes("authorization"), false); assert.equal(ps.includes(artifact.integrity.artifactHash), false); const log=buildSafeScanArtifactMapperLog({ artifact, mappingDurationMs:5 }); const ls=JSON.stringify(log); for (const token of ["pasted-evidence-001","Submitted market","Supported by evidence","Generic reporting tool","validate_first",artifact.integrity.artifactHash]) assert.equal(ls.includes(token), false); assert.equal(readdirSync("supabase/migrations").some(f=>f.includes("artifact")), false); assert.doesNotMatch(readFileSync("lib/scan/intelligence-artifact.ts","utf8"), /supabase|\.from\(|insert\(|upsert\(|delete\(/i); assert.match(readFileSync("app/api/scan/workflow/route.ts","utf8"), /evidenceSummary: workflow\.evidence/); });
 
 test("round trip parse validate verify", async () => { const { artifact }=await makeArtifact(); const parsed=JSON.parse(canonicalSerializeScanIntelligenceArtifact(artifact)); validateScanIntelligenceArtifact(parsed); assert.equal(verifyScanIntelligenceArtifactIntegrity(parsed), true); assert.deepEqual(parsed, JSON.parse(JSON.stringify(artifact))); });
+
+function rehashArtifact(a: Record<string, unknown>) {
+  const payload = { ...a };
+  delete payload.integrity;
+  const hash = createHash("sha256").update(canonicalSerializeScanIntelligenceArtifact(payload), "utf8").digest("hex");
+  return { ...a, integrity: { algorithm: "sha256", canonicalizationVersion: "scan-artifact-canonical-json@1", artifactHash: hash } };
+}
+
+test("adversarial parsed JSON durable validation coverage", async () => {
+  const { artifact } = await makeArtifact();
+  const base = JSON.parse(canonicalSerializeScanIntelligenceArtifact(artifact));
+  const valid = (mutate: (x: Record<string, unknown>) => void) => { const x = JSON.parse(JSON.stringify(base)); mutate(x); return rehashArtifact(x); };
+  const invalid = (mutate: (x: Record<string, unknown>) => void) => { const x = JSON.parse(JSON.stringify(base)); mutate(x); return x; };
+  const semanticCases = [
+    invalid((x) => { delete x.version; }),
+    invalid((x) => { delete x.execution.startedAt; }),
+    invalid((x) => { x.evidence.sources[0].extra = true; }),
+    invalid((x) => { x.execution.totalDurationMs = "11"; }),
+    valid((x) => { x.evidence.sources.push({ ...x.evidence.sources[0] }); x.evidence.summary.sourceCount++; x.evidence.summary.sourceKindCounts.pasted_evidence++; x.evidence.summary.independentSourceCount++; }),
+    valid((x) => { x.evidence.sources[0].trustClass = "internal_derived_non_independent"; }),
+    valid((x) => { x.evidence.summary.allowedEvidenceIds = []; }),
+    valid((x) => { x.evidence.summary.sourceKindCounts.pasted_evidence = 99; }),
+    valid((x) => { x.evidence.summary.independentSourceCount = 99; }),
+    valid((x) => { x.evidence.summary.truncatedSourceCount = 99; }),
+    valid((x) => { x.evidence.sources[0].sourceKind = "bad"; }),
+    valid((x) => { x.evidence.sources[0].contentHash = "sha256:bad"; }),
+    valid((x) => { x.quality.score10 = 9.99; }),
+    valid((x) => { x.quality.scoreBand = "very_low"; }),
+    valid((x) => { x.quality.reliabilityClassification = "magic"; }),
+    valid((x) => { x.quality.solutionDiagnostics.categoryCount = 99; }),
+    valid((x) => { x.validation.successSignal.text = "mismatch"; }),
+    valid((x) => { x.processingHistory[1].startedAt = x.processingHistory[0].startedAt; }),
+    valid((x) => { x.processingHistory[0].durationMs = 99; }),
+    valid((x) => { x.processingHistory[0].startedAt = "2025-12-31T23:59:00.000Z"; }),
+    valid((x) => { x.execution.processingStageCount = 99; }),
+    valid((x) => { x.provenance.workflowVersion = "scan-workflow@2"; }),
+    valid((x) => { x.provenance.evidenceIngestionVersion = "scan-evidence-ingestion@2"; }),
+    valid((x) => { x.execution.executionId = "scan-workflow-not-a-uuid"; x.artifactId = "scan-artifact-not-a-uuid"; }),
+    invalid((x) => { x.rawContent = "secret"; }),
+  ];
+  for (const c of semanticCases) assert.throws(() => validateScanIntelligenceArtifact(c), ScanIntelligenceArtifactValidationError);
+  const contentText = valid((x) => { x.problemIntelligence.grounding.evidence_summary.text = "Legitimate claim text may mention content strategy."; });
+  validateScanIntelligenceArtifact(contentText);
+  const hashValidSemanticsInvalid = valid((x) => { x.evidence.summary.sourceCount = 99; });
+  assert.throws(() => validateScanIntelligenceArtifact(hashValidSemanticsInvalid));
+  const semanticsValidHashMutated = { ...base, integrity: { ...base.integrity, artifactHash: "0".repeat(64) } };
+  assert.throws(() => validateScanIntelligenceArtifact(semanticsValidHashMutated));
+  assert.throws(() => parseAndValidateScanIntelligenceArtifact("{" + " ".repeat(1_500_001)), ScanIntelligenceArtifactValidationError);
+  const parsed = parseAndValidateScanIntelligenceArtifact(canonicalSerializeScanIntelligenceArtifact(artifact));
+  assert.equal(Object.isFrozen(parsed), true);
+  assert.equal(Object.isFrozen(parsed.solutionIntelligence.validationReadiness.knownFacts[0]), true);
+});
