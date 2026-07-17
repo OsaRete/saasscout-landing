@@ -49,3 +49,7 @@ node_modules/
 /playwright/.auth/
 
 deployment-backups/
+
+# Local database schema backups
+remote-public-schema.sql
+database-backups/
