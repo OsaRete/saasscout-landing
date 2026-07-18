@@ -605,10 +605,25 @@ if (profileData) {
         try {
           const filePath = await uploadEvidenceFile(scanData.id, evidenceFile);
   
-          await supabase
+          const { error: fileUrlUpdateError } = await supabase
             .from("scan")
             .update({ file_url: filePath })
-            .eq("id", scanData.id);
+            .eq("id", scanData.id)
+            .eq("user_id", userId);
+
+          if (fileUrlUpdateError) {
+            console.error("Scan file_url update error:", {
+              error: fileUrlUpdateError,
+              scanId: scanData.id,
+              userId,
+              filePath,
+            });
+
+            setMessage("Your file was uploaded, but the scan could not be linked to it. Please try again.");
+            setLoading(false);
+            setLoadingStep("idle");
+            return;
+          }
         } catch (uploadError) {
           console.error("UPLOAD ERROR:", uploadError);
   
@@ -697,10 +712,25 @@ if (profileData) {
         return;
       }
   
-      await supabase
+      const { error: completedStatusUpdateError } = await supabase
         .from("scan")
         .update({ status: "completed" })
-        .eq("id", scanData.id);
+        .eq("id", scanData.id)
+        .eq("user_id", userId);
+
+      if (completedStatusUpdateError) {
+        console.error("Scan completed status update error:", {
+          error: completedStatusUpdateError,
+          scanId: scanData.id,
+          userId,
+          attemptedStatus: "completed",
+        });
+
+        setMessage("Opportunities were saved, but the scan could not be marked as completed. Please try again.");
+        setLoading(false);
+        setLoadingStep("idle");
+        return;
+      }
       
       if (discoveryIdParam && problemIdParam) {
           await supabase.from("discovery_actions").insert([
