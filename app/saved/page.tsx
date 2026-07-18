@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 import { Button, EmptyState, LoadingState } from "../../components/ui";
+import { formatLegacyOpportunityScore } from "../../lib/legacy-opportunity-score-presentation";
 
 type SavedIdea = {
   id: string;
@@ -327,11 +328,10 @@ export default function SavedIdeasPage() {
                     </div>
 
                     <div className="w-fit rounded-2xl border border-violet-500/30 bg-violet-500/10 px-6 py-4 text-center">
-                      <p className="text-4xl font-bold">
-                        {opportunity.score}
+                      <p className="text-sm text-gray-400">Opportunity Score</p>
+                      <p className="mt-2 text-4xl font-bold">
+                        {formatLegacyOpportunityScore(opportunity.score)}
                       </p>
-
-                      <p className="text-sm text-gray-400">score</p>
                     </div>
                   </div>
 

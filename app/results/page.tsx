@@ -6,6 +6,11 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 import { Button, CardSkeleton, EmptyState, LoadingState } from "../../components/ui";
+import {
+  formatLegacyOpportunityScore,
+  getLegacyOpportunityScoreTone,
+  legacyOpportunityScoreToProgressWidth,
+} from "../../lib/legacy-opportunity-score-presentation";
 
 type Scan = {
   id: string;
@@ -67,34 +72,6 @@ function splitByPipe(value: string | null) {
     .split("|")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function getScoreTone(score: number) {
-  if (score >= 80) {
-    return {
-      ring: "border-cyan-300/40 bg-cyan-300/15 text-cyan-100",
-      bar: "from-cyan-300 via-violet-300 to-fuchsia-300",
-      label: "Validated",
-    };
-  }
-
-  if (score >= 65) {
-    return {
-      ring: "border-violet-300/40 bg-violet-400/15 text-violet-100",
-      bar: "from-violet-300 via-cyan-300 to-blue-300",
-      label: "Promising",
-    };
-  }
-
-  return {
-    ring: "border-white/15 bg-white/[0.06] text-gray-100",
-    bar: "from-gray-300 via-violet-300 to-cyan-300",
-    label: "Emerging",
-  };
-}
-
-function normalizeScore(score: number) {
-  return Math.max(0, Math.min(100, Number(score) || 0));
 }
 
 function InfoBadge({
@@ -651,8 +628,9 @@ export default function ResultsPage() {
                           const saved = isIdeaSaved(opportunity.id);
                           const saving = savingId === opportunity.id;
 
-                          const scoreValue = normalizeScore(opportunity.score);
-                          const scoreTone = getScoreTone(scoreValue);
+                          const formattedScore = formatLegacyOpportunityScore(opportunity.score);
+                          const scoreProgressWidth = legacyOpportunityScoreToProgressWidth(opportunity.score);
+                          const scoreTone = getLegacyOpportunityScoreTone(opportunity.score);
 
                           return (
                             <article
@@ -710,14 +688,13 @@ export default function ResultsPage() {
                                     </p>
                                     <div className="mt-3 flex items-end justify-center gap-1">
                                       <span className="text-5xl font-black leading-none">
-                                        {scoreValue}
+                                        {formattedScore}
                                       </span>
-                                      <span className="pb-1 text-sm opacity-70">/100</span>
                                     </div>
                                     <div className="mt-4 h-2 w-44 overflow-hidden rounded-full bg-black/30">
                                       <div
                                         className={`h-full rounded-full bg-gradient-to-r ${scoreTone.bar}`}
-                                        style={{ width: `${scoreValue}%` }}
+                                        style={{ width: `${scoreProgressWidth}%` }}
                                       />
                                     </div>
                                   </div>
