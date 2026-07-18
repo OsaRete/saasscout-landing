@@ -53,3 +53,6 @@ deployment-backups/
 # Local database schema backups
 remote-public-schema.sql
 database-backups/
+
+# Local Supabase debug logs
+supabase-reset-debug.log
