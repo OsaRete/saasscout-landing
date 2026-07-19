@@ -11,8 +11,6 @@ const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
 
-type LegacyScanStatus = "pending" | "processing" | "completed" | "failed";
-
 type LoadingStep =
   | "idle"
   | "checking"
@@ -23,43 +21,8 @@ type LoadingStep =
   | "generating"
   | "completed";
 
-type GeneratedOpportunity = {
-  title: string;
-  score: number;
-  pain: string;
-  customer: string;
-  mvp: string;
-  pricing: string;
-  difficulty: string;
-  problem_summary: string;
-  target_customer: string;
-  mvp_roadmap: string;
-  validation_questions: string;
-  landing_page_idea: string;
-  acquisition_channels: string;
-};
 
-type EvidenceAnalysis = {
-  inferred_market: string;
-  audience_summary: string;
-  evidence_summary: string;
-  pain_points: string;
-  repeated_patterns: string;
-  workflow_problems: string;
-  willingness_to_pay_signals: string;
-  opportunity_angles: string;
-  confidence_score: number;
-};
 
-type ExternalSource = {
-  source_type: string;
-  source_name: string | null;
-  title: string | null;
-  url: string | null;
-  snippet: string | null;
-  raw_text: string | null;
-  source_score: number | null;
-};
 
 type UserProfile = {
   id: string;
@@ -192,294 +155,6 @@ if (profileData) {
     setMessage("");
   }
 
-  async function extractFileText(file: File, accessToken: string) {
-    if (file.name.toLowerCase().endsWith(".txt")) {
-      return await file.text();
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const response = await fetch("/api/extract-file-text", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: formData,
-    });
-
-    const rawResponse = await response.text();
-
-    let result;
-
-    try {
-      result = JSON.parse(rawResponse);
-    } catch {
-      console.error("Raw extract-file-text response:", rawResponse);
-
-      throw new Error(
-        "The file extraction API returned an invalid response. Check the terminal for the real error."
-      );
-    }
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not extract file text.");
-    }
-
-    return String(result.text || "");
-  }
-
-  async function acceptScan({
-    market,
-    audience,
-    region,
-    evidence,
-    accessToken,
-  }: {
-    market: string;
-    audience: string;
-    region: string;
-    evidence: string;
-    accessToken: string;
-  }) {
-    const response = await fetch("/api/scan/acceptance", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        market,
-        audience,
-        region,
-        evidence,
-      }),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error?.message || result.error || "Scan acceptance failed.");
-    }
-
-    return result.acceptance as { version: "scan-acceptance@1"; scanId: string; status: "pending" };
-  }
-
-  async function analyzeEvidence({
-    market,
-    audience,
-    region,
-    evidence,
-    accessToken,
-  }: {
-    market: string;
-    audience: string;
-    region: string;
-    evidence: string;
-    accessToken: string;
-  }) {
-    const response = await fetch("/api/analyze-evidence", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        market,
-        audience,
-        region,
-        evidence,
-      }),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Evidence analysis failed.");
-    }
-
-    return result.analysis as EvidenceAnalysis;
-  }
-
-  async function collectExternalSources({
-    market,
-    audience,
-    region,
-    accessToken,
-  }: {
-    market: string;
-    audience: string;
-    region: string;
-    accessToken: string;
-  }) {
-    const response = await fetch("/api/collect-sources", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        market,
-        audience,
-        region,
-      }),
-    });
-  
-    const result = await response.json();
-  
-    if (!response.ok) {
-      throw new Error(result.error || "Could not collect external sources.");
-    }
-  
-    return (result.sources || []) as ExternalSource[];
-  }
-  
-  async function saveExternalSources({
-    scanId,
-    userId,
-    sources,
-  }: {
-    scanId: string;
-    userId: string;
-    sources: ExternalSource[];
-  }) {
-    if (sources.length === 0) return true;
-  
-    const rows = sources.map((source) => ({
-      scan_id: scanId,
-      user_id: userId,
-      source_type: source.source_type,
-      source_name: source.source_name,
-      title: source.title,
-      url: source.url,
-      snippet: source.snippet,
-      raw_text: source.raw_text,
-      source_score: source.source_score,
-    }));
-  
-    const { error } = await supabase.from("scan_sources").insert(rows);
-  
-    if (error) {
-      console.error("Scan sources insert error:", error);
-      return false;
-    }
-
-    return true;
-  }
-  
-  function formatExternalSourcesForEvidence(sources: ExternalSource[]) {
-    if (sources.length === 0) return "";
-  
-    return sources
-      .map(
-        (source, index) => `
-  External Source ${index + 1}
-  Type: ${source.source_type}
-  Source: ${source.source_name || "Unknown"}
-  Title: ${source.title || "Untitled"}
-  URL: ${source.url || "No URL"}
-  Snippet: ${source.snippet || "No snippet"}
-  Text: ${source.raw_text || "No extracted text"}
-  Source score: ${source.source_score || "N/A"}
-  `
-      )
-      .join("\n\n");
-  }
-
-  async function uploadEvidenceFile(scanId: string, file: File) {
-    const safeFileName = file.name
-      .replace(/[^a-zA-Z0-9._-]/g, "-")
-      .toLowerCase();
-
-    const filePath = `${userId}/${scanId}/${Date.now()}-${safeFileName}`;
-
-    const { error } = await supabase.storage
-      .from("evidence-files")
-      .upload(filePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-
-    if (error) {
-      throw error;
-    }
-
-    return filePath;
-  }
-
-  async function transitionLegacyScanStatus({
-    scanId,
-    status,
-    reason,
-  }: {
-    scanId: string;
-    status: LegacyScanStatus;
-    reason: string;
-  }) {
-    const { error } = await supabase
-      .from("scan")
-      .update({ status })
-      .eq("id", scanId)
-      .eq("user_id", userId);
-
-    if (error) {
-      console.error("Legacy scan status transition error:", {
-        error,
-        scanId,
-        userId,
-        attemptedStatus: status,
-        reason,
-      });
-      return false;
-    }
-
-    return true;
-  }
-
-  async function failAcceptedScan(scanId: string, reason: string) {
-    const transitioned = await transitionLegacyScanStatus({
-      scanId,
-      status: "failed",
-      reason,
-    });
-
-    if (!transitioned) {
-      console.error("Accepted scan failure terminal transition could not be persisted:", {
-        scanId,
-        userId,
-        reason,
-      });
-    }
-  }
-
-  async function saveEvidenceAnalysis(
-    scanId: string,
-    evidenceAnalysis: EvidenceAnalysis
-  ) {
-    const { error } = await supabase.from("evidence_analysis").insert([
-      {
-        scan_id: scanId,
-        inferred_market: evidenceAnalysis.inferred_market,
-        audience_summary: evidenceAnalysis.audience_summary,
-        evidence_summary: evidenceAnalysis.evidence_summary,
-        pain_points: evidenceAnalysis.pain_points,
-        repeated_patterns: evidenceAnalysis.repeated_patterns,
-        workflow_problems: evidenceAnalysis.workflow_problems,
-        willingness_to_pay_signals:
-          evidenceAnalysis.willingness_to_pay_signals,
-        opportunity_angles: evidenceAnalysis.opportunity_angles,
-        confidence_score: evidenceAnalysis.confidence_score,
-      },
-    ]);
-
-    if (error) {
-      console.error("Evidence analysis insert error:", error);
-      return false;
-    }
-
-    return true;
-  }
-
   function getButtonText() {
     if (!loading) return "Find Opportunities";
 
@@ -493,21 +168,99 @@ if (profileData) {
     return "Analyzing...";
   }
 
+  async function runServerScanWorkflow({
+    accessToken,
+    cleanMarket,
+    cleanAudience,
+    cleanRegion,
+  }: {
+    accessToken: string;
+    cleanMarket: string;
+    cleanAudience: string;
+    cleanRegion: string;
+  }) {
+    const legacyContext = {
+      sourceProblemTitle: problemTitleParam || cleanMarket || undefined,
+      sourceProblemId: problemIdParam || undefined,
+      sourceDiscoveryId: discoveryIdParam || undefined,
+    };
+
+    const intent = {
+      market: cleanMarket,
+      audience: cleanAudience,
+      region: cleanRegion,
+    };
+
+    const formData = new FormData();
+    formData.append("intent", JSON.stringify(intent));
+    formData.append("legacyContext", JSON.stringify(legacyContext));
+
+    if (evidence.trim()) {
+      formData.append("pastedEvidence", evidence.trim());
+    }
+
+    if (evidenceFile) {
+      formData.append("files", evidenceFile);
+    }
+
+    const response = await fetch("/api/scan/workflow", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error?.message || result.error || SAFE_SCAN_FAILURE_MESSAGE);
+    }
+
+    return result as { success: true; scanId: string };
+  }
+
+  async function recordDiscoveryConversion({
+    accessToken,
+    cleanMarket,
+  }: {
+    accessToken: string;
+    cleanMarket: string;
+  }) {
+    if (!discoveryIdParam || !problemIdParam) return;
+
+    const response = await fetch("/api/problem-intelligence/conversion", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        discoveryId: discoveryIdParam,
+        problemId: problemIdParam,
+        problemTitle: problemTitleParam || cleanMarket,
+      }),
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => null);
+      console.error("Problem intelligence conversion update error:", result);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-  
+
     if (!userId) return;
-  
+
     if (!market.trim() && !evidence.trim() && !evidenceFile) {
       setMessage("Please provide a market, paste evidence, or upload a file.");
       return;
     }
-  
+
     setLoading(true);
     setLoadingStep("checking");
     setMessage("");
-  
-    let acceptedScanId: string | null = null;
 
     try {
       const {
@@ -522,363 +275,19 @@ if (profileData) {
       }
 
       const accessToken = session.access_token;
-
       const cleanMarket = market.trim();
       const cleanAudience = audience.trim();
       const cleanRegion = region.trim();
-  
-      let cleanEvidence = evidence.trim();
-      let finalMarket = cleanMarket;
-      let externalSources: ExternalSource[] = [];
-  
-      if (evidenceFile) {
-        try {
-          setLoadingStep("extracting");
-  
-          const fileText = await extractFileText(evidenceFile, accessToken);
-  
-          if (fileText.trim()) {
-            cleanEvidence = `${cleanEvidence}\n\nUploaded file content:\n${fileText}`;
-          }
-        } catch (extractError) {
-          console.error(extractError);
-          setMessage(
-            extractError instanceof Error
-              ? extractError.message
-              : "Could not extract text from the uploaded file."
-          );
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
-      if (cleanMarket) {
-        try {
-          setLoadingStep("collectingSources");
-  
-          externalSources = await collectExternalSources({
-            market: cleanMarket,
-            audience: cleanAudience,
-            region: cleanRegion,
-            accessToken,
-          });
-  
-          const externalEvidence =
-            formatExternalSourcesForEvidence(externalSources);
-  
-          if (externalEvidence.trim()) {
-            cleanEvidence = `
-  User-provided evidence:
-  ${cleanEvidence || "No user-provided evidence."}
-  
-  External source evidence:
-  ${externalEvidence}
-  `.trim();
-          }
-        } catch (sourceError) {
-          console.error("External sources error:", sourceError);
-  
-          setMessage(
-            sourceError instanceof Error
-              ? sourceError.message
-              : "Could not collect external sources."
-          );
-  
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
-      cleanEvidence = cleanEvidence.trim().slice(0, 6000);
-  
-      let evidenceAnalysis: EvidenceAnalysis | null = null;
-  
-      if (cleanEvidence) {
-        try {
-          setLoadingStep("analyzingEvidence");
-  
-          evidenceAnalysis = await analyzeEvidence({
-            market: cleanMarket,
-            audience: cleanAudience,
-            region: cleanRegion,
-            evidence: cleanEvidence,
-            accessToken,
-          });
-  
-          finalMarket = cleanMarket || evidenceAnalysis.inferred_market || "";
-  
-          cleanEvidence = `
-  Original evidence:
-  ${cleanEvidence}
-  
-  Evidence Intelligence:
-  Inferred market: ${evidenceAnalysis.inferred_market}
-  Audience summary: ${evidenceAnalysis.audience_summary}
-  Evidence summary: ${evidenceAnalysis.evidence_summary}
-  Pain points: ${evidenceAnalysis.pain_points}
-  Repeated patterns: ${evidenceAnalysis.repeated_patterns}
-  Workflow problems: ${evidenceAnalysis.workflow_problems}
-  Willingness to pay signals: ${evidenceAnalysis.willingness_to_pay_signals}
-  Opportunity angles: ${evidenceAnalysis.opportunity_angles}
-  Confidence score: ${evidenceAnalysis.confidence_score}
-  `.trim();
-        } catch (analysisError) {
-          console.error("Evidence analysis error:", analysisError);
-  
-          setMessage(
-            analysisError instanceof Error
-              ? analysisError.message
-              : "Could not analyze the evidence."
-          );
-  
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
-      setLoadingStep("saving");
-  
-      let scanAcceptance: { version: "scan-acceptance@1"; scanId: string; status: "pending" };
 
-      try {
-        scanAcceptance = await acceptScan({
-          market: finalMarket,
-          audience: cleanAudience,
-          region: cleanRegion,
-          evidence: cleanEvidence,
-          accessToken,
-        });
-      } catch (acceptanceError) {
-        console.error("Scan acceptance error:", acceptanceError);
-        const message = acceptanceError instanceof Error && acceptanceError.message.includes("limit")
-          ? acceptanceError.message
-          : "Something went wrong creating your scan. Please try again.";
-        setMessage(message);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-
-      acceptedScanId = scanAcceptance.scanId;
-
-      const processingTransitioned = await transitionLegacyScanStatus({
-        scanId: scanAcceptance.scanId,
-        status: "processing",
-        reason: "scan_accepted",
-      });
-
-      if (!processingTransitioned) {
-        await failAcceptedScan(scanAcceptance.scanId, "processing_transition_failed");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-  
-      if (evidenceAnalysis) {
-        const evidenceAnalysisSaved = await saveEvidenceAnalysis(scanAcceptance.scanId, evidenceAnalysis);
-
-        if (!evidenceAnalysisSaved) {
-          await failAcceptedScan(scanAcceptance.scanId, "evidence_analysis_persistence_failed");
-          setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
-      const externalSourcesSaved = await saveExternalSources({
-        scanId: scanAcceptance.scanId,
-        userId,
-        sources: externalSources,
-      });
-
-      if (!externalSourcesSaved) {
-        await failAcceptedScan(scanAcceptance.scanId, "source_persistence_failed");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-  
-      if (evidenceFile) {
-        try {
-          const filePath = await uploadEvidenceFile(scanAcceptance.scanId, evidenceFile);
-  
-          const { error: fileUrlUpdateError } = await supabase
-            .from("scan")
-            .update({ file_url: filePath })
-            .eq("id", scanAcceptance.scanId)
-            .eq("user_id", userId);
-
-          if (fileUrlUpdateError) {
-            console.error("Scan file_url update error:", {
-              error: fileUrlUpdateError,
-              scanId: scanAcceptance.scanId,
-              userId,
-              filePath,
-            });
-
-            await failAcceptedScan(scanAcceptance.scanId, "file_url_persistence_failed");
-            setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-            setLoading(false);
-            setLoadingStep("idle");
-            return;
-          }
-        } catch (uploadError) {
-          console.error("UPLOAD ERROR:", uploadError);
-  
-          await failAcceptedScan(scanAcceptance.scanId, "evidence_file_upload_failed");
-          setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-  
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
       setLoadingStep("generating");
-  
-      const response = await fetch("/api/generate-opportunities", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          market: finalMarket,
-          audience: cleanAudience,
-          region: cleanRegion,
-          evidence: cleanEvidence,
-        }),
-      });
-  
-      const result = await response.json();
-  
-      if (!response.ok) {
-        console.error(result);
-        await failAcceptedScan(scanAcceptance.scanId, "opportunity_generation_failed");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-  
-      const generatedOpportunities: GeneratedOpportunity[] =
-        result.opportunities || [];
-  
-      if (generatedOpportunities.length === 0) {
-        await failAcceptedScan(scanAcceptance.scanId, "opportunity_generation_empty");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-  
-      const opportunitiesToInsert = generatedOpportunities
-  .slice(0, 3)
-  .map((opportunity) => ({
-    user_id: userId,
-    scan_id: scanAcceptance.scanId,
-    source_problem_title: problemTitleParam || finalMarket || cleanMarket || null,
-    source_problem_id: problemIdParam || null,
-    source_discovery_id: discoveryIdParam || null,
-    title: opportunity.title || "Untitled opportunity",
-    score: Number(opportunity.score) || 7,
-    pain: opportunity.pain || "No pain point provided.",
-    customer: opportunity.customer || "Not specified.",
-    mvp: opportunity.mvp || "Not specified.",
-    pricing: opportunity.pricing || "Not specified.",
-    difficulty: opportunity.difficulty || "Medium",
-    problem_summary:
-      opportunity.problem_summary || opportunity.pain || null,
-    target_customer:
-      opportunity.target_customer || opportunity.customer || null,
-    mvp_roadmap: opportunity.mvp_roadmap || null,
-    validation_questions: opportunity.validation_questions || null,
-    landing_page_idea: opportunity.landing_page_idea || null,
-    acquisition_channels: opportunity.acquisition_channels || null,
-  }));
-  
-      const { error: opportunityError } = await supabase
-        .from("opportunities")
-        .insert(opportunitiesToInsert);
-  
-      if (opportunityError) {
-        console.error(opportunityError);
-        await failAcceptedScan(scanAcceptance.scanId, "opportunity_persistence_failed");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-  
-      const completedTransitioned = await transitionLegacyScanStatus({
-        scanId: scanAcceptance.scanId,
-        status: "completed",
-        reason: "opportunities_persisted",
-      });
-
-      if (!completedTransitioned) {
-        console.error("Scan completed status update error:", {
-          scanId: scanAcceptance.scanId,
-          userId,
-          attemptedStatus: "completed",
-        });
-
-        await failAcceptedScan(scanAcceptance.scanId, "completed_transition_failed");
-        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
-        setLoading(false);
-        setLoadingStep("idle");
-        return;
-      }
-      
-      if (discoveryIdParam && problemIdParam) {
-          await supabase.from("discovery_actions").insert([
-            {
-              user_id: userId,
-              discovery_id: discoveryIdParam,
-              problem_id: problemIdParam,
-              action_type: "converted_to_scan",
-              problem_title: finalMarket || cleanMarket || null,
-              affected_niches: cleanAudience || null,
-              suggested_solutions: cleanEvidence.slice(0, 1000),
-            },
-          ]);
-      }
-
-      if (discoveryIdParam && problemIdParam) {
-        const response = await fetch("/api/problem-intelligence/conversion", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({
-            discoveryId: discoveryIdParam,
-            problemId: problemIdParam,
-            problemTitle: problemTitleParam || finalMarket || cleanMarket,
-          }),
-        });
-
-        if (!response.ok) {
-          const result = await response.json().catch(() => null);
-          console.error("Problem intelligence conversion update error:", result);
-        }
-      }
-
+      await runServerScanWorkflow({ accessToken, cleanMarket, cleanAudience, cleanRegion });
       setLoadingStep("completed");
-  
+      await recordDiscoveryConversion({ accessToken, cleanMarket });
+
       router.push("/results");
     } catch (error) {
       console.error(error);
-      if (acceptedScanId) {
-        await failAcceptedScan(acceptedScanId, "unexpected_exception");
-      }
-      setMessage(acceptedScanId ? SAFE_SCAN_FAILURE_MESSAGE : "Something went wrong generating your opportunities.");
+      setMessage(SAFE_SCAN_FAILURE_MESSAGE);
       setLoading(false);
       setLoadingStep("idle");
     }

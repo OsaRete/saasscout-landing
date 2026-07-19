@@ -238,7 +238,7 @@ test("legacy prompt builders and route contracts remain present", () => {
   const analyzeRoute = readFileSync("app/api/analyze-evidence/route.ts", "utf8");
   const generateRoute = readFileSync("app/api/generate-opportunities/route.ts", "utf8");
   const solutionRoute = readFileSync("app/api/solution-intelligence/route.ts", "utf8");
-  assert.match(scanPage, /\/api\/extract-file-text/);
+  assert.match(scanPage, /\/api\/scan\/workflow/);
   assert.match(analyzeRoute, /scan-user-evidence/);
   assert.match(generateRoute, /scan-user-evidence/);
   assert.match(solutionRoute, /scan-user-evidence/);
