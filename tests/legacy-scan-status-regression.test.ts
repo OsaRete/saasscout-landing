@@ -15,13 +15,13 @@ test("legacy scan migration adds a duplicate-safe owner-scoped authenticated UPD
   assert.doesNotMatch(migration, /status\s+in|create type|alter table public\.scan[\s\S]*check/i);
 });
 
-test("legacy scan completed status update captures and handles Supabase errors before redirect", () => {
-  assert.match(scanPage, /const \{ error: completedStatusUpdateError \} = await supabase\s*\.from\("scan"\)\s*\.update\(\{ status: "completed" \}\)\s*\.eq\("id", scanData\.id\)\s*\.eq\("user_id", userId\);/);
-  assert.match(scanPage, /if \(completedStatusUpdateError\) \{[\s\S]*console\.error\("Scan completed status update error:"[\s\S]*attemptedStatus: "completed"[\s\S]*setMessage\("Opportunities were saved, but the scan could not be marked as completed\. Please try again\."\);[\s\S]*return;[\s\S]*\}/);
-  assert.match(scanPage, /if \(completedStatusUpdateError\)[\s\S]*return;[\s\S]*setLoadingStep\("completed"\);[\s\S]*router\.push\("\/results"\);/);
+test("legacy scan completed status transition captures and handles Supabase errors before redirect", () => {
+  assert.match(scanPage, /const completedTransitioned = await transitionLegacyScanStatus\(\{[\s\S]*status: "completed",[\s\S]*reason: "opportunities_persisted"/);
+  assert.match(scanPage, /if \(!completedTransitioned\) \{[\s\S]*console\.error\("Scan completed status update error:"[\s\S]*attemptedStatus: "completed"[\s\S]*await failAcceptedScan\(scanData\.id, "completed_transition_failed"\);[\s\S]*setMessage\(SAFE_SCAN_FAILURE_MESSAGE\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(scanPage, /if \(!completedTransitioned\)[\s\S]*return;[\s\S]*setLoadingStep\("completed"\);[\s\S]*router\.push\("\/results"\);/);
 });
 
 test("legacy scan file_url update captures and handles Supabase errors", () => {
   assert.match(scanPage, /const \{ error: fileUrlUpdateError \} = await supabase\s*\.from\("scan"\)\s*\.update\(\{ file_url: filePath \}\)\s*\.eq\("id", scanData\.id\)\s*\.eq\("user_id", userId\);/);
-  assert.match(scanPage, /if \(fileUrlUpdateError\) \{[\s\S]*console\.error\("Scan file_url update error:"[\s\S]*filePath[\s\S]*setMessage\("Your file was uploaded, but the scan could not be linked to it\. Please try again\."\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(scanPage, /if \(fileUrlUpdateError\) \{[\s\S]*console\.error\("Scan file_url update error:"[\s\S]*filePath[\s\S]*await failAcceptedScan\(scanData\.id, "file_url_persistence_failed"\);[\s\S]*setMessage\(SAFE_SCAN_FAILURE_MESSAGE\);[\s\S]*return;[\s\S]*\}/);
 });

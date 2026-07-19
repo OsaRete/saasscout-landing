@@ -9,6 +9,9 @@ import { supabase } from "../supabase";
 const ADMIN_EMAIL = "cedeomartineze@gmail.com";
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
+
+type LegacyScanStatus = "pending" | "processing" | "completed" | "failed";
 
 type LoadingStep =
   | "idle"
@@ -304,7 +307,7 @@ if (profileData) {
     userId: string;
     sources: ExternalSource[];
   }) {
-    if (sources.length === 0) return;
+    if (sources.length === 0) return true;
   
     const rows = sources.map((source) => ({
       scan_id: scanId,
@@ -322,7 +325,10 @@ if (profileData) {
   
     if (error) {
       console.error("Scan sources insert error:", error);
+      return false;
     }
+
+    return true;
   }
   
   function formatExternalSourcesForEvidence(sources: ExternalSource[]) {
@@ -365,6 +371,51 @@ if (profileData) {
     return filePath;
   }
 
+  async function transitionLegacyScanStatus({
+    scanId,
+    status,
+    reason,
+  }: {
+    scanId: string;
+    status: LegacyScanStatus;
+    reason: string;
+  }) {
+    const { error } = await supabase
+      .from("scan")
+      .update({ status })
+      .eq("id", scanId)
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("Legacy scan status transition error:", {
+        error,
+        scanId,
+        userId,
+        attemptedStatus: status,
+        reason,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function failAcceptedScan(scanId: string, reason: string) {
+    const transitioned = await transitionLegacyScanStatus({
+      scanId,
+      status: "failed",
+      reason,
+    });
+
+    if (!transitioned) {
+      console.error("Accepted scan failure terminal transition could not be persisted:", {
+        scanId,
+        userId,
+        reason,
+      });
+    }
+  }
+
   async function saveEvidenceAnalysis(
     scanId: string,
     evidenceAnalysis: EvidenceAnalysis
@@ -387,7 +438,10 @@ if (profileData) {
 
     if (error) {
       console.error("Evidence analysis insert error:", error);
+      return false;
     }
+
+    return true;
   }
 
   function getButtonText() {
@@ -417,6 +471,8 @@ if (profileData) {
     setLoadingStep("checking");
     setMessage("");
   
+    let acceptedScanId: string | null = null;
+
     try {
       const {
         data: { session },
@@ -590,16 +646,48 @@ if (profileData) {
         setLoadingStep("idle");
         return;
       }
-  
-      if (evidenceAnalysis) {
-        await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
+
+      acceptedScanId = scanData.id;
+
+      const processingTransitioned = await transitionLegacyScanStatus({
+        scanId: scanData.id,
+        status: "processing",
+        reason: "scan_accepted",
+      });
+
+      if (!processingTransitioned) {
+        await failAcceptedScan(scanData.id, "processing_transition_failed");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
+        setLoading(false);
+        setLoadingStep("idle");
+        return;
       }
   
-      await saveExternalSources({
+      if (evidenceAnalysis) {
+        const evidenceAnalysisSaved = await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
+
+        if (!evidenceAnalysisSaved) {
+          await failAcceptedScan(scanData.id, "evidence_analysis_persistence_failed");
+          setMessage(SAFE_SCAN_FAILURE_MESSAGE);
+          setLoading(false);
+          setLoadingStep("idle");
+          return;
+        }
+      }
+  
+      const externalSourcesSaved = await saveExternalSources({
         scanId: scanData.id,
         userId,
         sources: externalSources,
       });
+
+      if (!externalSourcesSaved) {
+        await failAcceptedScan(scanData.id, "source_persistence_failed");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
+        setLoading(false);
+        setLoadingStep("idle");
+        return;
+      }
   
       if (evidenceFile) {
         try {
@@ -619,7 +707,8 @@ if (profileData) {
               filePath,
             });
 
-            setMessage("Your file was uploaded, but the scan could not be linked to it. Please try again.");
+            await failAcceptedScan(scanData.id, "file_url_persistence_failed");
+            setMessage(SAFE_SCAN_FAILURE_MESSAGE);
             setLoading(false);
             setLoadingStep("idle");
             return;
@@ -627,11 +716,8 @@ if (profileData) {
         } catch (uploadError) {
           console.error("UPLOAD ERROR:", uploadError);
   
-          setMessage(
-            uploadError instanceof Error
-              ? uploadError.message
-              : JSON.stringify(uploadError)
-          );
+          await failAcceptedScan(scanData.id, "evidence_file_upload_failed");
+          setMessage(SAFE_SCAN_FAILURE_MESSAGE);
   
           setLoading(false);
           setLoadingStep("idle");
@@ -659,7 +745,8 @@ if (profileData) {
   
       if (!response.ok) {
         console.error(result);
-        setMessage(result.error || "AI generation failed. Please try again.");
+        await failAcceptedScan(scanData.id, "opportunity_generation_failed");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
         return;
@@ -669,7 +756,8 @@ if (profileData) {
         result.opportunities || [];
   
       if (generatedOpportunities.length === 0) {
-        setMessage("No opportunities were generated. Please try again.");
+        await failAcceptedScan(scanData.id, "opportunity_generation_empty");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
         return;
@@ -706,27 +794,28 @@ if (profileData) {
   
       if (opportunityError) {
         console.error(opportunityError);
-        setMessage("Scan was created, but opportunities could not be saved.");
+        await failAcceptedScan(scanData.id, "opportunity_persistence_failed");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
         return;
       }
   
-      const { error: completedStatusUpdateError } = await supabase
-        .from("scan")
-        .update({ status: "completed" })
-        .eq("id", scanData.id)
-        .eq("user_id", userId);
+      const completedTransitioned = await transitionLegacyScanStatus({
+        scanId: scanData.id,
+        status: "completed",
+        reason: "opportunities_persisted",
+      });
 
-      if (completedStatusUpdateError) {
+      if (!completedTransitioned) {
         console.error("Scan completed status update error:", {
-          error: completedStatusUpdateError,
           scanId: scanData.id,
           userId,
           attemptedStatus: "completed",
         });
 
-        setMessage("Opportunities were saved, but the scan could not be marked as completed. Please try again.");
+        await failAcceptedScan(scanData.id, "completed_transition_failed");
+        setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
         return;
@@ -792,7 +881,10 @@ if (profileData) {
       router.push("/results");
     } catch (error) {
       console.error(error);
-      setMessage("Something went wrong generating your opportunities.");
+      if (acceptedScanId) {
+        await failAcceptedScan(acceptedScanId, "unexpected_exception");
+      }
+      setMessage(acceptedScanId ? SAFE_SCAN_FAILURE_MESSAGE : "Something went wrong generating your opportunities.");
       setLoading(false);
       setLoadingStep("idle");
     }
