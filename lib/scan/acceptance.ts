@@ -19,10 +19,10 @@ export type ScanAcceptanceContract = Readonly<{
 }>;
 
 export class ScanAcceptanceError extends Error {
-  readonly code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed";
+  readonly code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded";
 
   constructor(
-    code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed",
+    code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded",
     message = "The Scan acceptance request is invalid.",
   ) {
     super(message);
@@ -32,7 +32,8 @@ export class ScanAcceptanceError extends Error {
 }
 
 type AuthenticatedScanUser = Readonly<{ id: string }>;
-type InsertableSupabaseClient = Pick<SupabaseClient, "from">;
+type ScanAcceptanceRpcResult = Readonly<{ scan_id?: unknown; status?: unknown; accepted?: unknown; rejection_code?: unknown }>;
+type InsertableSupabaseClient = Pick<SupabaseClient, "from" | "rpc">;
 
 const ALLOWED_ACCEPTANCE_FIELDS = new Set(["market", "audience", "region", "evidence"]);
 const FORBIDDEN_CLIENT_FIELDS = new Set([
@@ -100,28 +101,35 @@ export function createScanAcceptanceClient(request: Request): SupabaseClient {
   return createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 }
 
-export async function acceptScanRequest(input: ScanAcceptanceInput, user: AuthenticatedScanUser, client: InsertableSupabaseClient): Promise<ScanAcceptanceContract> {
-  const { data, error } = await client
-    .from("scan")
-    .insert([
-      {
-        user_id: user.id,
-        market: input.market ?? null,
-        audience: input.audience ?? null,
-        region: input.region ?? null,
-        evidence: input.evidence ?? null,
-        file_url: null,
-        status: "pending",
-      },
-    ])
-    .select("id,status")
-    .single();
+function normalizeRpcResult(data: unknown): ScanAcceptanceRpcResult | null {
+  if (Array.isArray(data)) return objectRecord(data[0]) ? data[0] : null;
+  return objectRecord(data) ? data : null;
+}
 
-  if (error || !data || typeof data.id !== "string" || data.status !== "pending") {
+export async function acceptScanRequest(input: ScanAcceptanceInput, user: AuthenticatedScanUser, client: InsertableSupabaseClient): Promise<ScanAcceptanceContract> {
+  const { data, error } = await client.rpc("accept_scan_request", {
+    p_user_id: user.id,
+    p_market: input.market ?? null,
+    p_audience: input.audience ?? null,
+    p_region: input.region ?? null,
+    p_evidence: input.evidence ?? null,
+  });
+
+  const result = normalizeRpcResult(data);
+
+  if (error || !result) {
     throw new ScanAcceptanceError("scan_acceptance_persistence_failed", "The Scan could not be accepted.");
   }
 
-  return Object.freeze({ version: SCAN_ACCEPTANCE_VERSION, scanId: data.id, status: "pending" });
+  if (result.accepted === false && result.rejection_code === "scan_limit_exceeded") {
+    throw new ScanAcceptanceError("scan_acceptance_limit_exceeded", "You have reached your plan Scan limit.");
+  }
+
+  if (result.accepted !== true || typeof result.scan_id !== "string" || result.status !== "pending") {
+    throw new ScanAcceptanceError("scan_acceptance_persistence_failed", "The Scan could not be accepted.");
+  }
+
+  return Object.freeze({ version: SCAN_ACCEPTANCE_VERSION, scanId: result.scan_id, status: "pending" });
 }
 
 export async function runScanAcceptance(request: Request, dependencies: { client?: InsertableSupabaseClient } = {}): Promise<Response> {
@@ -133,7 +141,8 @@ export async function runScanAcceptance(request: Request, dependencies: { client
   } catch (error) {
     if (error instanceof AuthError) return Response.json({ success: false, error: "Unauthorized" }, { status: error.status });
     if (error instanceof ScanAcceptanceError) {
-      return Response.json({ success: false, error: { code: error.code, message: error.message } }, { status: error.code === "scan_acceptance_persistence_failed" ? 500 : 400 });
+      const status = error.code === "scan_acceptance_persistence_failed" ? 500 : error.code === "scan_acceptance_limit_exceeded" ? 402 : 400;
+      return Response.json({ success: false, error: { code: error.code, message: error.message } }, { status });
     }
     return Response.json({ success: false, error: { code: "scan_acceptance_failed", message: "The Scan could not be accepted." } }, { status: 500 });
   }
