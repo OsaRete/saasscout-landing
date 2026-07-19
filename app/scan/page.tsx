@@ -229,6 +229,42 @@ if (profileData) {
     return String(result.text || "");
   }
 
+  async function acceptScan({
+    market,
+    audience,
+    region,
+    evidence,
+    accessToken,
+  }: {
+    market: string;
+    audience: string;
+    region: string;
+    evidence: string;
+    accessToken: string;
+  }) {
+    const response = await fetch("/api/scan/acceptance", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        market,
+        audience,
+        region,
+        evidence,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error?.message || result.error || "Scan acceptance failed.");
+    }
+
+    return result.acceptance as { version: "scan-acceptance@1"; scanId: string; status: "pending" };
+  }
+
   async function analyzeEvidence({
     market,
     audience,
@@ -623,40 +659,34 @@ if (profileData) {
   
       setLoadingStep("saving");
   
-      const { data: scanData, error: scanError } = await supabase
-        .from("scan")
-        .insert([
-          {
-            user_id: userId,
-            market: finalMarket || null,
-            audience: cleanAudience || null,
-            region: cleanRegion || null,
-            evidence: cleanEvidence || null,
-            file_url: null,
-            status: "pending",
-          },
-        ])
-        .select()
-        .single();
-  
-      if (scanError || !scanData) {
-        console.error(scanError);
+      let scanAcceptance: { version: "scan-acceptance@1"; scanId: string; status: "pending" };
+
+      try {
+        scanAcceptance = await acceptScan({
+          market: finalMarket,
+          audience: cleanAudience,
+          region: cleanRegion,
+          evidence: cleanEvidence,
+          accessToken,
+        });
+      } catch (acceptanceError) {
+        console.error("Scan acceptance error:", acceptanceError);
         setMessage("Something went wrong creating your scan. Please try again.");
         setLoading(false);
         setLoadingStep("idle");
         return;
       }
 
-      acceptedScanId = scanData.id;
+      acceptedScanId = scanAcceptance.scanId;
 
       const processingTransitioned = await transitionLegacyScanStatus({
-        scanId: scanData.id,
+        scanId: scanAcceptance.scanId,
         status: "processing",
         reason: "scan_accepted",
       });
 
       if (!processingTransitioned) {
-        await failAcceptedScan(scanData.id, "processing_transition_failed");
+        await failAcceptedScan(scanAcceptance.scanId, "processing_transition_failed");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
@@ -664,10 +694,10 @@ if (profileData) {
       }
   
       if (evidenceAnalysis) {
-        const evidenceAnalysisSaved = await saveEvidenceAnalysis(scanData.id, evidenceAnalysis);
+        const evidenceAnalysisSaved = await saveEvidenceAnalysis(scanAcceptance.scanId, evidenceAnalysis);
 
         if (!evidenceAnalysisSaved) {
-          await failAcceptedScan(scanData.id, "evidence_analysis_persistence_failed");
+          await failAcceptedScan(scanAcceptance.scanId, "evidence_analysis_persistence_failed");
           setMessage(SAFE_SCAN_FAILURE_MESSAGE);
           setLoading(false);
           setLoadingStep("idle");
@@ -676,13 +706,13 @@ if (profileData) {
       }
   
       const externalSourcesSaved = await saveExternalSources({
-        scanId: scanData.id,
+        scanId: scanAcceptance.scanId,
         userId,
         sources: externalSources,
       });
 
       if (!externalSourcesSaved) {
-        await failAcceptedScan(scanData.id, "source_persistence_failed");
+        await failAcceptedScan(scanAcceptance.scanId, "source_persistence_failed");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
@@ -691,23 +721,23 @@ if (profileData) {
   
       if (evidenceFile) {
         try {
-          const filePath = await uploadEvidenceFile(scanData.id, evidenceFile);
+          const filePath = await uploadEvidenceFile(scanAcceptance.scanId, evidenceFile);
   
           const { error: fileUrlUpdateError } = await supabase
             .from("scan")
             .update({ file_url: filePath })
-            .eq("id", scanData.id)
+            .eq("id", scanAcceptance.scanId)
             .eq("user_id", userId);
 
           if (fileUrlUpdateError) {
             console.error("Scan file_url update error:", {
               error: fileUrlUpdateError,
-              scanId: scanData.id,
+              scanId: scanAcceptance.scanId,
               userId,
               filePath,
             });
 
-            await failAcceptedScan(scanData.id, "file_url_persistence_failed");
+            await failAcceptedScan(scanAcceptance.scanId, "file_url_persistence_failed");
             setMessage(SAFE_SCAN_FAILURE_MESSAGE);
             setLoading(false);
             setLoadingStep("idle");
@@ -716,7 +746,7 @@ if (profileData) {
         } catch (uploadError) {
           console.error("UPLOAD ERROR:", uploadError);
   
-          await failAcceptedScan(scanData.id, "evidence_file_upload_failed");
+          await failAcceptedScan(scanAcceptance.scanId, "evidence_file_upload_failed");
           setMessage(SAFE_SCAN_FAILURE_MESSAGE);
   
           setLoading(false);
@@ -745,7 +775,7 @@ if (profileData) {
   
       if (!response.ok) {
         console.error(result);
-        await failAcceptedScan(scanData.id, "opportunity_generation_failed");
+        await failAcceptedScan(scanAcceptance.scanId, "opportunity_generation_failed");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
@@ -756,7 +786,7 @@ if (profileData) {
         result.opportunities || [];
   
       if (generatedOpportunities.length === 0) {
-        await failAcceptedScan(scanData.id, "opportunity_generation_empty");
+        await failAcceptedScan(scanAcceptance.scanId, "opportunity_generation_empty");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
@@ -767,7 +797,7 @@ if (profileData) {
   .slice(0, 3)
   .map((opportunity) => ({
     user_id: userId,
-    scan_id: scanData.id,
+    scan_id: scanAcceptance.scanId,
     source_problem_title: problemTitleParam || finalMarket || cleanMarket || null,
     source_problem_id: problemIdParam || null,
     source_discovery_id: discoveryIdParam || null,
@@ -794,7 +824,7 @@ if (profileData) {
   
       if (opportunityError) {
         console.error(opportunityError);
-        await failAcceptedScan(scanData.id, "opportunity_persistence_failed");
+        await failAcceptedScan(scanAcceptance.scanId, "opportunity_persistence_failed");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
@@ -802,19 +832,19 @@ if (profileData) {
       }
   
       const completedTransitioned = await transitionLegacyScanStatus({
-        scanId: scanData.id,
+        scanId: scanAcceptance.scanId,
         status: "completed",
         reason: "opportunities_persisted",
       });
 
       if (!completedTransitioned) {
         console.error("Scan completed status update error:", {
-          scanId: scanData.id,
+          scanId: scanAcceptance.scanId,
           userId,
           attemptedStatus: "completed",
         });
 
-        await failAcceptedScan(scanData.id, "completed_transition_failed");
+        await failAcceptedScan(scanAcceptance.scanId, "completed_transition_failed");
         setMessage(SAFE_SCAN_FAILURE_MESSAGE);
         setLoading(false);
         setLoadingStep("idle");
