@@ -37,10 +37,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not discover opportunities.",
+        error: "Could not discover opportunities.",
       },
       { status: 500 }
     );
