@@ -4,6 +4,10 @@ import {
   cleanJsonResponse,
   normalizeProblems,
 } from "@/lib/intelligence/discovery-response-normalization";
+import {
+  deduplicateDiscoverProblems,
+  type DiscoverHistoricalProblem,
+} from "@/lib/intelligence/discovery-deduplication";
 import { collectExternalSources } from "@/lib/evidence/sources/discovery-external-sources";
 import {
   collectDataMoatSources,
@@ -44,6 +48,10 @@ import {
 } from "@/lib/intelligence/discovery-assisted-persistence-decision";
 
 type Source = DiscoverySource;
+
+const DISCOVER_TARGET_PROBLEM_COUNT = 8;
+const DISCOVER_MIN_PROBLEM_COUNT = 5;
+const DISCOVER_MAX_REPLACEMENT_ATTEMPTS = 1;
 
 export class DiscoverOpportunitiesWorkflowError extends Error {
   status: number;
@@ -441,9 +449,11 @@ function getSupabaseAdminClient() {
 async function analyzeSignals({
   externalSources,
   moatSources,
+  replacementCount = 0,
 }: {
   externalSources: Source[];
   moatSources: Source[];
+  replacementCount?: number;
 }) {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is missing.");
@@ -488,12 +498,13 @@ ${externalText}
 Internal data moat:
 ${moatText}
 
-Return 5 to 8 monetizable SaaS problems.
+Return ${replacementCount > 0 ? replacementCount : "5 to 8"} monetizable SaaS problems.
 
 Rules:
 - Prioritize problems supported by fresh external evidence.
 - Use the data moat to strengthen, cluster, or validate problems.
 - Do not invent generic SaaS ideas.
+- Each problem must be meaningfully distinct in title, affected niche, workflow pain, and solution angle.
 - Focus on repeated pain, manual work, spreadsheets, workflow friction, buying intent, and operational inefficiency.
 - buying_signal_score means evidence that someone might pay.
 - frequency_score means how repeated the problem appears.
@@ -556,6 +567,52 @@ JSON format:
   }
 }
 
+async function loadUserDiscoverProblemHistory(userId: string): Promise<DiscoverHistoricalProblem[]> {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("discovered_problems")
+    .select("problem_title, problem_summary, affected_niches, suggested_solutions, problem_cluster")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) throw error;
+
+  return (data || []).map((problem) => ({
+    problem_title: String(problem.problem_title || ""),
+    problem_summary: String(problem.problem_summary || ""),
+    affected_niches: String(problem.affected_niches || ""),
+    suggested_solutions: String(problem.suggested_solutions || ""),
+    problem_cluster: String(problem.problem_cluster || ""),
+  }));
+}
+
+function logDiscoverDeduplicationDiagnostics({
+  diagnostics,
+  replacementAttempts,
+  finalAcceptedCount,
+}: {
+  diagnostics: ReturnType<typeof deduplicateDiscoverProblems>["diagnostics"];
+  replacementAttempts: number;
+  finalAcceptedCount: number;
+}) {
+  const payload = {
+    event: "discover_deduplication_result",
+    generation_duplicates_removed: diagnostics.generationDuplicateCount,
+    history_duplicates_rejected: diagnostics.historyDuplicateCount,
+    diversity_rejections: diagnostics.diversityRejectedCount,
+    replacement_attempts: replacementAttempts,
+    final_accepted_count: finalAcceptedCount,
+    incomplete_result_set: finalAcceptedCount < DISCOVER_MIN_PROBLEM_COUNT,
+  };
+
+  if (payload.incomplete_result_set) {
+    console.warn("Discover deduplication returned an incomplete distinct result set:", payload);
+    return;
+  }
+
+  console.info("Discover deduplication diagnostics:", payload);
+}
+
 export async function discoverOpportunitiesWorkflow(userId: string) {
   const discoveryExecutionStartedAt = new Date().toISOString();
   const { data: profile, error: profileError } = await getSupabaseAdminClient()
@@ -578,9 +635,10 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     referenceTimestamp: discoveryExecutionStartedAt,
   });
 
-  const [externalSources, moatSources] = await Promise.all([
+  const [externalSources, moatSources, userProblemHistory] = await Promise.all([
     collectExternalSources(sourcesLimit),
     collectDataMoatSources(),
+    loadUserDiscoverProblemHistory(userId),
   ]);
 
   await retrievalPromise;
@@ -590,7 +648,42 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     moatSources,
   });
 
-  const problems = normalizeProblems(analysis.problems || []);
+  let replacementAttempts = 0;
+  let candidateProblems = normalizeProblems(analysis.problems || []);
+  let deduplicationResult = deduplicateDiscoverProblems({
+    candidates: candidateProblems,
+    userHistory: userProblemHistory,
+    targetCount: DISCOVER_TARGET_PROBLEM_COUNT,
+  });
+
+  while (
+    deduplicationResult.accepted.length < DISCOVER_MIN_PROBLEM_COUNT &&
+    replacementAttempts < DISCOVER_MAX_REPLACEMENT_ATTEMPTS
+  ) {
+    replacementAttempts += 1;
+    const missingCount = DISCOVER_MIN_PROBLEM_COUNT - deduplicationResult.accepted.length;
+    const replacementAnalysis = await analyzeSignals({
+      externalSources,
+      moatSources,
+      replacementCount: missingCount,
+    });
+    candidateProblems = [
+      ...deduplicationResult.accepted,
+      ...normalizeProblems(replacementAnalysis.problems || []),
+    ];
+    deduplicationResult = deduplicateDiscoverProblems({
+      candidates: candidateProblems,
+      userHistory: userProblemHistory,
+      targetCount: DISCOVER_TARGET_PROBLEM_COUNT,
+    });
+  }
+
+  const problems = deduplicationResult.accepted;
+  logDiscoverDeduplicationDiagnostics({
+    diagnostics: deduplicationResult.diagnostics,
+    replacementAttempts,
+    finalAcceptedCount: problems.length,
+  });
 
   runDiscoveryOrchestratorDiagnostics({
     externalSources,
