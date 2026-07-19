@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
+import { buildEmptyWeeklyReport, buildWeeklyIntelligencePrompt, countWeeklyEvidence, getWeeklyIntelligencePeriod, isInsideWeeklyPeriod, validateWeeklyModelOutput, type WeeklyEvidenceSource, type WeeklySharedSource } from "@/lib/weekly-intelligence";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 
@@ -646,108 +648,271 @@ async function saveWeeklySources({
   if (error) throw error;
 }
 
+
+function sanitizeWeeklyError() {
+  return "Could not generate weekly intelligence.";
+}
+
+function logWeeklyDiagnostic(event: string, payload: Record<string, unknown>) {
+  console.info("Weekly intelligence diagnostic", { event, ...payload });
+}
+
+async function getUserProfile(userId: string) {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("user_profiles")
+    .select("plan,weekly_intelligence_enabled")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function findExistingWeeklyRun(userId: string, periodStart: string, periodEnd: string) {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("weekly_intelligence_runs")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("period_start", periodStart)
+    .eq("period_end", periodEnd)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function getProblemsForRun(runId: string) {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("weekly_detected_problems")
+    .select("*")
+    .eq("run_id", runId);
+
+  if (error) throw error;
+  return data || [];
+}
+
+async function collectUserWeeklyEvidence(userId: string, period: ReturnType<typeof getWeeklyIntelligencePeriod>) {
+  const client = getSupabaseAdminClient();
+  const [scans, discoveries, savedIdeas, conversions] = await Promise.all([
+    client
+      .from("scan")
+      .select("id,market,audience,region,status,evidence,created_at")
+      .eq("user_id", userId)
+      .eq("status", "completed")
+      .gte("created_at", period.period_start)
+      .lt("created_at", period.period_end),
+    client
+      .from("opportunity_discoveries")
+      .select("id,summary,status,total_sources_analyzed,created_at")
+      .eq("user_id", userId)
+      .eq("status", "completed")
+      .gte("created_at", period.period_start)
+      .lt("created_at", period.period_end),
+    client
+      .from("saved_ideas")
+      .select("id,opportunity_id,created_at")
+      .eq("user_id", userId)
+      .gte("created_at", period.period_start)
+      .lt("created_at", period.period_end),
+    client
+      .from("discovery_actions")
+      .select("id,action_type,created_at,discovery_id,problem_id")
+      .eq("user_id", userId)
+      .gte("created_at", period.period_start)
+      .lt("created_at", period.period_end),
+  ]);
+
+  for (const result of [scans, discoveries, savedIdeas, conversions]) {
+    if (result.error) throw result.error;
+  }
+
+  const evidence: WeeklyEvidenceSource[] = [];
+
+  for (const scan of scans.data || []) {
+    if (!isInsideWeeklyPeriod(scan.created_at, period)) continue;
+    evidence.push({
+      type: "scan",
+      id: scan.id,
+      title: [scan.market, scan.audience, scan.region].filter(Boolean).join(" / ") || "Completed Scan",
+      summary: String(scan.evidence || "Completed Scan with stored evidence.").slice(0, 800),
+      created_at: scan.created_at,
+    });
+  }
+
+  for (const discovery of discoveries.data || []) {
+    if (!isInsideWeeklyPeriod(discovery.created_at, period)) continue;
+    evidence.push({
+      type: "discover",
+      id: discovery.id,
+      title: "Discover generation",
+      summary: String(discovery.summary || `Discover analyzed ${discovery.total_sources_analyzed || 0} sources.`).slice(0, 800),
+      created_at: discovery.created_at,
+    });
+  }
+
+  for (const savedIdea of savedIdeas.data || []) {
+    if (!isInsideWeeklyPeriod(savedIdea.created_at, period)) continue;
+    evidence.push({
+      type: "saved_idea",
+      id: savedIdea.id,
+      title: "Saved idea",
+      summary: `User saved opportunity ${savedIdea.opportunity_id}.`,
+      created_at: savedIdea.created_at,
+    });
+  }
+
+  for (const conversion of conversions.data || []) {
+    if (!isInsideWeeklyPeriod(conversion.created_at, period)) continue;
+    evidence.push({
+      type: "conversion",
+      id: conversion.id,
+      title: `Discover action: ${conversion.action_type || "unknown"}`,
+      summary: `User action on discovery ${conversion.discovery_id || "unknown"} and problem ${conversion.problem_id || "unknown"}.`,
+      created_at: conversion.created_at,
+    });
+  }
+
+  return evidence.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+async function collectPriorUserContext(userId: string, periodStart: string) {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("weekly_intelligence_runs")
+    .select("id,summary,created_at")
+    .eq("user_id", userId)
+    .lt("period_end", periodStart)
+    .eq("status", "completed")
+    .order("period_end", { ascending: false })
+    .limit(3);
+
+  if (error) throw error;
+  return (data || []).map((run) => ({
+    type: "scan" as const,
+    id: run.id,
+    title: "Prior Weekly Intelligence summary",
+    summary: String(run.summary || "Prior weekly report.").slice(0, 500),
+    created_at: run.created_at,
+  }));
+}
+
+async function collectSharedWeeklyContext() {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("problem_intelligence")
+    .select("id,problem_title,intelligence_score,last_seen_at")
+    .order("intelligence_score", { ascending: false })
+    .limit(5);
+
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    type: "problem_intelligence" as const,
+    id: row.id,
+    title: row.problem_title,
+    summary: `Shared aggregate intelligence score: ${row.intelligence_score || 0}.`,
+    created_at: row.last_seen_at,
+  })) satisfies WeeklySharedSource[];
+}
+
+async function analyzeUserScopedWeeklySignals(input: {
+  period: ReturnType<typeof getWeeklyIntelligencePeriod>;
+  userEvidence: WeeklyEvidenceSource[];
+  priorUserContext: WeeklyEvidenceSource[];
+  sharedContext: WeeklySharedSource[];
+}) {
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is missing.");
+
+  const prompt = buildWeeklyIntelligencePrompt(input);
+  const completion = await getOpenRouterClient().chat.completions.create({
+    model: "openai/gpt-4.1-mini",
+    messages: [
+      { role: "system", content: "Return valid JSON only. Never fabricate user evidence." },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.1,
+    max_tokens: 2200,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("No AI response generated.");
+  return JSON.parse(cleanJsonResponse(content));
+}
+
 export async function POST(req: Request) {
   try {
-    const authHeader = req.headers.get("authorization");
+    const user = await requireUser(req);
+    const profile = await getUserProfile(user.id);
 
-    if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
+    if (profile && profile.weekly_intelligence_enabled === false) {
+      return NextResponse.json({ success: false, error: "Weekly Intelligence is not enabled for this plan." }, { status: 403 });
     }
 
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-      throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
+    const period = getWeeklyIntelligencePeriod();
+    logWeeklyDiagnostic("period_selected", { userId: user.id, period });
+
+    const existingRun = await findExistingWeeklyRun(user.id, period.period_start, period.period_end);
+    if (existingRun) {
+      const problems = await getProblemsForRun(existingRun.id);
+      logWeeklyDiagnostic("existing_report_reused", { userId: user.id, runId: existingRun.id, period });
+      return NextResponse.json({ success: true, run: existingRun, sources_saved: existingRun.total_sources_analyzed || 0, problems });
     }
 
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
-    }
+    const [userEvidence, priorUserContext, sharedContext] = await Promise.all([
+      collectUserWeeklyEvidence(user.id, period),
+      collectPriorUserContext(user.id, period.period_start),
+      collectSharedWeeklyContext(),
+    ]);
+    const evidenceCounts = countWeeklyEvidence(userEvidence);
+    const emptyEvidence = userEvidence.length === 0;
+    logWeeklyDiagnostic("source_counts", { userId: user.id, period, evidenceCounts, sharedSourceCount: sharedContext.length, emptyEvidence });
 
-    const sources = await collectWeeklySignals();
-    const analysis = await analyzeWeeklySignals(sources);
-    const problems = normalizeProblems(analysis.problems || [], sources);
+    let report;
+    if (emptyEvidence) {
+      report = buildEmptyWeeklyReport(period);
+      logWeeklyDiagnostic("empty_evidence_report", { userId: user.id, period });
+    } else {
+      const rawAnalysis = await analyzeUserScopedWeeklySignals({ period, userEvidence, priorUserContext, sharedContext });
+      try {
+        report = validateWeeklyModelOutput(rawAnalysis, userEvidence);
+      } catch (validationError) {
+        logWeeklyDiagnostic("output_validation_failed", { userId: user.id, period, message: validationError instanceof Error ? validationError.message : "Unknown validation failure" });
+        return NextResponse.json({ success: false, error: "Could not generate a valid weekly intelligence report." }, { status: 502 });
+      }
+    }
 
     const { data: runData, error: runError } = await getSupabaseAdminClient()
       .from("weekly_intelligence_runs")
-      .insert([
-        {
-          status: "completed",
-          total_sources_analyzed: sources.length,
-          summary:
-            analysis.summary ||
-            "SaaSScout detected weekly market problems from Google and X signals.",
-        },
-      ])
+      .upsert(
+        [{ user_id: user.id, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: userEvidence.length, summary: report.summary }],
+        { onConflict: "user_id,period_start,period_end" }
+      )
       .select()
       .single();
 
-    if (runError || !runData) {
-      throw runError || new Error("Could not create weekly intelligence run.");
+    if (runError || !runData) throw runError || new Error("Could not create weekly intelligence run.");
+
+    if (report.problems.length > 0) {
+      const problemRows = report.problems.map((problem) => ({ ...problem, run_id: runData.id }));
+      const { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient().from("weekly_detected_problems").insert(problemRows).select();
+      if (problemsError) throw problemsError;
+      for (const problem of report.problems) await updateWeeklyProblemIntelligence(problem);
+      if (isKnowledgeEvolutionDiagnosticsEnabled()) {
+        await runKnowledgeEvolutionWeeklyDiagnostics({ client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient, problems: report.problems });
+      }
+      logWeeklyDiagnostic("persistence_completed", { userId: user.id, runId: runData.id, problemCount: insertedProblems?.length || 0 });
+      return NextResponse.json({ success: true, run: runData, sources_saved: userEvidence.length, problems: insertedProblems || [] });
     }
 
-    await saveWeeklySources({
-      runId: runData.id,
-      sources,
-    });
-
-    const problemRows = problems.map((problem) => ({
-      run_id: runData.id,
-      problem_title: problem.problem_title,
-      problem_summary: problem.problem_summary,
-      affected_niches: problem.affected_niches,
-      suggested_solutions: problem.suggested_solutions,
-      pain_score: problem.pain_score,
-      revenue_score: problem.revenue_score,
-      urgency_score: problem.urgency_score,
-      trend_score: problem.trend_score,
-      monetization_angle: problem.monetization_angle,
-      source_evidence: problem.source_evidence,
-      buying_signal_score: problem.buying_signal_score,
-      frequency_score: problem.frequency_score,
-      opportunity_score: problem.opportunity_score,
-      problem_cluster: problem.problem_cluster,
-      source_quality_score: problem.source_quality_score,
-    }));
-
-    const { data: insertedProblems, error: problemsError } =
-      await getSupabaseAdminClient()
-        .from("weekly_detected_problems")
-        .insert(problemRows)
-        .select();
-
-    if (problemsError) throw problemsError;
-
-    for (const problem of problems) {
-      await updateWeeklyProblemIntelligence(problem);
-    }
-
-    if (isKnowledgeEvolutionDiagnosticsEnabled()) {
-      await runKnowledgeEvolutionWeeklyDiagnostics({
-        client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient,
-        problems,
-      });
-    }
-
-    return NextResponse.json({
-      success: true,
-      run: runData,
-      sources_saved: sources.length,
-      problems: insertedProblems || [],
-    });
+    logWeeklyDiagnostic("persistence_completed", { userId: user.id, runId: runData.id, problemCount: 0 });
+    return NextResponse.json({ success: true, run: runData, sources_saved: userEvidence.length, problems: [] });
   } catch (error) {
     console.error("Weekly intelligence error:", error);
 
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not generate weekly intelligence.",
-      },
-      { status: 500 }
-    );
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
+
+    return NextResponse.json({ success: false, error: sanitizeWeeklyError() }, { status: 500 });
   }
 }
