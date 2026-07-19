@@ -523,24 +523,6 @@ if (profileData) {
 
       const accessToken = session.access_token;
 
-      if (!isAdmin) {
-        if (!userProfile) {
-          setMessage("Could not load your plan. Please refresh and try again.");
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-  
-        if (userProfile.scans_used >= userProfile.scan_limit) {
-          setMessage(
-            `You have reached your ${userProfile.plan} plan limit of ${userProfile.scan_limit} scans. Upgrade options are coming soon.`
-          );
-          setLoading(false);
-          setLoadingStep("idle");
-          return;
-        }
-      }
-  
       const cleanMarket = market.trim();
       const cleanAudience = audience.trim();
       const cleanRegion = region.trim();
@@ -671,7 +653,10 @@ if (profileData) {
         });
       } catch (acceptanceError) {
         console.error("Scan acceptance error:", acceptanceError);
-        setMessage("Something went wrong creating your scan. Please try again.");
+        const message = acceptanceError instanceof Error && acceptanceError.message.includes("limit")
+          ? acceptanceError.message
+          : "Something went wrong creating your scan. Please try again.";
+        setMessage(message);
         setLoading(false);
         setLoadingStep("idle");
         return;
@@ -885,27 +870,6 @@ if (profileData) {
         }
       }
 
-      if (!isAdmin && userProfile) {
-        const newScansUsed = userProfile.scans_used + 1;
-  
-        const { error: profileUpdateError } = await supabase
-          .from("user_profiles")
-          .update({
-            scans_used: newScansUsed,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", userId);
-  
-        if (profileUpdateError) {
-          console.error("Profile scan usage update error:", profileUpdateError);
-        } else {
-          setUserProfile({
-            ...userProfile,
-            scans_used: newScansUsed,
-          });
-        }
-      }
-  
       setLoadingStep("completed");
   
       router.push("/results");
