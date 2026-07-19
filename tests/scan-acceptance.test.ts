@@ -83,14 +83,16 @@ test("acceptance persistence failures are controlled", async () => {
   await assert.rejects(() => acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never), (error) => error instanceof ScanAcceptanceError && error.code === "scan_acceptance_persistence_failed");
 });
 
-test("current Scan UI remains compatible with legacy processing after server acceptance", () => {
+test("Scan UI delegates acceptance and legacy processing to the server workflow", () => {
   const page = readFileSync("app/scan/page.tsx", "utf8");
   const route = readFileSync("app/api/scan/acceptance/route.ts", "utf8");
+  const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
 
-  assert.match(page, /fetch\("\/api\/scan\/acceptance"/);
-  assert.match(page, /version: "scan-acceptance@1"; scanId: string; status: "pending"/);
-  assert.match(page, /acceptedScanId = scanAcceptance\.scanId/);
-  assert.match(page, /transitionLegacyScanStatus\(\{\s*scanId: scanAcceptance\.scanId/s);
+  assert.match(page, /fetch\("\/api\/scan\/workflow"/);
+  assert.doesNotMatch(page, /fetch\("\/api\/scan\/acceptance"/);
+  assert.match(orchestration, /acceptScanRequest/);
+  assert.match(orchestration, /acceptance\.scanId/);
+  assert.match(orchestration, /transitionLegacyScan/);
   assert.doesNotMatch(page, /\.from\("scan"\)\s*\.insert/s);
   assert.doesNotMatch(page, /scans_used:\s*newScansUsed/);
   assert.match(route, /runScanAcceptance/);

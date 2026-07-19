@@ -62,10 +62,40 @@ test("scan server orchestration keeps route thin and separates boundaries", () =
   assert.match(route, /runScanServerOrchestration/);
   assert.doesNotMatch(route, /supabase|\.from\(|insert\(|upsert\(|update\(|delete\(/i);
   assert.match(orchestration, /validateJsonScanOrchestrationRequest/);
-  assert.match(orchestration, /executeScanOrchestrationWorkflow/);
+  assert.match(orchestration, /executeAcceptedScanWorkflow/);
+  assert.match(orchestration, /acceptScanRequest/);
+  assert.match(orchestration, /transitionLegacyScan/);
+  assert.match(orchestration, /persistLegacyResults/);
   assert.match(orchestration, /persistScanOrchestrationArtifacts/);
   assert.match(orchestration, /mapScanOrchestrationSuccessResponse/);
   assert.doesNotMatch(workflow, /supabase|\.from\(|insert\(|upsert\(|update\(|delete\(/i);
+});
+
+test("scan browser delegates workflow sequencing to the server workflow endpoint", () => {
+  const page = readFileSync("app/scan/page.tsx", "utf8");
+
+  assert.match(page, /fetch\("\/api\/scan\/workflow"/);
+  assert.doesNotMatch(page, /fetch\("\/api\/scan\/acceptance"/);
+  assert.doesNotMatch(page, /fetch\("\/api\/analyze-evidence"/);
+  assert.doesNotMatch(page, /fetch\("\/api\/generate-opportunities"/);
+  assert.doesNotMatch(page, /from\("opportunities"\)\.insert/);
+  assert.doesNotMatch(page, /from\("evidence_analysis"\)\.insert/);
+  assert.doesNotMatch(page, /status:\s*"processing"/);
+  assert.doesNotMatch(page, /status:\s*"completed"/);
+  assert.doesNotMatch(page, /status:\s*"failed"/);
+});
+
+test("scan server owns lifecycle persistence and Results compatibility rows", () => {
+  const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
+
+  assert.match(orchestration, /acceptScanRequest/);
+  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "processing"\)/);
+  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "completed"\)/);
+  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "failed"\)/);
+  assert.match(orchestration, /from\("evidence_analysis"\)\.insert/);
+  assert.match(orchestration, /from\("opportunities"\)\.insert/);
+  assert.match(orchestration, /source_discovery_id/);
+  assert.match(orchestration, /source_problem_id/);
 });
 
 test("scan server orchestration failure response remains sanitized", () => {
