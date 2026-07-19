@@ -171,8 +171,20 @@ export default function WeeklyPage() {
       setGenerating(true);
       setMessage("");
 
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setMessage("Please sign in again to run Weekly Intelligence.");
+        return;
+      }
+
       const response = await fetch("/api/weekly-intelligence", {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
       });
 
       const rawText = await response.text();
