@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseAdminClient } from "../supabase/server-admin.ts";
 
 export type ProblemIntelligenceInput = {
   problem_title: string;
@@ -63,10 +63,7 @@ type SupabaseProblemIntelligenceClient = {
 };
 
 function getSupabaseAdminClient(): SupabaseProblemIntelligenceClient {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-  ) as unknown as SupabaseProblemIntelligenceClient;
+  return createSupabaseAdminClient() as unknown as SupabaseProblemIntelligenceClient;
 }
 
 function nowIso() {

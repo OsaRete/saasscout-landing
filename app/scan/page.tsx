@@ -747,48 +747,22 @@ if (profileData) {
       }
 
       if (discoveryIdParam && problemIdParam) {
-        const problemTitle =problemTitleParam|| finalMarket || cleanMarket;
-      
-        const { data: existingProblem, error: existingProblemError } = await supabase
-          .from("problem_intelligence")
-          .select("*")
-          .eq("problem_title", problemTitle)
-          .maybeSingle();
-      
-        if (existingProblemError) {
-          console.error("Problem intelligence fetch error:", existingProblemError);
-        }
-      
-        if (existingProblem) {
-          const newConvertedCount = Number(existingProblem.converted_count || 0) + 1;
-      
-          const intelligenceScore = Number(
-            (
-              (
-                Number(existingProblem.avg_pain_score || 0) * 0.35 +
-                Number(existingProblem.avg_revenue_score || 0) * 0.35 +
-                Number(existingProblem.avg_urgency_score || 0) * 0.2 +
-                Math.min(Number(existingProblem.prepared_count || 0), 20) * 0.1 +
-                Math.min(newConvertedCount, 20) * 0.25
-              ) * 10
-            ).toFixed(1)
-          );
-      
-          const { error: updateIntelligenceError } = await supabase
-            .from("problem_intelligence")
-            .update({
-              converted_count: newConvertedCount,
-              intelligence_score: intelligenceScore,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", existingProblem.id);
-      
-          if (updateIntelligenceError) {
-            console.error(
-              "Problem intelligence conversion update error:",
-              updateIntelligenceError
-            );
-          }
+        const response = await fetch("/api/problem-intelligence/conversion", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            discoveryId: discoveryIdParam,
+            problemId: problemIdParam,
+            problemTitle: problemTitleParam || finalMarket || cleanMarket,
+          }),
+        });
+
+        if (!response.ok) {
+          const result = await response.json().catch(() => null);
+          console.error("Problem intelligence conversion update error:", result);
         }
       }
 
