@@ -103,3 +103,27 @@ Weekly report persistence remains outside the aggregation layer.
 This PR keeps Scan, Discover, Results, Dashboard, Weekly UI, existing public API contracts, and current UI compatibility unchanged.
 
 Weekly Intelligence no longer duplicates user-owned evidence reads for its generation workflow. Dashboard, Results, Discover, Weekly UI display reads, Snapshot retrieval, and Knowledge Evolution still use their existing independent read paths and can migrate incrementally in later PRs.
+
+## Weekly Intelligence consolidation update — 2026-07-21
+
+Weekly Intelligence now has a single authoritative generation and persistence contract:
+
+1. authenticated `/api/weekly-intelligence` request;
+2. server-owned `aggregateUserDataMoat()` call for all user-owned evidence;
+3. Weekly generation and validation;
+4. idempotent persistence to `weekly_intelligence_runs` keyed by `user_id`, `period_start`, and `period_end`;
+5. idempotent problem persistence to `weekly_detected_problems` keyed by `run_id` and `problem_title`.
+
+The legacy `generate-weekly-report` endpoint is retained only as a deprecated compatibility endpoint and performs no Weekly writes. `weekly_reports` and `weekly_niches` are deprecated legacy tables and are no longer active Weekly generation or Dashboard read models.
+
+Dashboard Weekly cards preserve the existing UI shape by deriving their display model from `weekly_intelligence_runs` and `weekly_detected_problems`; Dashboard must not read legacy weekly tables.
+
+## Weekly scheduling and concurrency update — 2026-07-21
+
+Weekly Intelligence supports both manual generation from the authenticated product route and automatic generation from the protected cron route configured in `vercel.json`. The scheduler is server-owned: it authenticates with `CRON_SECRET`, reads eligible `user_profiles` where `weekly_intelligence_enabled` is true, and invokes the same authoritative Weekly generation service used by manual requests.
+
+Manual and scheduled generation share the same atomic claim contract. A run is reserved in `weekly_intelligence_runs` for the authenticated/scheduled `user_id` and UTC reporting period before evidence aggregation or model generation starts. A duplicate request for the same user and period receives either the completed run or the current processing state, and does not invoke a second model request. Failed or stale processing claims may be reclaimed by the same claim function without holding a database transaction open across model execution.
+
+Completed Weekly runs are reused. When a stale or failed processing run is reclaimed, completion replaces the child `weekly_detected_problems` set for that run before inserting the new validated set, so the persisted children match exactly one authoritative report output.
+
+Detected-problem identity is normalized through `problem_title_key`, which trims leading/trailing whitespace, collapses repeated internal whitespace, and lowercases the model title. The migration backfills this key, removes historical duplicates deterministically by preserving the row with the strongest score tuple, then creates the unique index on `(run_id, problem_title_key)`.

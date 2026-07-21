@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 import AppShell from "../../components/app-shell";
+import { mapAuthoritativeWeeklyToDashboard, type AuthoritativeWeeklyProblem } from "../../lib/weekly-intelligence";
 import {
   Badge,
   Button,
@@ -56,7 +57,6 @@ type WeeklyReport = {
   total_sources_analyzed: number | null;
   average_trend_score: number | null;
   average_pain_intensity: number | null;
-  is_global: boolean | null;
 };
 
 type WeeklyNiche = {
@@ -124,32 +124,36 @@ export default function DashboardPage() {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
-      const { data: weeklyData } = await supabase
-        .from("weekly_reports")
-        .select("*")
-        .or(`user_id.eq.${user.id},is_global.eq.true`)
-        .order("week_start", { ascending: false })
+      const { data: latestWeeklyRun } = await supabase
+        .from("weekly_intelligence_runs")
+        .select("id,period_start,period_end,summary,total_sources_analyzed")
+        .eq("user_id", user.id)
+        .eq("status", "completed")
+        .order("period_start", { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      let weeklyNichesData: WeeklyNiche[] = [];
+      let weeklyProblemsData: AuthoritativeWeeklyProblem[] = [];
 
-      if (weeklyData?.id) {
+      if (latestWeeklyRun?.id) {
         const { data } = await supabase
-          .from("weekly_niches")
-          .select("*")
-          .eq("weekly_report_id", weeklyData.id)
+          .from("weekly_detected_problems")
+          .select("id,run_id,problem_title,affected_niches,pain_score,trend_score")
+          .eq("run_id", latestWeeklyRun.id)
           .order("trend_score", { ascending: false })
           .limit(5);
 
-        weeklyNichesData = data || [];
+        weeklyProblemsData = data || [];
       }
+
+      const { weeklyReport: dashboardWeeklyReport, weeklyNiches: dashboardWeeklyNiches } =
+        mapAuthoritativeWeeklyToDashboard(latestWeeklyRun, weeklyProblemsData);
 
       setScans(scansData || []);
       setOpportunities(opportunitiesData || []);
       setSavedIdeas(savedData || []);
-      setWeeklyReport(weeklyData || null);
-      setWeeklyNiches(weeklyNichesData);
+      setWeeklyReport(dashboardWeeklyReport);
+      setWeeklyNiches(dashboardWeeklyNiches);
       setLoadingData(false);
     }
 
@@ -329,7 +333,7 @@ export default function DashboardPage() {
                 {weeklyReport.total_sources_analyzed || 0}
               </h3>
               <p className="mt-4 text-sm text-cyan-300">
-                External signals analyzed this week
+                User-owned evidence analyzed this week
               </p>
             </div>
           </div>
