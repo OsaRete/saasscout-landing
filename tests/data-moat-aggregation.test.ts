@@ -80,7 +80,7 @@ test("normalization and ordering are deterministic", async () => {
   const result = await aggregateUserDataMoat(clientWith(baseTables), "user-1", { now: () => 10 });
   assert.deepEqual(result.bySource.completed_scans.map((item) => item.id), ["scan-a", "scan-b"]);
   assert.deepEqual(result.items.map((item) => item.id).slice(0, 3), ["act-1", "snap-ident-1", "week-1"]);
-  assert.equal(Object.keys(result.items[0].metadata).join(","), "status,score,sourceCount,opportunityId,actionType,problemId,periodStart,periodEnd");
+  assert.equal(Object.keys(result.items[0].metadata).join(","), "status,score,sourceCount,problemCluster,painScore,revenueScore,urgencyScore,buyingSignalScore,frequencyScore,sourceQualityScore,opportunityId,actionType,problemId,periodStart,periodEnd");
 });
 
 test("missing sources do not fail aggregation and diagnostics remain returned for server callers", async () => {
