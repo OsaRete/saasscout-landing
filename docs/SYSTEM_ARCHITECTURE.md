@@ -424,3 +424,23 @@ El objetivo consiste en construir un sistema operativo de inteligencia de mercad
 Cada nueva línea de código debe acercar al sistema a esa visión.
 
 La arquitectura debe permitir que SaaSScout sea más inteligente mañana de lo que fue hoy, independientemente del modelo de inteligencia artificial que utilice.
+
+## Server-Owned User Actions
+
+User-affecting writes must cross an authenticated server boundary. Browser code may express user intent, but it must not provide authoritative ownership fields, lifecycle state, confidence, validation status, or timestamps. Server routes authenticate with the repository authentication helper, derive the user identifier from that authenticated session, validate resource ownership and lifecycle, and then execute persistence through server-owned Supabase clients.
+
+### Saved Ideas Flow
+
+Results reads existing saved ideas for presentation compatibility, but creation now uses `POST /api/saved-ideas`. The browser sends only `opportunityId`. The route authenticates the request, derives `user_id` from `requireUser()`, verifies that the referenced opportunity belongs to the authenticated user, checks for an existing saved idea, and writes an idempotent `saved_ideas` record. The response exposes only a small public contract: saved idea identifier, opportunity identifier, saved status, and duplicate status.
+
+### Discover Actions Flow
+
+Discover records preparation intent through `POST /api/discover/actions`. The browser sends only `discoveryId`, `problemId`, and the action intent. The route authenticates the request, derives `user_id` from `requireUser()`, validates the action type, verifies the discovery belongs to the authenticated user, verifies the problem belongs to both that discovery and user, rejects invalid lifecycle states, and writes an idempotent `discovery_actions` record. The response exposes only the action identifier, resource identifiers, action type, and duplicate status.
+
+### Ownership and Idempotency
+
+Server-owned user actions intentionally avoid trusting browser-supplied `user_id`, discovery ownership, problem ownership, opportunity ownership, lifecycle state, timestamps, validation status, and scoring fields. Duplicate requests first return an existing matching row when present and use conflict-aware upserts for write attempts so repeated user intent produces deterministic UI behavior and avoids duplicate business events when database uniqueness constraints are available.
+
+### Diagnostics
+
+User-action routes emit lightweight diagnostics for successful writes, duplicate/idempotent requests, ownership rejection, and validation failure. Diagnostics include stable identifiers needed for operational tracing but avoid logging full payloads, raw evidence, or sensitive user-provided content.

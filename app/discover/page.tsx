@@ -404,20 +404,32 @@ export default function DiscoverPage() {
   async function handlePrepareDeepScan(problem: DiscoveredProblem, niches: string[]) {
     if (!userId) return;
 
-    await supabase.from("discovery_actions").insert([
-      {
-        user_id: userId,
-        discovery_id: problem.discovery_id,
-        problem_id: problem.id,
-        action_type: "prepared_deep_scan",
-        problem_title: problem.problem_title,
-        affected_niches: problem.affected_niches,
-        suggested_solutions: problem.suggested_solutions,
-        pain_score: problem.pain_score,
-        revenue_score: problem.revenue_score,
-        urgency_score: problem.urgency_score,
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.access_token) {
+      setMessage("Your session expired. Please log in again.");
+      return;
+    }
+
+    const response = await fetch("/api/discover/actions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
       },
-    ]);
+      body: JSON.stringify({
+        discoveryId: problem.discovery_id,
+        problemId: problem.id,
+        actionType: "prepared_deep_scan",
+      }),
+    });
+
+    if (!response.ok) {
+      setMessage("Could not prepare deep scan for this problem.");
+      return;
+    }
 
     const marketParam = encodeURIComponent(niches[0] || problem.problem_title);
 
