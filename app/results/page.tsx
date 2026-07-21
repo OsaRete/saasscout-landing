@@ -6,6 +6,8 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
 import { Button, CardSkeleton, EmptyState, LoadingState } from "../../components/ui";
+import type { PublicIdeaValidationResponse } from "../../lib/idea-validation";
+import { buildResultsIdeaValidationView } from "../../lib/results/idea-validation-presentation";
 import {
   formatLegacyOpportunityScore,
   getLegacyOpportunityScoreTone,
@@ -142,6 +144,7 @@ export default function ResultsPage() {
     []
   );
   const [scanSources, setScanSources] = useState<ScanSource[]>([]);
+  const [ideaValidations, setIdeaValidations] = useState<Record<string, PublicIdeaValidationResponse>>({});
   const [userId, setUserId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -228,6 +231,46 @@ export default function ResultsPage() {
       setSavedIdeas(savedData || []);
       setEvidenceAnalyses(analysisData);
       setScanSources(sourcesData);
+
+      const opportunitiesForValidation = (opportunitiesData || []).map((opportunity) => {
+        const scan = (scansData || []).find((item) => item.id === opportunity.scan_id);
+        const analysis = analysisData.find((item) => item.scan_id === opportunity.scan_id);
+
+        return {
+          id: opportunity.id,
+          title: opportunity.title,
+          summary: opportunity.mvp || opportunity.pricing,
+          problem: opportunity.pain || analysis?.evidence_summary || undefined,
+          audience: opportunity.customer || scan?.audience || analysis?.audience_summary || undefined,
+        };
+      });
+
+      if (opportunitiesForValidation.length > 0) {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session?.access_token) {
+          const response = await fetch("/api/results/idea-validation", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ ideas: opportunitiesForValidation }),
+          });
+
+          if (response.ok) {
+            const payload = (await response.json()) as {
+              validations?: Record<string, PublicIdeaValidationResponse>;
+            };
+            setIdeaValidations(payload.validations || {});
+          } else {
+            console.error("Results idea validation request failed", response.status);
+          }
+        }
+      }
+
       setLoadingData(false);
     }
 
@@ -534,9 +577,9 @@ export default function ResultsPage() {
 
                           <div className="w-fit rounded-2xl border border-violet-400/30 bg-black/20 px-5 py-4 text-center">
                             <p className="text-2xl font-bold text-violet-100">
-                              {evidenceAnalysis.confidence_score || 7}
+                              {sources.length}
                             </p>
-                            <p className="text-xs text-gray-400">confidence</p>
+                            <p className="text-xs text-gray-400">evidence sources</p>
                           </div>
                         </div>
 
@@ -628,8 +671,14 @@ export default function ResultsPage() {
                           const saved = isIdeaSaved(opportunity.id);
                           const saving = savingId === opportunity.id;
 
-                          const formattedScore = formatLegacyOpportunityScore(opportunity.score);
-                          const scoreProgressWidth = legacyOpportunityScoreToProgressWidth(opportunity.score);
+                          const validation = ideaValidations[opportunity.id];
+                          const validationView = validation
+                            ? buildResultsIdeaValidationView(validation)
+                            : null;
+                          const formattedScore = validationView?.confidenceLabel ?? formatLegacyOpportunityScore(opportunity.score);
+                          const scoreProgressWidth = validation
+                            ? validation.confidence
+                            : legacyOpportunityScoreToProgressWidth(opportunity.score);
                           const scoreTone = getLegacyOpportunityScoreTone(opportunity.score);
 
                           return (
@@ -642,14 +691,14 @@ export default function ResultsPage() {
                                   <div className="max-w-4xl">
                                     <div className="flex flex-wrap gap-2.5">
                                       <InfoBadge
-                                        label="Score"
-                                        value={scoreTone.label}
-                                        tone="cyan"
+                                        label="Validation"
+                                        value={validationView?.statusLabel ?? "Pending"}
+                                        tone={validationView?.tone ?? "cyan"}
                                       />
-                                      {evidenceAnalysis?.confidence_score && (
+                                      {validationView && (
                                         <InfoBadge
-                                          label="Confidence"
-                                          value={evidenceAnalysis.confidence_score}
+                                          label="Recommendation"
+                                          value={validationView.recommendationLabel}
                                           tone="violet"
                                         />
                                       )}
@@ -684,7 +733,7 @@ export default function ResultsPage() {
                                     className={`shrink-0 rounded-3xl border px-6 py-5 text-center ${scoreTone.ring}`}
                                   >
                                     <p className="text-[11px] font-semibold uppercase tracking-[0.24em] opacity-75">
-                                      Opportunity Score
+                                      Engine Confidence
                                     </p>
                                     <div className="mt-3 flex items-end justify-center gap-1">
                                       <span className="text-5xl font-black leading-none">
@@ -700,6 +749,52 @@ export default function ResultsPage() {
                                   </div>
                                 </div>
                               </div>
+
+                              {validation && validationView && (
+                                <section className="border-b border-white/10 bg-black/20 p-6 md:p-8">
+                                  <p className="text-xs font-semibold uppercase tracking-[0.26em] text-violet-200">
+                                    Idea Validation Engine
+                                  </p>
+                                  <h4 className="mt-3 text-xl font-semibold text-white">
+                                    {validationView.recommendationLabel}
+                                  </h4>
+                                  <p className="mt-3 max-w-5xl text-sm leading-7 text-gray-300">
+                                    {validation.evidenceSummary}
+                                  </p>
+                                  <p className="mt-3 max-w-5xl text-sm leading-7 text-gray-400">
+                                    {validationView.recommendationText}
+                                  </p>
+
+                                  <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                                    <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.06] p-5">
+                                      <h5 className="font-semibold text-cyan-100">Supporting evidence</h5>
+                                      <div className="mt-3 space-y-3">
+                                        {(validation.supportingSignals.length > 0
+                                          ? validation.supportingSignals.slice(0, 3)
+                                          : [{ itemId: "none", title: "No supporting signals found.", reason: "Collect more evidence before treating this as validated." }]
+                                        ).map((signal) => (
+                                          <p key={signal.itemId} className="text-sm leading-6 text-gray-300">
+                                            {signal.title} — {signal.reason}
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-5">
+                                      <h5 className="font-semibold text-amber-100">Contradictory evidence</h5>
+                                      <div className="mt-3 space-y-3">
+                                        {(validation.contradictorySignals.length > 0
+                                          ? validation.contradictorySignals.slice(0, 3)
+                                          : [{ itemId: "none", title: "No contradictory signals found.", reason: "The engine found no related rejection or low-demand evidence." }]
+                                        ).map((signal) => (
+                                          <p key={signal.itemId} className="text-sm leading-6 text-gray-300">
+                                            {signal.title} — {signal.reason}
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </section>
+                              )}
 
                               <div className="p-6 md:p-8">
                                 <section className="rounded-3xl border border-cyan-300/20 bg-cyan-300/[0.07] p-6">
