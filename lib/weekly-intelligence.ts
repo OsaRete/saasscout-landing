@@ -41,6 +41,82 @@ export type WeeklyReportProblem = {
   source_quality_score: number;
 };
 
+
+export type AuthoritativeWeeklyRun = {
+  id: string;
+  period_start: string;
+  period_end: string;
+  summary: string | null;
+  total_sources_analyzed: number | null;
+};
+
+export type AuthoritativeWeeklyProblem = {
+  id: string;
+  run_id: string;
+  problem_title: string;
+  affected_niches: string | null;
+  pain_score: number | null;
+  trend_score: number | null;
+};
+
+export type DashboardWeeklyReport = {
+  id: string;
+  week_start: string;
+  week_end: string;
+  summary: string | null;
+  strongest_trend: string | null;
+  total_sources_analyzed: number | null;
+  average_trend_score: number | null;
+  average_pain_intensity: number | null;
+};
+
+export type DashboardWeeklyNiche = {
+  id: string;
+  weekly_report_id: string;
+  niche: string;
+  trend_score: number | null;
+  pain_intensity: number | null;
+  source_volume: number | null;
+  movement: string | null;
+};
+
+function averageScore(values: Array<number | null | undefined>) {
+  const scores = values.map(Number).filter(Number.isFinite);
+  if (scores.length === 0) return null;
+  return Number((scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1));
+}
+
+export function mapAuthoritativeWeeklyToDashboard(run: AuthoritativeWeeklyRun | null, problems: AuthoritativeWeeklyProblem[]) {
+  if (!run) return { weeklyReport: null, weeklyNiches: [] as DashboardWeeklyNiche[] };
+
+  const orderedProblems = problems
+    .slice()
+    .sort((a, b) => Number(b.trend_score || 0) - Number(a.trend_score || 0) || a.problem_title.localeCompare(b.problem_title));
+
+  const weeklyReport: DashboardWeeklyReport = {
+    id: run.id,
+    week_start: run.period_start,
+    week_end: run.period_end,
+    summary: run.summary,
+    strongest_trend: orderedProblems[0]?.problem_title || null,
+    total_sources_analyzed: run.total_sources_analyzed,
+    average_trend_score: averageScore(problems.map((problem) => problem.trend_score)),
+    average_pain_intensity: averageScore(problems.map((problem) => problem.pain_score)),
+  };
+
+  const weeklyNiches = orderedProblems.slice(0, 5).map((problem) => ({
+    id: problem.id,
+    weekly_report_id: run.id,
+    niche: problem.affected_niches || problem.problem_title,
+    trend_score: problem.trend_score,
+    pain_intensity: problem.pain_score,
+    source_volume: 1,
+    movement: "Stable",
+  }));
+
+  return { weeklyReport, weeklyNiches };
+}
+
 export type WeeklyModelOutput = {
   summary?: unknown;
   problems?: unknown;
@@ -89,6 +165,14 @@ export function isInsideWeeklyPeriod(createdAt: string | null | undefined, perio
 function safeText(value: unknown, fallback = "") {
   const text = typeof value === "string" ? value.trim() : "";
   return text || fallback;
+}
+
+
+export function normalizeWeeklyProblemTitleKey(title: string | null | undefined) {
+  return String(title || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function clamp(score: unknown, fallback = 5) {

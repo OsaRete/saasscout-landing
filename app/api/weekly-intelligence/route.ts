@@ -2,10 +2,11 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
-import { buildEmptyWeeklyReport, collectWeeklyEvidenceFromDataMoat, buildWeeklyIntelligencePrompt, countWeeklyEvidence, getWeeklyIntelligencePeriod, validateWeeklyModelOutput, type WeeklyEvidenceSource, type WeeklySharedSource } from "@/lib/weekly-intelligence";
+import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, type WeeklyEvidenceSource, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
+import { runAuthoritativeWeeklyGenerationForUser, type AuthoritativeWeeklyGenerationRepository } from "@/lib/weekly-intelligence-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -658,6 +659,69 @@ function logWeeklyDiagnostic(event: string, payload: Record<string, unknown>) {
   console.info("Weekly intelligence diagnostic", { event, ...payload });
 }
 
+export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGenerationRepository {
+  return {
+    async claimRun({ userId, period, staleBefore }) {
+      const { data, error } = await getSupabaseAdminClient().rpc("claim_weekly_intelligence_run", {
+        p_user_id: userId,
+        p_period_start: period.period_start,
+        p_period_end: period.period_end,
+        p_timezone: period.timezone,
+        p_stale_before: staleBefore,
+      });
+      if (error) throw error;
+      const claim = Array.isArray(data) ? data[0] : data;
+      if (!claim?.run) throw new Error("Could not claim weekly intelligence run.");
+      return { status: claim.claim_status, run: claim.run };
+    },
+    getProblemsForRun,
+    async completeRun({ runId, userId, period, totalSourcesAnalyzed, summary }) {
+      const { data, error } = await getSupabaseAdminClient()
+        .from("weekly_intelligence_runs")
+        .update({ user_id: userId, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: totalSourcesAnalyzed, summary })
+        .eq("id", runId)
+        .select()
+        .single();
+      if (error || !data) throw error || new Error("Could not complete weekly intelligence run.");
+      return data;
+    },
+    async replaceProblems({ runId, problems }) {
+      const { error: deleteError } = await getSupabaseAdminClient().from("weekly_detected_problems").delete().eq("run_id", runId);
+      if (deleteError) throw deleteError;
+      if (problems.length === 0) return [];
+      const problemRows = problems.map((problem: WeeklyReportProblem) => ({ ...problem, problem_title_key: problem.problem_title.trim().replace(/\s+/g, " ").toLowerCase(), run_id: runId }));
+      const { data, error } = await getSupabaseAdminClient().from("weekly_detected_problems").insert(problemRows).select();
+      if (error) throw error;
+      for (const problem of problems) await updateWeeklyProblemIntelligence(problem);
+      if (isKnowledgeEvolutionDiagnosticsEnabled()) {
+        await runKnowledgeEvolutionWeeklyDiagnostics({ client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient, problems });
+      }
+      return data || [];
+    },
+    async markRunFailed({ runId }) {
+      await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId);
+    },
+  };
+}
+
+export async function runWeeklyGenerationForUser(userId: string, period: WeeklyPeriod) {
+  return runAuthoritativeWeeklyGenerationForUser({
+    userId,
+    period,
+    dependencies: {
+      repository: buildWeeklyGenerationRepository(),
+      aggregate: (authenticatedUserId) =>
+        aggregateUserDataMoat(getSupabaseAdminClient() as unknown as DataMoatAggregationClient, authenticatedUserId, {
+          includeSharedContext: true,
+          limitPerSource: 100,
+          logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
+        }),
+      analyze: analyzeUserScopedWeeklySignals,
+      log: logWeeklyDiagnostic,
+    },
+  });
+}
+
 async function getUserProfile(userId: string) {
   const { data, error } = await getSupabaseAdminClient()
     .from("user_profiles")
@@ -693,31 +757,6 @@ async function getProblemsForRun(runId: string) {
 
   if (error) throw error;
   return data || [];
-}
-
-async function collectWeeklyAggregationContext(userId: string, period: ReturnType<typeof getWeeklyIntelligencePeriod>) {
-  const { aggregation, userEvidence, priorUserContext, sharedContext } = await collectWeeklyEvidenceFromDataMoat({
-    userId,
-    period,
-    aggregate: (authenticatedUserId) =>
-      aggregateUserDataMoat(getSupabaseAdminClient() as unknown as DataMoatAggregationClient, authenticatedUserId, {
-        includeSharedContext: true,
-        limitPerSource: 100,
-        logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
-      }),
-  });
-  const eligibleCounts = countWeeklyEvidence(userEvidence);
-  logWeeklyDiagnostic("aggregation_completed", {
-    userId,
-    period,
-    aggregationSourceCounts: aggregation.diagnostics?.countsBySource || {},
-    eligibleCounts,
-    sharedSourceCount: sharedContext.length,
-    skippedSources: aggregation.diagnostics?.skippedSources || [],
-    normalizationFailureCount: aggregation.diagnostics?.normalizationFailures?.length || 0,
-    aggregationDurationMs: aggregation.diagnostics?.durationMs || 0,
-  });
-  return { aggregation, userEvidence, priorUserContext, sharedContext };
 }
 
 function logWeeklyDiagnosticInfo(_message: string, payload?: unknown) {
@@ -775,58 +814,9 @@ export async function POST(req: Request) {
 
     const period = getWeeklyIntelligencePeriod();
     logWeeklyDiagnostic("period_selected", { userId: user.id, period });
-
-    const existingRun = await findExistingWeeklyRun(user.id, period.period_start, period.period_end);
-    if (existingRun) {
-      const problems = await getProblemsForRun(existingRun.id);
-      logWeeklyDiagnostic("existing_report_reused", { userId: user.id, runId: existingRun.id, period });
-      return NextResponse.json({ success: true, run: existingRun, sources_saved: existingRun.total_sources_analyzed || 0, problems });
-    }
-
-    const { userEvidence, priorUserContext, sharedContext } = await collectWeeklyAggregationContext(user.id, period);
-    const evidenceCounts = countWeeklyEvidence(userEvidence);
-    const emptyEvidence = userEvidence.length === 0;
-    logWeeklyDiagnostic("source_counts", { userId: user.id, period, evidenceCounts, sharedSourceCount: sharedContext.length, emptyEvidence });
-
-    let report;
-    if (emptyEvidence) {
-      report = buildEmptyWeeklyReport(period);
-      logWeeklyDiagnostic("empty_evidence_report", { userId: user.id, period });
-    } else {
-      const rawAnalysis = await analyzeUserScopedWeeklySignals({ period, userEvidence, priorUserContext, sharedContext });
-      try {
-        report = validateWeeklyModelOutput(rawAnalysis, userEvidence);
-      } catch (validationError) {
-        logWeeklyDiagnostic("output_validation_failed", { userId: user.id, period, message: validationError instanceof Error ? validationError.message : "Unknown validation failure" });
-        return NextResponse.json({ success: false, error: "Could not generate a valid weekly intelligence report." }, { status: 502 });
-      }
-    }
-
-    const { data: runData, error: runError } = await getSupabaseAdminClient()
-      .from("weekly_intelligence_runs")
-      .upsert(
-        [{ user_id: user.id, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: userEvidence.length, summary: report.summary }],
-        { onConflict: "user_id,period_start,period_end" }
-      )
-      .select()
-      .single();
-
-    if (runError || !runData) throw runError || new Error("Could not create weekly intelligence run.");
-
-    if (report.problems.length > 0) {
-      const problemRows = report.problems.map((problem) => ({ ...problem, run_id: runData.id }));
-      const { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient().from("weekly_detected_problems").insert(problemRows).select();
-      if (problemsError) throw problemsError;
-      for (const problem of report.problems) await updateWeeklyProblemIntelligence(problem);
-      if (isKnowledgeEvolutionDiagnosticsEnabled()) {
-        await runKnowledgeEvolutionWeeklyDiagnostics({ client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient, problems: report.problems });
-      }
-      logWeeklyDiagnostic("persistence_completed", { userId: user.id, runId: runData.id, problemCount: insertedProblems?.length || 0 });
-      return NextResponse.json({ success: true, run: runData, sources_saved: userEvidence.length, problems: insertedProblems || [] });
-    }
-
-    logWeeklyDiagnostic("persistence_completed", { userId: user.id, runId: runData.id, problemCount: 0 });
-    return NextResponse.json({ success: true, run: runData, sources_saved: userEvidence.length, problems: [] });
+    const result = await runWeeklyGenerationForUser(user.id, period);
+    const statusCode = result.status === "processing" ? 202 : 200;
+    return NextResponse.json(result, { status: statusCode });
   } catch (error) {
     console.error("Weekly intelligence error:", error);
 
