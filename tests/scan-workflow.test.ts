@@ -72,7 +72,7 @@ test("intent rejects unknown execution and user supplied control fields", () => 
 
 test("safe workflow log omits private shape", async () => { const result=await executeScanWorkflow({ intent:{ market:"Secret Market" }, pastedEvidence:"Competitor Acme has private painful evidence details." }, TEST_SCAN_WORKFLOW_AUTHORIZATION, deps()); const log=buildSafeScanWorkflowLog({ event:"x", result }); const s=JSON.stringify(log); for (const token of ["Secret Market","Acme","pasted-evidence-001","painful evidence","user_"]) assert.equal(s.includes(token), false); });
 
-test("source compatibility and no migrations", () => { assert.match(readFileSync("app/scan/page.tsx","utf8"), /api\/scan\/workflow/); assert.match(readFileSync("app/api/analyze-evidence/route.ts","utf8"), /return Response\.json\(\{ analysis \}\)/); assert.match(readFileSync("app/api/solution-intelligence/route.ts","utf8"), /success: true,\s*solutionIntelligence/s); assert.equal(readdirSync("supabase/migrations").some(f => f.includes("workflow")), false); assert.doesNotMatch(readFileSync("lib/scan/workflow.ts","utf8"), /supabase|\.from\(|insert\(|upsert\(|update\(|delete\(/i); assert.match(readFileSync("lib/scan/server-orchestration.ts","utf8"), /SCAN_SERVER_WORKFLOW_ENABLED/); assert.match(readFileSync("lib/scan/server-orchestration.ts","utf8"), /requireUser/); });
+test("source compatibility and no migrations", () => { assert.match(readFileSync("app/scan/page.tsx","utf8"), /api\/scan\/workflow/); assert.match(readFileSync("app/api/analyze-evidence/route.ts","utf8"), /LEGACY_SCAN_ROUTE_STATUS = 410/); assert.match(readFileSync("app/api/solution-intelligence/route.ts","utf8"), /LEGACY_SCAN_ROUTE_STATUS = 410/); assert.equal(readdirSync("supabase/migrations").some(f => f.includes("workflow")), false); assert.doesNotMatch(readFileSync("lib/scan/workflow.ts","utf8"), /supabase|\.from\(|insert\(|upsert\(|update\(|delete\(/i); assert.match(readFileSync("lib/scan/server-orchestration.ts","utf8"), /SCAN_SERVER_WORKFLOW_ENABLED/); assert.match(readFileSync("lib/scan/server-orchestration.ts","utf8"), /requireUser/); });
 
 test("workflow hardening source assertions cover route boundaries and public errors", () => {
   const route = readFileSync("lib/scan/server-orchestration.ts", "utf8");
@@ -82,7 +82,7 @@ test("workflow hardening source assertions cover route boundaries and public err
   assert.match(route, /const user = await requireUser\(request\);[\s\S]*authorizeScanOrchestration[\s\S]*validateMultipartScanOrchestrationRequest/);
   assert.match(route, /FORBIDDEN_CLIENT_FIELDS/);
   assert.doesNotMatch(route, /await file\.arrayBuffer\(\)[\s\S]*preflightScanEvidenceMultipartFiles/);
-  assert.match(analyze, /analyze_evidence_unexpected_error/);
-  assert.match(analyze, /return Response\.json\(\{ error: "Failed to analyze evidence\." \}/);
-  assert.doesNotMatch(analyze, /error instanceof Error \? error\.message/);
+  assert.match(analyze, /legacy_scan_generation_route_rejected/);
+  assert.match(analyze, /LEGACY_SCAN_ROUTE_STATUS = 410/);
+  assert.doesNotMatch(analyze, /generateProblemIntelligence|error instanceof Error \? error\.message/);
 });

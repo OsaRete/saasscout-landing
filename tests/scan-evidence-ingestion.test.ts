@@ -233,13 +233,16 @@ test("DOCX fixture source stays portable and self-contained", () => {
   assert.equal(source.includes(processCall + "('mkdir'"), false);
 });
 
-test("legacy prompt builders and route contracts remain present", () => {
+test("legacy Scan generation routes are explicit gone responses", () => {
   const scanPage = readFileSync("app/scan/page.tsx", "utf8");
   const analyzeRoute = readFileSync("app/api/analyze-evidence/route.ts", "utf8");
   const generateRoute = readFileSync("app/api/generate-opportunities/route.ts", "utf8");
   const solutionRoute = readFileSync("app/api/solution-intelligence/route.ts", "utf8");
   assert.match(scanPage, /\/api\/scan\/workflow/);
-  assert.match(analyzeRoute, /scan-user-evidence/);
-  assert.match(generateRoute, /scan-user-evidence/);
-  assert.match(solutionRoute, /scan-user-evidence/);
+  for (const route of [analyzeRoute, generateRoute, solutionRoute]) {
+    assert.match(route, /LEGACY_SCAN_ROUTE_STATUS = 410/);
+    assert.match(route, /legacy_scan_generation_route_rejected/);
+    assert.match(route, /replacement: "\/api\/scan\/workflow"/);
+    assert.doesNotMatch(route, /scan-user-evidence|generateProblemIntelligence|generateSolutionIntelligence|chat\.completions|from\(|insert\(|upsert\(|update\(|delete\(/);
+  }
 });

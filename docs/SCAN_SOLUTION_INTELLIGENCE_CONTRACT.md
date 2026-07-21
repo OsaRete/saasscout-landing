@@ -8,8 +8,8 @@ Solution Intelligence is the isolated foundation for moving Scan from SaaS-only 
 
 The current public Scan flow remains temporarily compatible:
 
-- `app/api/analyze-evidence/route.ts` returns `{ analysis }` and validates the legacy Analyze Evidence contract.
-- `app/api/generate-opportunities/route.ts` returns `{ success, opportunities, grounding }` and still validates exactly three opportunities.
+- `app/api/analyze-evidence/route.ts` is a compatibility tombstone that returns HTTP 410 and no longer validates or generates Analyze Evidence output.
+- `app/api/generate-opportunities/route.ts` is a compatibility tombstone that returns HTTP 410 and no longer validates or generates opportunity output.
 - `lib/scan/safe-prompt-builders.ts` still contains the legacy `Generate exactly 3 SaaS opportunities` instruction for the existing route.
 - `lib/scan/output-validation.ts` still enforces exactly three legacy opportunities with the existing score, difficulty, field, and grounding shape.
 - UI consumers in `app/scan/page.tsx`, `app/results/page.tsx`, `app/scans/page.tsx`, and `app/saved/page.tsx` continue to consume legacy opportunity fields and Supabase `opportunities` rows.
@@ -17,7 +17,7 @@ The current public Scan flow remains temporarily compatible:
 
 ## SaaS-only assumptions found
 
-The legacy prompt identifies the model as a SaaS opportunity analyst, asks for practical SaaS products, and requires exactly three SaaS opportunities. The legacy output validator enforces exactly three opportunities. Current marketing and saved/results copy still references SaaS opportunities. These remain active until a later migration replaces the public Scan behavior.
+The legacy prompt identifies the model as a SaaS opportunity analyst, asks for practical SaaS products, and requires exactly three SaaS opportunities. The legacy output validator enforces exactly three opportunities. Current marketing and saved/results copy still references SaaS opportunities. These legacy direct-generation assumptions are no longer active at the HTTP route boundary; public Scan generation now flows through `/api/scan/workflow`.
 
 ## Architecture
 
@@ -81,7 +81,7 @@ Validation readiness prepares for future real-world validation without implement
 
 ## Dedicated server boundary
 
-`app/api/solution-intelligence/route.ts` is authenticated, bounded, non-persistent, and isolated from legacy Scan routes. It parses strict JSON, validates the v1 contract, computes aggregate diagnostics, and never returns raw model content on failure.
+`app/api/solution-intelligence/route.ts` is now a compatibility tombstone, not a generation boundary. It returns HTTP 410 with `legacy_scan_generation_route_gone`, points callers to `/api/scan/workflow`, and performs no model execution, diagnostics calculation, persistence, or client-evidence trust. Solution Intelligence generation remains available only inside the authoritative server-owned Scan workflow and server-only Scan modules.
 
 ## Shadow-mode decision
 
@@ -176,7 +176,7 @@ Unexpected route failures return the controlled generic public error `solution_i
 
 ### Known limitations
 
-- Solution Intelligence remains isolated from legacy Analyze Evidence and Generate Opportunities.
-- The route still uses a single pasted-evidence envelope ID and does not retrieve, crawl, persist, or map artifacts.
+- The legacy Analyze Evidence, Generate Opportunities, and Solution Intelligence HTTP routes are retired as generation boundaries and return HTTP 410.
+- Solution Intelligence HTTP generation must flow through `/api/scan/workflow`; no legacy route may use a single browser-pasted evidence envelope as trusted Scan evidence.
 - Competitor semantics are contract-validation only; no external verification is performed.
 - The validator hardens the experimental v1 contract but does not introduce `scan-solution-intelligence@2`.
