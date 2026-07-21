@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseDiscoverActionInput, parseSaveIdeaInput, recordDiscoverActionForUser, saveIdeaForUser, UserActionError } from "../lib/user-actions.ts";
+import { deleteOpportunityForUser, parseDeleteOpportunityInput, parseDiscoverActionInput, parseSaveIdeaInput, parseUnsaveSavedIdeaInput, recordDiscoverActionForUser, saveIdeaForUser, unsaveSavedIdeaForUser, UserActionError } from "../lib/user-actions.ts";
 
 type Row = Record<string, unknown>;
 
@@ -14,8 +14,9 @@ function client(tables: Record<string, Row[]>, writes: string[] = []) {
         eq(column: string, value: unknown) { state.filters.push([column, value]); return builder; },
         insert(rows: Row[]) { writes.push(`${table}.insert`); state.insertRows = rows; return builder; },
         upsert(rows: Row[]) { writes.push(`${table}.upsert`); state.insertRows = rows; return builder; },
+        delete() { writes.push(`${table}.delete`); return builder; },
         limit() { return builder; },
-        maybeSingle() { const rows = (tables[table] || []).filter((row) => state.filters.every(([k, v]) => row[k] === v)); return Promise.resolve({ data: rows[0] || null, error: null }); },
+        maybeSingle() { const rows = (tables[table] || []).filter((row) => state.filters.every(([k, v]) => row[k] === v)); if (writes.at(-1) === `${table}.delete`) tables[table] = (tables[table] || []).filter((row) => !state.filters.every(([k, v]) => row[k] === v)); return Promise.resolve({ data: rows[0] || null, error: null }); },
         single() {
           if (state.insertRows) {
             const row = { id: `${table}-${(tables[table] || []).length + 1}`, ...state.insertRows[0] };
@@ -77,12 +78,43 @@ test("Discover Actions duplicate requests are deterministic", async () => {
   assert.deepEqual(db.writes, []);
 });
 
+
+test("Saved Ideas unsave derives user_id server-side and is deterministic", async () => {
+  const db = client({ saved_ideas: [{ id: "saved-1", user_id: "server-user", opportunity_id: "opp-1" }] });
+  assert.deepEqual(parseUnsaveSavedIdeaInput({ savedIdeaId: "saved-1", user_id: "attacker" }), { savedIdeaId: "saved-1", opportunityId: null });
+  const result = await unsaveSavedIdeaForUser({ client: db, userId: "server-user", savedIdeaId: "saved-1" });
+  assert.equal(result.removed, true);
+  const repeated = await unsaveSavedIdeaForUser({ client: db, userId: "server-user", savedIdeaId: "saved-1" });
+  assert.equal(repeated.removed, false);
+});
+
+test("Saved Ideas unsave cannot remove another user's row", async () => {
+  const db = client({ saved_ideas: [{ id: "saved-1", user_id: "other-user", opportunity_id: "opp-1" }] });
+  const result = await unsaveSavedIdeaForUser({ client: db, userId: "server-user", savedIdeaId: "saved-1" });
+  assert.equal(result.removed, false);
+});
+
+test("Opportunity deletion derives user_id server-side and cleans only owned saved ideas", async () => {
+  const db = client({ opportunities: [{ id: "opp-1", user_id: "server-user" }], saved_ideas: [{ id: "saved-1", user_id: "server-user", opportunity_id: "opp-1" }, { id: "saved-2", user_id: "other-user", opportunity_id: "opp-1" }] });
+  assert.deepEqual(parseDeleteOpportunityInput({ opportunityId: "opp-1", user_id: "attacker" }), { opportunityId: "opp-1" });
+  const result = await deleteOpportunityForUser({ client: db, userId: "server-user", opportunityId: "opp-1" });
+  assert.equal(result.deleted, true);
+  assert.deepEqual(db.writes, ["saved_ideas.delete", "opportunities.delete"]);
+});
+
+test("Opportunity deletion returns generic not found for cross-user resources", async () => {
+  const db = client({ opportunities: [{ id: "opp-1", user_id: "other-user" }], saved_ideas: [] });
+  await assert.rejects(() => deleteOpportunityForUser({ client: db, userId: "server-user", opportunityId: "opp-1" }), (error) => error instanceof UserActionError && error.status === 404);
+});
+
 test("browser code no longer inserts saved_ideas or discovery_actions directly", async () => {
   const { readFile } = await import("node:fs/promises");
   const files = ["app/results/page.tsx", "app/opportunity/[id]/page.tsx", "app/discover/page.tsx"];
   const contents = await Promise.all(files.map((file) => readFile(file, "utf8")));
   for (const content of contents) {
     assert.equal(/from\(["']saved_ideas["']\)\s*\.insert/.test(content), false);
+    assert.equal(/from\(["']saved_ideas["']\)\s*\.delete/.test(content), false);
+    assert.equal(/from\(["']opportunities["']\)\s*\.delete/.test(content), false);
     assert.equal(/from\(["']discovery_actions["']\)\s*\.insert/.test(content), false);
   }
 });

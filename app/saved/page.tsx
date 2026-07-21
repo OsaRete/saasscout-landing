@@ -122,13 +122,27 @@ export default function SavedIdeasPage() {
 
     setRemovingId(savedIdeaId);
 
-    const { error } = await supabase
-      .from("saved_ideas")
-      .delete()
-      .eq("id", savedIdeaId);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    if (error) {
-      console.error(error);
+    if (!session?.access_token) {
+      setRemovingId(null);
+      router.push("/login");
+      return;
+    }
+
+    const response = await fetch("/api/saved-ideas", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ savedIdeaId }),
+    });
+
+    if (!response.ok) {
+      console.error("Saved idea removal failed", response.status);
       setRemovingId(null);
       return;
     }

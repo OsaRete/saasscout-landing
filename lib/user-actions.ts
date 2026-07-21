@@ -11,6 +11,7 @@ type QueryBuilder<T = unknown> = {
   single(): SupabaseResult<T>;
   insert(values: unknown[]): QueryBuilder<T>;
   upsert(values: unknown[], options?: { onConflict?: string; ignoreDuplicates?: boolean }): QueryBuilder<T>;
+  delete(): QueryBuilder<T>;
   limit(count: number): QueryBuilder<T[]>;
 };
 
@@ -19,6 +20,8 @@ export type UserActionsClient = {
 };
 
 export type SavedIdeaPublic = { id: string; opportunity_id: string; saved: true; duplicate: boolean };
+export type UnsaveSavedIdeaPublic = { saved: false; removed: boolean };
+export type DeleteOpportunityPublic = { deleted: boolean };
 export type DiscoveryActionPublic = { id: string; discovery_id: string; problem_id: string; action_type: DiscoverActionType; duplicate: boolean };
 
 const DISCOVER_ACTION_TYPES = ["prepared_deep_scan"] as const;
@@ -51,6 +54,20 @@ function safeLog(logger: UserActionLogger | undefined, level: "info" | "warn" | 
 export function parseSaveIdeaInput(input: unknown) {
   const opportunityId = readId(input, "opportunityId");
   if (!opportunityId) throw new UserActionError(400, "invalid_saved_idea_request", "A valid opportunityId is required.");
+  return { opportunityId };
+}
+
+
+export function parseUnsaveSavedIdeaInput(input: unknown) {
+  const savedIdeaId = readId(input, "savedIdeaId");
+  const opportunityId = readId(input, "opportunityId");
+  if (!savedIdeaId && !opportunityId) throw new UserActionError(400, "invalid_unsave_saved_idea_request", "A valid savedIdeaId or opportunityId is required.");
+  return { savedIdeaId, opportunityId };
+}
+
+export function parseDeleteOpportunityInput(input: unknown) {
+  const opportunityId = readId(input, "opportunityId");
+  if (!opportunityId) throw new UserActionError(400, "invalid_delete_opportunity_request", "A valid opportunityId is required.");
   return { opportunityId };
 }
 
@@ -126,4 +143,43 @@ export async function recordDiscoverActionForUser({ client, userId, discoveryId,
   if (inserted.error || !inserted.data) throw new UserActionError(500, "discover_action_write_failed", "Could not record action.");
   safeLog(logger, "info", "discover_action_recorded", { userId, discoveryId, problemId, actionType });
   return { id: readId(inserted.data, "id") || "", discovery_id: discoveryId, problem_id: problemId, action_type: actionType, duplicate: false };
+}
+
+
+export async function unsaveSavedIdeaForUser({ client, userId, savedIdeaId, opportunityId, logger }: { client: UserActionsClient; userId: string; savedIdeaId?: string | null; opportunityId?: string | null; logger?: UserActionLogger }): Promise<UnsaveSavedIdeaPublic> {
+  let query = client.from("saved_ideas").select("id,user_id,opportunity_id").eq("user_id", userId);
+  if (savedIdeaId) query = query.eq("id", savedIdeaId);
+  if (opportunityId) query = query.eq("opportunity_id", opportunityId);
+
+  const existing = await query.maybeSingle();
+  if (existing.error) throw new UserActionError(500, "saved_idea_lookup_failed", "Could not remove saved idea.");
+  if (!existing.data) {
+    safeLog(logger, "info", "saved_idea_unsave_absent", { userId, savedIdeaId, opportunityId });
+    return { saved: false, removed: false };
+  }
+
+  const ownedSavedIdeaId = readId(existing.data, "id");
+  if (!ownedSavedIdeaId) throw new UserActionError(500, "saved_idea_lookup_failed", "Could not remove saved idea.");
+
+  const deleted = await client.from("saved_ideas").delete().eq("id", ownedSavedIdeaId).eq("user_id", userId).maybeSingle();
+  if (deleted.error) throw new UserActionError(500, "saved_idea_delete_failed", "Could not remove saved idea.");
+  safeLog(logger, "info", "saved_idea_unsaved", { userId, savedIdeaId: ownedSavedIdeaId, opportunityId: readId(existing.data, "opportunity_id") });
+  return { saved: false, removed: true };
+}
+
+export async function deleteOpportunityForUser({ client, userId, opportunityId, logger }: { client: UserActionsClient; userId: string; opportunityId: string; logger?: UserActionLogger }): Promise<DeleteOpportunityPublic> {
+  const { data: opportunity, error: opportunityError } = await client.from("opportunities").select("id,user_id").eq("id", opportunityId).eq("user_id", userId).maybeSingle();
+  if (opportunityError) throw new UserActionError(500, "opportunity_lookup_failed", "Could not delete opportunity.");
+  if (!opportunity) {
+    safeLog(logger, "info", "opportunity_delete_not_found", { userId, opportunityId });
+    throw new UserActionError(404, "opportunity_not_found", "Opportunity not found.");
+  }
+
+  const savedCleanup = await client.from("saved_ideas").delete().eq("user_id", userId).eq("opportunity_id", opportunityId).maybeSingle();
+  if (savedCleanup.error) throw new UserActionError(500, "opportunity_dependency_cleanup_failed", "Could not delete opportunity.");
+
+  const deleted = await client.from("opportunities").delete().eq("id", opportunityId).eq("user_id", userId).maybeSingle();
+  if (deleted.error) throw new UserActionError(500, "opportunity_delete_failed", "Could not delete opportunity.");
+  safeLog(logger, "info", "opportunity_deleted", { userId, opportunityId });
+  return { deleted: true };
 }

@@ -243,20 +243,27 @@ export default function OpportunityPage() {
 
     setDeleting(true);
 
-    await supabase
-      .from("saved_ideas")
-      .delete()
-      .eq("user_id", userId)
-      .eq("opportunity_id", opportunity.id);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    const { error } = await supabase
-      .from("opportunities")
-      .delete()
-      .eq("id", opportunity.id)
-      .eq("user_id", userId);
+    if (!session?.access_token) {
+      setSaveMessage("Your session expired. Please log in again.");
+      setDeleting(false);
+      return;
+    }
 
-    if (error) {
-      console.error(error);
+    const response = await fetch("/api/opportunities", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ opportunityId: opportunity.id }),
+    });
+
+    if (!response.ok) {
+      console.error("Opportunity delete failed", response.status);
       setSaveMessage("Could not delete this opportunity. Please try again.");
       setDeleting(false);
       return;
