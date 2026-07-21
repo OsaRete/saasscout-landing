@@ -97,6 +97,119 @@ function clamp(score: unknown, fallback = 5) {
   return Math.min(10, Math.max(0, Number(value.toFixed(1))));
 }
 
+
+export type WeeklyAggregationItem = {
+  kind: string;
+  source: string;
+  id: string;
+  title: string;
+  summary: string;
+  occurredAt: string;
+  parentId?: string;
+  metadata?: Readonly<Record<string, string | number | boolean | null>>;
+};
+
+export type WeeklyAggregationInput = {
+  items: WeeklyAggregationItem[];
+  sharedContext: WeeklyAggregationItem[];
+  bySource?: Partial<Record<string, WeeklyAggregationItem[]>>;
+  diagnostics?: {
+    countsBySource?: Record<string, number>;
+    skippedSources?: Array<{ source: string; reason: string }>;
+    normalizationFailures?: Array<{ source: string; id: string; reason: string }>;
+    durationMs?: number;
+  };
+};
+
+const WEEKLY_CURRENT_KINDS: Record<string, WeeklyEvidenceSourceType> = {
+  scan: "scan",
+  opportunity: "discover",
+  discover_run: "discover",
+  discover_problem: "discover",
+  saved_idea: "saved_idea",
+  user_activity: "conversion",
+};
+
+function deterministicWeeklySort<T extends { created_at: string; type: string; id: string }>(a: T, b: T) {
+  return a.created_at.localeCompare(b.created_at) || a.type.localeCompare(b.type) || a.id.localeCompare(b.id);
+}
+
+function scalarText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isBeforeWeeklyPeriod(createdAt: string | null | undefined, period: WeeklyPeriod) {
+  if (!createdAt) return false;
+  const time = new Date(createdAt).getTime();
+  const start = new Date(period.period_start).getTime();
+  return Number.isFinite(time) && time < start;
+}
+
+export function mapAggregationItemToWeeklyEvidence(item: WeeklyAggregationItem): WeeklyEvidenceSource | null {
+  const type = WEEKLY_CURRENT_KINDS[item.kind];
+  if (!type) return null;
+  const created_at = item.occurredAt;
+  const actionType = scalarText(item.metadata?.actionType);
+  const opportunityId = scalarText(item.metadata?.opportunityId);
+  const problemId = scalarText(item.metadata?.problemId);
+  const sourceCount = item.metadata?.sourceCount;
+
+  if (item.kind === "saved_idea") {
+    return { type, id: item.id, title: "Saved idea", summary: `User saved opportunity ${opportunityId || "unknown"}.`, created_at };
+  }
+
+  if (item.kind === "user_activity") {
+    return { type, id: item.id, title: `Discover action: ${actionType || "unknown"}`, summary: `User action on discovery ${item.parentId || "unknown"} and problem ${problemId || "unknown"}.`, created_at };
+  }
+
+  if (item.kind === "discover_run") {
+    return { type, id: item.id, title: "Discover generation", summary: item.summary || `Discover analyzed ${sourceCount || 0} sources.`, created_at };
+  }
+
+  return { type, id: item.id, title: item.title, summary: item.summary, created_at };
+}
+
+export function buildWeeklyEvidenceFromAggregation(aggregation: WeeklyAggregationInput, period: WeeklyPeriod) {
+  const userEvidence = aggregation.items
+    .filter((item) => isInsideWeeklyPeriod(item.occurredAt, period))
+    .map(mapAggregationItemToWeeklyEvidence)
+    .filter((item): item is WeeklyEvidenceSource => Boolean(item))
+    .sort(deterministicWeeklySort);
+
+  const priorUserContext = (aggregation.bySource?.weekly_reports || [])
+    .filter((item) => isBeforeWeeklyPeriod(item.occurredAt, period))
+    .slice()
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.id.localeCompare(b.id))
+    .slice(0, 3)
+    .map((item) => ({
+      type: "scan" as const,
+      id: item.id,
+      title: "Prior Weekly Intelligence summary",
+      summary: item.summary.slice(0, 500) || "Prior weekly report.",
+      created_at: item.occurredAt,
+    }));
+
+  const sharedContext = aggregation.sharedContext.map((item) => ({
+    type: "problem_intelligence" as const,
+    id: item.id,
+    title: item.title,
+    summary: item.summary || `Shared aggregate intelligence score: ${item.metadata?.score || 0}.`,
+    created_at: item.occurredAt,
+  }));
+
+  return { userEvidence, priorUserContext, sharedContext };
+}
+
+export async function collectWeeklyEvidenceFromDataMoat(input: {
+  userId: string;
+  period: WeeklyPeriod;
+  aggregate: (userId: string) => Promise<WeeklyAggregationInput>;
+}) {
+  if (!input.userId) throw new Error("Weekly Data Moat evidence requires an authenticated user.");
+  const aggregation = await input.aggregate(input.userId);
+  return { aggregation, ...buildWeeklyEvidenceFromAggregation(aggregation, input.period) };
+}
+
 export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<WeeklyEvidenceSourceType, number> {
   return sources.reduce<Record<WeeklyEvidenceSourceType, number>>(
     (counts, source) => ({ ...counts, [source.type]: counts[source.type] + 1 }),

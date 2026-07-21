@@ -1,0 +1,105 @@
+# Data Moat Aggregation Layer
+
+## Purpose
+
+The Beta Data Moat Aggregation Layer is a server-owned, read-only contract for gathering user-owned product intelligence into one normalized shape.
+
+It gathers existing SaaSScout signals without learning from them. It does not call LLMs, compute embeddings, update Problem Intelligence, score users, generate recommendations, or activate future Data Moat learning.
+
+## First production consumer: Weekly Intelligence
+
+Weekly Intelligence is the first production workflow that consumes the aggregation layer. The server-owned Weekly route authenticates the request, calculates the UTC weekly reporting period, calls `aggregateUserDataMoat` with the authenticated user ID, maps normalized aggregation items into Weekly evidence, and then applies Weekly interpretation, validation, and report persistence outside the aggregation layer.
+
+The browser does not supply or control the user ID, reporting period, evidence records, ownership fields, or shared-context selection.
+
+## Current duplicated retrieval flows
+
+Before this layer, retrieval was distributed across product workflows:
+
+- Dashboard independently reads `scan`, `opportunities`, `saved_ideas`, `weekly_reports`, and `weekly_niches`.
+- Results independently reads `scan`, `opportunities`, `saved_ideas`, `evidence_analysis`, and `scan_sources`.
+- Discover independently reads `opportunity_discoveries`, `discovered_problems`, `problem_intelligence`, and `founder_problem_matches`.
+- Weekly Intelligence formerly read completed `scan` rows, completed `opportunity_discoveries`, `saved_ideas`, `discovery_actions`, prior `weekly_intelligence_runs`, and supplementary `problem_intelligence` directly. It now uses the aggregation layer for those evidence reads.
+- Weekly UI independently reads `weekly_intelligence_runs`, `weekly_detected_problems`, and `weekly_sources` for display compatibility.
+- Snapshot retrieval reads immutable Snapshot storage through the Snapshot retrieval repository.
+- Knowledge Evolution reads historical observations separately from the user-facing workflows.
+
+Common patterns were repeated: authenticate a user, filter user-owned tables by `user_id` or `owner_id`, filter lifecycle states such as `completed` or accepted Discover problems, order by recency, and then transform database rows into workflow-specific evidence objects.
+
+## Aggregation contract
+
+The aggregation service returns:
+
+- `userId`: the authenticated server user whose data is being aggregated.
+- `items`: normalized user-owned records, excluding shared context.
+- `bySource`: normalized records grouped by source.
+- `sharedContext`: optional supplementary shared aggregate records.
+- `diagnostics`: server-side diagnostics describing queried sources, counts, skipped sources, duration, and normalization failures.
+
+Each normalized item contains:
+
+- `kind`
+- `source`
+- `id`
+- `ownerId`
+- `title`
+- `summary`
+- `occurredAt`
+- optional `parentId`
+- bounded scalar `metadata`
+
+## Weekly source mapping
+
+Weekly consumes normalized aggregation records as follows:
+
+- `scan` from `completed_scans` becomes Weekly `scan` evidence.
+- `opportunity` from `generated_opportunities` becomes Weekly `discover` evidence because it represents a generated opportunity signal.
+- `discover_run` from `discover_history` becomes Weekly `discover` evidence.
+- `discover_problem` from `accepted_discover_problems` becomes Weekly `discover` evidence.
+- `saved_idea` from `saved_ideas` becomes Weekly `saved_idea` evidence.
+- `user_activity` from `historical_user_evidence` becomes Weekly `conversion` evidence.
+- `weekly_report` records are used as prior user-owned context only when they occurred before the active reporting period.
+- `shared_problem_intelligence` remains in `sharedContext` and is never merged into user-owned evidence.
+
+## Reporting-period filtering
+
+Weekly applies its existing centralized period contract after aggregation:
+
+- timezone: UTC;
+- week starts Monday at 00:00 UTC;
+- `period_start` is inclusive;
+- `period_end` is exclusive.
+
+Only normalized user-owned items whose `occurredAt` is inside `[period_start, period_end)` become current-week evidence. Items before the period, at `period_end`, after `period_end`, with invalid dates, or belonging to another user are excluded from current-week evidence.
+
+Prior Weekly context is selected from aggregated user-owned Weekly reports before `period_start` and is passed to the prompt for continuity only.
+
+## Separation between aggregation and interpretation
+
+The aggregation layer gathers and normalizes evidence only. Weekly Intelligence interprets normalized evidence by building the Weekly prompt, validating model output, enforcing empty-evidence behavior, and persisting the weekly report.
+
+No Weekly-specific prompt logic exists in the aggregation layer.
+
+## Ownership guarantees
+
+All private sources are filtered with the authenticated user identifier supplied by the server. The aggregation layer never accepts browser-provided ownership fields as authority.
+
+Private rows whose owner does not match the authenticated user are excluded during normalization as a defensive second check.
+
+## Shared context
+
+Shared aggregate context is supplementary. It is returned separately from user-owned `items` and can be disabled by the caller. Shared context currently supports read-only Problem Intelligence summaries where repository rules permit authenticated shared reads.
+
+Weekly obtains shared Problem Intelligence through `sharedContext`, labels it as optional shared aggregate context in the prompt, and must never treat it as private user activity. Shared context alone does not create personalized weekly problems.
+
+## Read-only boundary
+
+The aggregation layer performs only read queries. It does not insert, update, delete, call write RPCs, update Problem Intelligence, generate recommendations, call LLMs, compute embeddings, or activate Data Moat learning.
+
+Weekly report persistence remains outside the aggregation layer.
+
+## Compatibility and remaining independent reads
+
+This PR keeps Scan, Discover, Results, Dashboard, Weekly UI, existing public API contracts, and current UI compatibility unchanged.
+
+Weekly Intelligence no longer duplicates user-owned evidence reads for its generation workflow. Dashboard, Results, Discover, Weekly UI display reads, Snapshot retrieval, and Knowledge Evolution still use their existing independent read paths and can migrate incrementally in later PRs.
