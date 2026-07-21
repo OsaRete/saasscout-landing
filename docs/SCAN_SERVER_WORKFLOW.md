@@ -163,3 +163,13 @@ Non-goals for this PR: Scan Intelligence Artifact, persistence, database migrati
 ## Readiness for Artifact mapping
 
 After PR 8.2, the workflow has truthful phase history, strict recorder invariants, phase-specific dependency injection for tests, protected raw output boundaries, safe failure transitions, and deterministic behavioral tests. This makes it ready for a separately scoped Scan Intelligence Artifact mapping design, but no Artifact behavior is implemented here.
+
+## Legacy Scan generation route retirement before Beta
+
+`/api/scan/workflow` is now the only product-facing HTTP authority that may execute Scan generation. Product Scan generation must enter through an authenticated request, Scan acceptance, plan limits and idempotency, the server-owned workflow, lifecycle tracking, output validation, persistence, and the public response mapping.
+
+The legacy product-facing routes `/api/analyze-evidence`, `/api/generate-opportunities`, and `/api/solution-intelligence` have been retained only as explicit compatibility tombstones. They return HTTP 410 with a stable `legacy_scan_generation_route_gone` response and a `/api/scan/workflow` replacement pointer. They do not parse or trust browser evidence, `derivedAnalysis`, `user_id`, lifecycle state, confidence, scores, generated opportunities, or persistence metadata. They do not authenticate as generation boundaries, invoke models, calculate Scan intelligence, call persistence, mutate usage, write artifacts, or expose internal diagnostics.
+
+Safe server logs for these tombstones record only aggregate legacy-route use: route identifier, rejected action, HTTP status, whether an Authorization bearer was present, and an optional request correlation header (`x-request-id` or `x-correlation-id`). Logs intentionally omit request bodies, evidence content, user identifiers, generated claims, prompts, raw model output, provider errors, database records, and tokens.
+
+Future Scan capabilities must be added behind `/api/scan/workflow` or deeper server-only modules coordinated by that workflow. New product-facing direct model-generation routes for Scan analysis, opportunity generation, or Solution Intelligence are prohibited because they can bypass acceptance, plan limits, idempotency, lifecycle, validation, diagnostics, artifact persistence, and failure-handling guarantees.
