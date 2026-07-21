@@ -316,25 +316,41 @@ export default function ResultsPage() {
 
     setSavingId(opportunityId);
 
-    const { data, error } = await supabase
-      .from("saved_ideas")
-      .insert([
-        {
-          user_id: userId,
-          opportunity_id: opportunityId,
-        },
-      ])
-      .select()
-      .single();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    if (error) {
-      console.error(error);
+    if (!session?.access_token) {
+      router.push("/login");
       setSavingId(null);
       return;
     }
 
-    if (data) {
-      setSavedIdeas((current) => [...current, data]);
+    const response = await fetch("/api/saved-ideas", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ opportunityId }),
+    });
+
+    if (!response.ok) {
+      console.error("Saved idea request failed", response.status);
+      setSavingId(null);
+      return;
+    }
+
+    const payload = (await response.json()) as {
+      savedIdea?: SavedIdea & { duplicate?: boolean };
+    };
+
+    if (payload.savedIdea && !isIdeaSaved(payload.savedIdea.opportunity_id)) {
+      setSavedIdeas((current) => [...current, {
+        id: payload.savedIdea?.id || opportunityId,
+        user_id: userId,
+        opportunity_id: payload.savedIdea?.opportunity_id || opportunityId,
+      }]);
     }
 
     setSavingId(null);

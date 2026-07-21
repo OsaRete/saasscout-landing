@@ -197,15 +197,27 @@ export default function OpportunityPage() {
     setSaving(true);
     setSaveMessage("");
 
-    const { error } = await supabase.from("saved_ideas").insert([
-      {
-        user_id: userId,
-        opportunity_id: opportunity.id,
-      },
-    ]);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    if (error) {
-      console.error(error);
+    if (!session?.access_token) {
+      setSaveMessage("Your session expired. Please log in again.");
+      setSaving(false);
+      return;
+    }
+
+    const response = await fetch("/api/saved-ideas", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ opportunityId: opportunity.id }),
+    });
+
+    if (!response.ok) {
+      console.error("Saved idea request failed", response.status);
       setSaveMessage("Could not save this idea. Please try again.");
       setSaving(false);
       return;
