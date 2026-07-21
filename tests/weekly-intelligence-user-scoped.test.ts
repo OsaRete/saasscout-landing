@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildEmptyWeeklyReport,
   buildWeeklyIntelligencePrompt,
+  collectWeeklyEvidenceFromDataMoat,
   countWeeklyEvidence,
   getWeeklyIntelligencePeriod,
   isInsideWeeklyPeriod,
@@ -122,4 +123,59 @@ test("public errors are sanitized by route contract", () => {
 test("plan gating remains server-side by using profile weekly flag", () => {
   const profile = { weekly_intelligence_enabled: false };
   assert.equal(profile.weekly_intelligence_enabled === false, true);
+});
+
+
+test("weekly evidence is collected through Data Moat aggregation and preserves source mapping", async () => {
+  const period = getWeeklyIntelligencePeriod(new Date("2026-07-19T12:30:00.000Z"));
+  const calls: string[] = [];
+  const result = await collectWeeklyEvidenceFromDataMoat({
+    userId: "user-a",
+    period,
+    aggregate: async (userId) => {
+      calls.push(userId);
+      return {
+        items: [
+          { kind: "scan", source: "completed_scans", id: "scan-start", title: "CRM / Agencies", summary: "Scan at period start", occurredAt: "2026-07-13T00:00:00.000Z", metadata: {} },
+          { kind: "discover_run", source: "discover_history", id: "discover-mid", title: "Discover generation", summary: "Discovery evidence", occurredAt: "2026-07-14T00:00:00.000Z", metadata: { sourceCount: 4 } },
+          { kind: "saved_idea", source: "saved_ideas", id: "saved-mid", title: "Saved", summary: "Saved", occurredAt: "2026-07-15T00:00:00.000Z", metadata: { opportunityId: "opp-1" } },
+          { kind: "user_activity", source: "historical_user_evidence", id: "action-mid", title: "Action", summary: "Action", occurredAt: "2026-07-16T00:00:00.000Z", parentId: "disc-1", metadata: { actionType: "accepted", problemId: "prob-1" } },
+          { kind: "discover_problem", source: "accepted_discover_problems", id: "problem-mid", title: "Accepted problem", summary: "Accepted problem summary", occurredAt: "2026-07-17T00:00:00.000Z", metadata: {} },
+          { kind: "opportunity", source: "generated_opportunities", id: "opp-mid", title: "Generated opportunity", summary: "Opportunity summary", occurredAt: "2026-07-18T00:00:00.000Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "scan-before", title: "Old", summary: "Old", occurredAt: "2026-07-12T23:59:59.999Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "scan-end", title: "End", summary: "End", occurredAt: "2026-07-20T00:00:00.000Z", metadata: {} },
+        ],
+        bySource: {
+          weekly_reports: [
+            { kind: "weekly_report", source: "weekly_reports", id: "prior-week", title: "Prior", summary: "Prior summary", occurredAt: "2026-07-06T00:00:00.000Z", metadata: {} },
+            { kind: "weekly_report", source: "weekly_reports", id: "current-week", title: "Current", summary: "Current summary", occurredAt: "2026-07-14T00:00:00.000Z", metadata: {} },
+          ],
+        },
+        sharedContext: [{ kind: "shared_problem_intelligence", source: "shared_problem_intelligence", id: "shared-1", title: "Shared", summary: "Shared context", occurredAt: "2026-07-18T00:00:00.000Z", metadata: { score: 9 } }],
+      };
+    },
+  });
+
+  assert.deepEqual(calls, ["user-a"]);
+  assert.deepEqual(result.userEvidence.map((item) => item.id), ["scan-start", "discover-mid", "saved-mid", "action-mid", "problem-mid", "opp-mid"]);
+  assert.deepEqual(countWeeklyEvidence(result.userEvidence), { scan: 1, discover: 3, saved_idea: 1, conversion: 1 });
+  assert.deepEqual(result.priorUserContext.map((item) => item.id), ["prior-week"]);
+  assert.deepEqual(result.sharedContext.map((item) => item.id), ["shared-1"]);
+});
+
+test("shared context alone remains supplementary and does not create personalized insights", async () => {
+  const period = getWeeklyIntelligencePeriod(new Date("2026-07-19T12:30:00.000Z"));
+  const result = await collectWeeklyEvidenceFromDataMoat({
+    userId: "user-a",
+    period,
+    aggregate: async () => ({
+      items: [],
+      sharedContext: [{ kind: "shared_problem_intelligence", source: "shared_problem_intelligence", id: "shared-only", title: "Shared", summary: "Shared only", occurredAt: "2026-07-14T00:00:00.000Z", metadata: {} }],
+      bySource: {},
+    }),
+  });
+  assert.equal(result.userEvidence.length, 0);
+  assert.equal(result.sharedContext.length, 1);
+  assert.equal(buildEmptyWeeklyReport(period).problems.length, 0);
+  assert.throws(() => validateWeeklyModelOutput({ summary: "bad", problems: [{ problem_title: "Fabricated" }] }, result.userEvidence), /without user evidence/);
 });

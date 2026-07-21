@@ -2,7 +2,8 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
-import { buildEmptyWeeklyReport, buildWeeklyIntelligencePrompt, countWeeklyEvidence, getWeeklyIntelligencePeriod, isInsideWeeklyPeriod, validateWeeklyModelOutput, type WeeklyEvidenceSource, type WeeklySharedSource } from "@/lib/weekly-intelligence";
+import { buildEmptyWeeklyReport, collectWeeklyEvidenceFromDataMoat, buildWeeklyIntelligencePrompt, countWeeklyEvidence, getWeeklyIntelligencePeriod, validateWeeklyModelOutput, type WeeklyEvidenceSource, type WeeklySharedSource } from "@/lib/weekly-intelligence";
+import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 
@@ -694,125 +695,49 @@ async function getProblemsForRun(runId: string) {
   return data || [];
 }
 
-async function collectUserWeeklyEvidence(userId: string, period: ReturnType<typeof getWeeklyIntelligencePeriod>) {
-  const client = getSupabaseAdminClient();
-  const [scans, discoveries, savedIdeas, conversions] = await Promise.all([
-    client
-      .from("scan")
-      .select("id,market,audience,region,status,evidence,created_at")
-      .eq("user_id", userId)
-      .eq("status", "completed")
-      .gte("created_at", period.period_start)
-      .lt("created_at", period.period_end),
-    client
-      .from("opportunity_discoveries")
-      .select("id,summary,status,total_sources_analyzed,created_at")
-      .eq("user_id", userId)
-      .eq("status", "completed")
-      .gte("created_at", period.period_start)
-      .lt("created_at", period.period_end),
-    client
-      .from("saved_ideas")
-      .select("id,opportunity_id,created_at")
-      .eq("user_id", userId)
-      .gte("created_at", period.period_start)
-      .lt("created_at", period.period_end),
-    client
-      .from("discovery_actions")
-      .select("id,action_type,created_at,discovery_id,problem_id")
-      .eq("user_id", userId)
-      .gte("created_at", period.period_start)
-      .lt("created_at", period.period_end),
-  ]);
-
-  for (const result of [scans, discoveries, savedIdeas, conversions]) {
-    if (result.error) throw result.error;
-  }
-
-  const evidence: WeeklyEvidenceSource[] = [];
-
-  for (const scan of scans.data || []) {
-    if (!isInsideWeeklyPeriod(scan.created_at, period)) continue;
-    evidence.push({
-      type: "scan",
-      id: scan.id,
-      title: [scan.market, scan.audience, scan.region].filter(Boolean).join(" / ") || "Completed Scan",
-      summary: String(scan.evidence || "Completed Scan with stored evidence.").slice(0, 800),
-      created_at: scan.created_at,
-    });
-  }
-
-  for (const discovery of discoveries.data || []) {
-    if (!isInsideWeeklyPeriod(discovery.created_at, period)) continue;
-    evidence.push({
-      type: "discover",
-      id: discovery.id,
-      title: "Discover generation",
-      summary: String(discovery.summary || `Discover analyzed ${discovery.total_sources_analyzed || 0} sources.`).slice(0, 800),
-      created_at: discovery.created_at,
-    });
-  }
-
-  for (const savedIdea of savedIdeas.data || []) {
-    if (!isInsideWeeklyPeriod(savedIdea.created_at, period)) continue;
-    evidence.push({
-      type: "saved_idea",
-      id: savedIdea.id,
-      title: "Saved idea",
-      summary: `User saved opportunity ${savedIdea.opportunity_id}.`,
-      created_at: savedIdea.created_at,
-    });
-  }
-
-  for (const conversion of conversions.data || []) {
-    if (!isInsideWeeklyPeriod(conversion.created_at, period)) continue;
-    evidence.push({
-      type: "conversion",
-      id: conversion.id,
-      title: `Discover action: ${conversion.action_type || "unknown"}`,
-      summary: `User action on discovery ${conversion.discovery_id || "unknown"} and problem ${conversion.problem_id || "unknown"}.`,
-      created_at: conversion.created_at,
-    });
-  }
-
-  return evidence.sort((a, b) => a.created_at.localeCompare(b.created_at));
+async function collectWeeklyAggregationContext(userId: string, period: ReturnType<typeof getWeeklyIntelligencePeriod>) {
+  const { aggregation, userEvidence, priorUserContext, sharedContext } = await collectWeeklyEvidenceFromDataMoat({
+    userId,
+    period,
+    aggregate: (authenticatedUserId) =>
+      aggregateUserDataMoat(getSupabaseAdminClient() as unknown as DataMoatAggregationClient, authenticatedUserId, {
+        includeSharedContext: true,
+        limitPerSource: 100,
+        logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
+      }),
+  });
+  const eligibleCounts = countWeeklyEvidence(userEvidence);
+  logWeeklyDiagnostic("aggregation_completed", {
+    userId,
+    period,
+    aggregationSourceCounts: aggregation.diagnostics?.countsBySource || {},
+    eligibleCounts,
+    sharedSourceCount: sharedContext.length,
+    skippedSources: aggregation.diagnostics?.skippedSources || [],
+    normalizationFailureCount: aggregation.diagnostics?.normalizationFailures?.length || 0,
+    aggregationDurationMs: aggregation.diagnostics?.durationMs || 0,
+  });
+  return { aggregation, userEvidence, priorUserContext, sharedContext };
 }
 
-async function collectPriorUserContext(userId: string, periodStart: string) {
-  const { data, error } = await getSupabaseAdminClient()
-    .from("weekly_intelligence_runs")
-    .select("id,summary,created_at")
-    .eq("user_id", userId)
-    .lt("period_end", periodStart)
-    .eq("status", "completed")
-    .order("period_end", { ascending: false })
-    .limit(3);
-
-  if (error) throw error;
-  return (data || []).map((run) => ({
-    type: "scan" as const,
-    id: run.id,
-    title: "Prior Weekly Intelligence summary",
-    summary: String(run.summary || "Prior weekly report.").slice(0, 500),
-    created_at: run.created_at,
-  }));
+function logWeeklyDiagnosticInfo(_message: string, payload?: unknown) {
+  logWeeklyDiagnostic("data_moat_aggregation_info", safeAggregationDiagnosticPayload(payload));
 }
 
-async function collectSharedWeeklyContext() {
-  const { data, error } = await getSupabaseAdminClient()
-    .from("problem_intelligence")
-    .select("id,problem_title,intelligence_score,last_seen_at")
-    .order("intelligence_score", { ascending: false })
-    .limit(5);
+function logWeeklyDiagnosticWarning(_message: string, payload?: unknown) {
+  logWeeklyDiagnostic("data_moat_aggregation_warning", safeAggregationDiagnosticPayload(payload));
+}
 
-  if (error) throw error;
-  return (data || []).map((row) => ({
-    type: "problem_intelligence" as const,
-    id: row.id,
-    title: row.problem_title,
-    summary: `Shared aggregate intelligence score: ${row.intelligence_score || 0}.`,
-    created_at: row.last_seen_at,
-  })) satisfies WeeklySharedSource[];
+function safeAggregationDiagnosticPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") return {};
+  const diagnostics = payload as DataMoatAggregation["diagnostics"];
+  return {
+    sourcesQueried: diagnostics.sourcesQueried || [],
+    countsBySource: diagnostics.countsBySource || {},
+    skippedSources: diagnostics.skippedSources || [],
+    normalizationFailureCount: diagnostics.normalizationFailures?.length || 0,
+    durationMs: diagnostics.durationMs || 0,
+  };
 }
 
 async function analyzeUserScopedWeeklySignals(input: {
@@ -858,11 +783,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true, run: existingRun, sources_saved: existingRun.total_sources_analyzed || 0, problems });
     }
 
-    const [userEvidence, priorUserContext, sharedContext] = await Promise.all([
-      collectUserWeeklyEvidence(user.id, period),
-      collectPriorUserContext(user.id, period.period_start),
-      collectSharedWeeklyContext(),
-    ]);
+    const { userEvidence, priorUserContext, sharedContext } = await collectWeeklyAggregationContext(user.id, period);
     const evidenceCounts = countWeeklyEvidence(userEvidence);
     const emptyEvidence = userEvidence.length === 0;
     logWeeklyDiagnostic("source_counts", { userId: user.id, period, evidenceCounts, sharedSourceCount: sharedContext.length, emptyEvidence });
