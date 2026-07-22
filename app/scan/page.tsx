@@ -214,6 +214,9 @@ if (profileData) {
     const result = await response.json();
 
     if (!response.ok) {
+      const safeCode = typeof result.error?.code === "string" ? result.error.code : "scan_workflow_failed";
+      const safeStage = typeof result.error?.stage === "string" ? result.error.stage : "unknown";
+      console.warn("Scan workflow failed", { code: safeCode, stage: safeStage, status: response.status });
       throw new Error(result.error?.message || result.error || SAFE_SCAN_FAILURE_MESSAGE);
     }
 
@@ -285,8 +288,8 @@ if (profileData) {
       await recordDiscoveryConversion({ accessToken, cleanMarket });
 
       router.push("/results");
-    } catch (error) {
-      console.error(error);
+    } catch {
+      console.error("Scan submission failed", { code: "scan_submission_failed" });
       setMessage(SAFE_SCAN_FAILURE_MESSAGE);
       setLoading(false);
       setLoadingStep("idle");

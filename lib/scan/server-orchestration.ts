@@ -2,7 +2,7 @@ import "server-only";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { AuthError, requireUser } from "../../app/api/_utils/auth.ts";
-import { acceptScanRequest } from "./acceptance.ts";
+import { ScanAcceptanceError, acceptScanRequest, scanAcceptanceHttpStatusForCode } from "./acceptance.ts";
 import { createScanArtifactPersistenceAuthorizationContext, type ScanArtifactPersistenceAuthorizationContext } from "./artifact-persistence.ts";
 import { runScanArtifactPersistenceShadow } from "./artifact-persistence-shadow-runner.ts";
 import { preflightScanEvidenceMultipartFiles, ScanEvidenceIngestionError, scanEvidenceHttpStatusForCode, type ScanDiscoverContextInput, type ScanEvidenceFileInput, type ScanExternalSnippetInput } from "./evidence-ingestion.ts";
@@ -36,8 +36,8 @@ function parseBoundedJson(raw: FormDataEntryValue | null) { if (raw === null) re
 export type ScanLegacyContext = Readonly<{ sourceProblemTitle?: string; sourceProblemId?: string; sourceDiscoveryId?: string }>;
 type ScanPersistenceClient = Pick<SupabaseClient, "from" | "rpc">;
 
-function readSupabaseConfig(env: NodeJS.ProcessEnv = process.env) { const url = env.NEXT_PUBLIC_SUPABASE_URL; const key = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY; if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing."); if (!key) throw new Error("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY is missing."); return { url, key }; }
-export function createScanOrchestrationPersistenceClient(request: Request): SupabaseClient { const token = request.headers.get("authorization")?.slice("Bearer ".length).trim() || ""; const { url, key } = readSupabaseConfig(); return createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } }); }
+function readSupabaseConfig(env: NodeJS.ProcessEnv = process.env) { const url = env.NEXT_PUBLIC_SUPABASE_URL; const key = env.SUPABASE_SERVICE_ROLE_KEY; if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing."); if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing."); return { url, key }; }
+export function createScanOrchestrationPersistenceClient(): SupabaseClient { const { url, key } = readSupabaseConfig(); return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } }); }
 async function transitionLegacyScan(client: ScanPersistenceClient, scanId: string, userId: string, status: "processing" | "completed" | "failed") { const { error } = await client.from("scan").update({ status }).eq("id", scanId).eq("user_id", userId); if (error) throw error; }
 async function persistLegacyResults(client: ScanPersistenceClient, userId: string, scanId: string, workflow: ScanWorkflowResult, legacyContext?: ScanLegacyContext) {
   const p = workflow.problemIntelligence;
@@ -49,7 +49,7 @@ async function persistLegacyResults(client: ScanPersistenceClient, userId: strin
   const { error: opportunityError } = await client.from("opportunities").insert(rows);
   if (opportunityError) throw opportunityError;
 }
-export async function executeAcceptedScanWorkflow(input: ScanWorkflowInput & { legacyContext?: ScanLegacyContext }, request: Request, user: AuthenticatedScanUser, authorization: ScanWorkflowAuthorizationContext, client = createScanOrchestrationPersistenceClient(request)) {
+export async function executeAcceptedScanWorkflow(input: ScanWorkflowInput & { legacyContext?: ScanLegacyContext }, _request: Request, user: AuthenticatedScanUser, authorization: ScanWorkflowAuthorizationContext, client = createScanOrchestrationPersistenceClient()) {
   const acceptance = await acceptScanRequest({ market: input.intent.market ?? input.intent.niche, audience: input.intent.audience, region: input.intent.region, evidence: input.pastedEvidence }, { id: user.id || "" }, client);
   try {
     await transitionLegacyScan(client, acceptance.scanId, user.id || "", "processing");
@@ -91,7 +91,9 @@ export async function runScanServerOrchestration(request: Request, config: ScanS
   } catch (error) {
     if (error instanceof AuthError) return Response.json({ success:false, error:"Unauthorized" }, { status:error.status });
     if (isScanWorkflowFailure(error)) { console.warn("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_failed", failure:error })); await recordOperationalEvent({ workflow: "scan", eventType: "failed", status: "failed", durationMs: undefined, failureCategory: error.error.code, safeMetadata: { provider: "openrouter" } }); return Response.json(mapScanOrchestrationFailureResponse(error), { status: scanWorkflowHttpStatusForFailure(error) }); }
+    if (error instanceof ScanAcceptanceError) { await recordOperationalEvent({ workflow: "scan", eventType: "failed", status: "failed", failureCategory: error.code, safeMetadata: { provider: "openrouter", stage: "acceptance" } }).catch(() => undefined); return Response.json({ success:false, error:{ code:error.code, stage:"acceptance", message:error.message } }, { status: scanAcceptanceHttpStatusForCode(error.code) }); }
     if (error instanceof ScanEvidenceIngestionError) return Response.json({ success:false, error:{ code:error.code, message:"The Scan workflow request is invalid." } }, { status: scanEvidenceHttpStatusForCode(error.code) });
-    return Response.json({ success:false, error:{ code:"scan_workflow_request_invalid", message:"The Scan workflow request is invalid." } }, { status:400 });
+    await recordOperationalEvent({ workflow: "scan", eventType: "failed", status: "failed", failureCategory: "scan_workflow_persistence_failed", safeMetadata: { provider: "openrouter", stage: "persistence" } }).catch(() => undefined);
+    return Response.json({ success:false, error:{ code:"scan_acceptance_persistence_failed", stage:"persistence", message:"The Scan could not be accepted." } }, { status:500 });
   }
 }
