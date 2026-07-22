@@ -1,0 +1,1 @@
+export const RESULTS_IDEA_VALIDATION_MAX_IDEAS = 30;

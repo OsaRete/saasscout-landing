@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateIdea, stripIdeaValidationDiagnostics } from "../lib/idea-validation/engine.ts";
+import { aggregateUserDataMoat } from "../lib/data-moat/aggregation.ts";
+import { buildIdeaValidationDataMoatContext, stripIdeaValidationDiagnostics, validateIdea, validateIdeaAgainstDataMoatContext, validateIdeaFromAggregation, validateIdeasAgainstDataMoatContext } from "../lib/idea-validation/engine.ts";
 import type { DataMoatAggregationClient } from "../lib/data-moat/aggregation.ts";
 
 type Row = Record<string, unknown>;
@@ -72,4 +73,59 @@ test("diagnostics remain internal when stripped for public response", async () =
   const result = await validateIdea(clientWith(supportingTables), { userId: "user-1", idea, now });
   const publicResult = stripIdeaValidationDiagnostics(result);
   assert.equal("diagnostics" in publicResult, false);
+});
+
+
+test("shared context validator does not aggregate or read Data Moat sources", async () => {
+  const client = clientWith(supportingTables);
+  const aggregation = await aggregateUserDataMoat(client, "user-1", { includeSharedContext: false, now });
+  const readCountAfterAggregation = client.reads.length;
+  const context = buildIdeaValidationDataMoatContext(aggregation);
+  const result = validateIdeaAgainstDataMoatContext({ userId: "user-1", idea, dataMoatContext: context, now });
+  assert.ok(result.supportingSignals.length > 0);
+  assert.equal(client.reads.length, readCountAfterAggregation);
+});
+
+test("single idea convenience wrapper aggregates exactly once", async () => {
+  const client = clientWith(supportingTables);
+  await validateIdea(client, { userId: "user-1", idea, now, includeSharedContext: false });
+  assert.equal(client.reads.length, 8);
+});
+
+test("one shared aggregation validates five ideas without scaling Data Moat reads", async () => {
+  const client = clientWith(supportingTables);
+  const aggregation = await aggregateUserDataMoat(client, "user-1", { includeSharedContext: false, now });
+  const context = buildIdeaValidationDataMoatContext(aggregation);
+  const inputs = Array.from({ length: 5 }, (_, index) => ({ userId: "user-1", idea: { ...idea, title: `${idea.title} ${index}` }, now }));
+  const results = validateIdeasAgainstDataMoatContext(inputs, context);
+  assert.equal(results.length, 5);
+  assert.equal(client.reads.length, 8);
+});
+
+test("maximum sized shared-context batch performs one aggregation read set", async () => {
+  const client = clientWith(supportingTables);
+  const aggregation = await aggregateUserDataMoat(client, "user-1", { includeSharedContext: false, now });
+  const context = buildIdeaValidationDataMoatContext(aggregation);
+  const inputs = Array.from({ length: 30 }, (_, index) => ({ userId: "user-1", idea: { ...idea, title: `${idea.title} ${index}` }, now }));
+  validateIdeasAgainstDataMoatContext(inputs, context);
+  assert.equal(client.reads.length, 8);
+});
+
+test("context validation preserves confidence and signals from previous aggregation-based implementation", async () => {
+  const aggregation = await aggregateUserDataMoat(clientWith(supportingTables), "user-1", { includeSharedContext: false, now });
+  const contextResult = validateIdeaAgainstDataMoatContext({ userId: "user-1", idea, dataMoatContext: buildIdeaValidationDataMoatContext(aggregation), now });
+  const aggregationResult = validateIdeaFromAggregation({ userId: "user-1", idea, aggregation, now });
+  assert.equal(contextResult.confidence, aggregationResult.confidence);
+  assert.deepEqual(contextResult.supportingSignals, aggregationResult.supportingSignals);
+  assert.deepEqual(contextResult.contradictorySignals, aggregationResult.contradictorySignals);
+});
+
+test("shared context is not mutated between validations", async () => {
+  const aggregation = await aggregateUserDataMoat(clientWith(supportingTables), "user-1", { includeSharedContext: false, now });
+  const context = buildIdeaValidationDataMoatContext(aggregation);
+  const before = JSON.stringify(context);
+  const first = validateIdeaAgainstDataMoatContext({ userId: "user-1", idea, dataMoatContext: context, now });
+  const second = validateIdeaAgainstDataMoatContext({ userId: "user-1", idea: { title: "unrelated payroll tool" }, dataMoatContext: context, now });
+  assert.equal(JSON.stringify(context), before);
+  assert.notDeepEqual(first, second);
 });

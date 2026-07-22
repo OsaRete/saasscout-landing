@@ -8,6 +8,7 @@ import { supabase } from "../supabase";
 import { Button, CardSkeleton, EmptyState, LoadingState } from "../../components/ui";
 import type { PublicIdeaValidationResponse } from "../../lib/idea-validation";
 import { buildResultsIdeaValidationView } from "../../lib/results/idea-validation-presentation";
+import { RESULTS_IDEA_VALIDATION_MAX_IDEAS } from "../../lib/results/idea-validation-contract";
 import {
   formatLegacyOpportunityScore,
   getLegacyOpportunityScoreTone,
@@ -245,7 +246,9 @@ export default function ResultsPage() {
         };
       });
 
-      if (opportunitiesForValidation.length > 0) {
+      const contractCompatibleValidationIdeas = opportunitiesForValidation.slice(0, RESULTS_IDEA_VALIDATION_MAX_IDEAS);
+
+      if (contractCompatibleValidationIdeas.length > 0) {
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -257,7 +260,7 @@ export default function ResultsPage() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${session.access_token}`,
             },
-            body: JSON.stringify({ ideas: opportunitiesForValidation }),
+            body: JSON.stringify({ ideas: contractCompatibleValidationIdeas }),
           });
 
           if (response.ok) {
