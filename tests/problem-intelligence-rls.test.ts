@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const migrationPath = "supabase/migrations/20260719000000_restrict_problem_intelligence_authenticated_writes.sql";
+const migrationPath = "supabase/migrations/20260719001000_restrict_problem_intelligence_authenticated_writes.sql";
 const migration = readFileSync(migrationPath, "utf8");
 const historicalMigration = readFileSync(
   "supabase/migrations/20260628000000_create_historical_application_schema.sql",

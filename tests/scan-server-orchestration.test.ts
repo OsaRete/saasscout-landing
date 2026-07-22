@@ -103,3 +103,29 @@ test("scan server orchestration failure response remains sanitized", () => {
   const response = mapScanOrchestrationFailureResponse(failure);
   assert.equal(JSON.stringify(response).includes("statusClass"), false);
 });
+
+test("scan server persistence keeps trusted user ownership constraints after browser write revocation", () => {
+  const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
+
+  assert.match(orchestration, /createScanOrchestrationPersistenceClient\(\)/);
+  assert.match(orchestration, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.match(orchestration, /acceptScanRequest\([^\n]+\{ id: user\.id \|\| "" \}/);
+  assert.match(orchestration, /from\("scan"\)\.update\(\{ status \}\)\.eq\("id", scanId\)\.eq\("user_id", userId\)/);
+  assert.match(orchestration, /user_id: userId/);
+});
+
+test("scan acceptance errors keep their safe status instead of workflow request-invalid", () => {
+  const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
+
+  assert.match(orchestration, /error instanceof ScanAcceptanceError/);
+  assert.match(orchestration, /scanAcceptanceHttpStatusForCode\(error\.code\)/);
+  assert.match(orchestration, /stage:\s*"acceptance"/);
+  assert.doesNotMatch(orchestration, /ScanAcceptanceError[\s\S]+scan_workflow_request_invalid/);
+});
+
+test("Scan page logs sanitized diagnostics without evidence or authorization headers", () => {
+  const page = readFileSync("app/scan/page.tsx", "utf8");
+
+  assert.match(page, /console\.warn\("Scan workflow failed", \{ code: safeCode, stage: safeStage, status: response\.status \}\)/);
+  assert.doesNotMatch(page, /console\.(warn|error)\([^\n]*(evidence|Authorization|accessToken|headers)/);
+});

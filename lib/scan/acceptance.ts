@@ -89,16 +89,21 @@ export function validateScanAcceptanceRequest(body: unknown): ScanAcceptanceInpu
 
 function readSupabaseConfig(env: NodeJS.ProcessEnv = process.env) {
   const url = env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
-  if (!key) throw new Error("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY is missing.");
+  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   return { url, key };
 }
 
-export function createScanAcceptanceClient(request: Request): SupabaseClient {
-  const token = request.headers.get("authorization")?.slice("Bearer ".length).trim() || "";
+export function createScanAcceptanceClient(): SupabaseClient {
   const { url, key } = readSupabaseConfig();
-  return createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+export function scanAcceptanceHttpStatusForCode(code: ScanAcceptanceError["code"]): number {
+  if (code === "scan_acceptance_limit_exceeded") return 402;
+  if (code === "scan_acceptance_persistence_failed") return 500;
+  return 400;
 }
 
 function normalizeRpcResult(data: unknown): ScanAcceptanceRpcResult | null {
@@ -136,12 +141,12 @@ export async function runScanAcceptance(request: Request, dependencies: { client
   try {
     const user = await requireUser(request);
     const input = validateScanAcceptanceRequest(await request.json());
-    const acceptance = await acceptScanRequest(input, { id: user.id }, dependencies.client ?? createScanAcceptanceClient(request));
+    const acceptance = await acceptScanRequest(input, { id: user.id }, dependencies.client ?? createScanAcceptanceClient());
     return Response.json({ success: true, acceptance });
   } catch (error) {
     if (error instanceof AuthError) return Response.json({ success: false, error: "Unauthorized" }, { status: error.status });
     if (error instanceof ScanAcceptanceError) {
-      const status = error.code === "scan_acceptance_persistence_failed" ? 500 : error.code === "scan_acceptance_limit_exceeded" ? 402 : 400;
+      const status = scanAcceptanceHttpStatusForCode(error.code);
       return Response.json({ success: false, error: { code: error.code, message: error.message } }, { status });
     }
     return Response.json({ success: false, error: { code: "scan_acceptance_failed", message: "The Scan could not be accepted." } }, { status: 500 });

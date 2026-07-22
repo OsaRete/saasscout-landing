@@ -173,3 +173,25 @@ The legacy product-facing routes `/api/analyze-evidence`, `/api/generate-opportu
 Safe server logs for these tombstones record only aggregate legacy-route use: route identifier, rejected action, HTTP status, whether an Authorization bearer was present, and an optional request correlation header (`x-request-id` or `x-correlation-id`). Logs intentionally omit request bodies, evidence content, user identifiers, generated claims, prompts, raw model output, provider errors, database records, and tokens.
 
 Future Scan capabilities must be added behind `/api/scan/workflow` or deeper server-only modules coordinated by that workflow. New product-facing direct model-generation routes for Scan analysis, opportunity generation, or Solution Intelligence are prohibited because they can bypass acceptance, plan limits, idempotency, lifecycle, validation, diagnostics, artifact persistence, and failure-handling guarantees.
+
+## Server-owned acceptance and persistence after privilege hardening
+
+Closed-Beta privilege hardening keeps browser writes revoked from server-owned Scan tables, including `public.scan`, `public.evidence_analysis`, and `public.opportunities`. The production Scan write path is now:
+
+```text
+Browser
+→ authenticated `/api/scan/workflow`
+→ `requireUser(request)`
+→ trusted `user.id`
+→ service-role authoritative acceptance and persistence
+→ RLS-protected browser reads
+→ browser writes remain revoked
+```
+
+The browser may send intent, evidence, uploaded files, and legacy discovery context only. It must not send `userId`, lifecycle state, scan IDs, derived intelligence, diagnostics, or persistence metadata. The route derives ownership only from the authenticated server session returned by `requireUser(request)` and passes that trusted `user.id` explicitly into ownership-sensitive persistence calls.
+
+`createScanOrchestrationPersistenceClient()` and the Scan acceptance client use `NEXT_PUBLIC_SUPABASE_URL` plus the server-only `SUPABASE_SERVICE_ROLE_KEY`. The service-role key is never read by client components, never accepted from request headers, and never returned in responses or logs. The authenticated bearer token is still required for `requireUser(request)`, but it is not reused as the persistence credential for authoritative Scan mutations.
+
+`public.accept_scan_request(uuid,text,text,text,text)` is restricted to `service_role`. It intentionally remains `SECURITY INVOKER` because the only executable invoker is the server-side service role, which already owns the necessary table privileges. The function no longer depends on `auth.uid()` for authorization; its `p_user_id` argument is authoritative only when supplied from the server's `requireUser` result. The function preserves duplicate detection, profile locking, profile-not-found handling, scan-limit enforcement, usage incrementing, and pending Scan creation without granting browser roles insert or update privileges.
+
+Lifecycle transitions and legacy Results compatibility persistence continue to include trusted ownership constraints. Existing Scan rows are updated with both `scan.id` and `scan.user_id`, while generated Results rows receive the trusted user ID from the server session. Safe failure responses distinguish acceptance request validation, plan-limit rejection, and persistence failure without exposing SQL text, provider responses, prompts, tokens, authorization headers, raw database errors, or user evidence.

@@ -97,3 +97,29 @@ test("Scan UI delegates acceptance and legacy processing to the server workflow"
   assert.doesNotMatch(page, /scans_used:\s*newScansUsed/);
   assert.match(route, /runScanAcceptance/);
 });
+
+test("acceptance clients use server-only service role credentials", () => {
+  const acceptance = readFileSync("lib/scan/acceptance.ts", "utf8");
+  const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
+
+  assert.match(acceptance, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.doesNotMatch(acceptance, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.doesNotMatch(acceptance, /Authorization:\s*`Bearer/);
+  assert.match(orchestration, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.doesNotMatch(orchestration, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.doesNotMatch(orchestration, /Authorization:\s*`Bearer/);
+});
+
+test("server-only accept_scan_request migration restricts execution to service_role", () => {
+  const migration = readFileSync("supabase/migrations/20260722010000_restore_server_owned_scan_acceptance.sql", "utf8");
+
+  assert.match(migration, /SECURITY INVOKER/i);
+  assert.match(migration, /SET search_path = public, pg_temp/i);
+  assert.match(migration, /p_user_id MUST be supplied only from the requireUser-derived server identity/i);
+  assert.match(migration, /REVOKE ALL ON FUNCTION public\.accept_scan_request\(uuid, text, text, text, text\) FROM public/i);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.accept_scan_request\(uuid, text, text, text, text\) FROM anon/i);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.accept_scan_request\(uuid, text, text, text, text\) FROM authenticated/i);
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.accept_scan_request\(uuid, text, text, text, text\) TO service_role/i);
+  assert.doesNotMatch(migration, /auth\.uid\(\)/i);
+  assert.doesNotMatch(migration, /grant\s+(insert|update).*public\.(scan|evidence_analysis|opportunities)\s+to\s+(anon|authenticated)/i);
+});
