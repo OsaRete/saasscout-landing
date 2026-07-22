@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { recordOperationalEvent } from "@/lib/operational-events";
 import { createClient } from "@supabase/supabase-js";
 import {
   cleanJsonResponse,
@@ -614,6 +615,11 @@ function logDiscoverDeduplicationDiagnostics({
 }
 
 export async function discoverOpportunitiesWorkflow(userId: string) {
+  const workflowStartedAt = Date.now();
+  let discoveryId: string | null = null;
+  let replacementAttempts = 0;
+  await recordOperationalEvent({ workflow: "discover", eventType: "started", status: "started", userId });
+  try {
   const discoveryExecutionStartedAt = new Date().toISOString();
   const { data: profile, error: profileError } = await getSupabaseAdminClient()
     .from("user_profiles")
@@ -648,7 +654,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     moatSources,
   });
 
-  let replacementAttempts = 0;
+  replacementAttempts = 0;
   let candidateProblems = normalizeProblems(analysis.problems || []);
   let deduplicationResult = deduplicateDiscoverProblems({
     candidates: candidateProblems,
@@ -711,6 +717,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   if (discoveryError || !discoveryData) {
     throw discoveryError || new Error("Could not save discovery.");
   }
+  discoveryId = discoveryData.id;
 
   const discoverySnapshotInput = buildDiscoverOpportunitiesSnapshotInput({
     discoveryId: discoveryData.id,
@@ -783,6 +790,9 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
 
   logDiscoveryDualWriteReport(dualWriteResult.report);
   const insertedProblems = dualWriteResult.legacyResult;
+  if (!dualWriteResult.report.knowledge_skipped && !dualWriteResult.report.knowledge_success) {
+    await recordOperationalEvent({ workflow: "discover", eventType: "partial_persistence", status: "partial_persistence", userId, durationMs: Date.now() - workflowStartedAt, failureCategory: "knowledge_evolution_persistence", safeMetadata: { discoveryId, problemsGenerated: problems.length, replacementAttempts } });
+  }
 
   if (isKnowledgeEvolutionDiagnosticsEnabled()) {
     await runKnowledgeEvolutionDiscoveryDiagnostics({
@@ -791,6 +801,8 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     });
   }
 
+  await recordOperationalEvent({ workflow: "discover", eventType: "completed", status: "completed", userId, durationMs: Date.now() - workflowStartedAt, safeMetadata: { discoveryId, problemsGenerated: problems.length, replacementAttempts } });
+
   return {
     success: true,
     discovery: discoveryData,
@@ -798,4 +810,8 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     external_sources_analyzed: externalSources.length,
     data_moat_sources_used: moatSources.length,
   };
+  } catch (error) {
+    await recordOperationalEvent({ workflow: "discover", eventType: "failed", status: "failed", userId, durationMs: Date.now() - workflowStartedAt, failureCategory: error instanceof Error ? error.name : "discover_failed", safeMetadata: { discoveryId, replacementAttempts } });
+    throw error;
+  }
 }

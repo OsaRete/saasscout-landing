@@ -6,6 +6,7 @@ import { acceptScanRequest } from "./acceptance.ts";
 import { createScanArtifactPersistenceAuthorizationContext, type ScanArtifactPersistenceAuthorizationContext } from "./artifact-persistence.ts";
 import { runScanArtifactPersistenceShadow } from "./artifact-persistence-shadow-runner.ts";
 import { preflightScanEvidenceMultipartFiles, ScanEvidenceIngestionError, scanEvidenceHttpStatusForCode, type ScanDiscoverContextInput, type ScanEvidenceFileInput, type ScanExternalSnippetInput } from "./evidence-ingestion.ts";
+import { recordOperationalEvent } from "../operational-events.ts";
 import { buildSafeScanWorkflowLog, executeScanWorkflow, isScanWorkflowFailure, scanWorkflowHttpStatusForFailure, type ScanWorkflowAuthorizationContext, type ScanWorkflowFailureResult, type ScanWorkflowInput, type ScanWorkflowResult } from "./workflow.ts";
 
 export const SCAN_SERVER_ORCHESTRATION_VERSION = "scan-server-orchestration@1" as const;
@@ -80,13 +81,16 @@ export async function runScanServerOrchestration(request: Request, config: ScanS
     if (!authorization) return scanOrchestrationUnavailableResponse();
     const contentType = request.headers.get("content-type") || "";
     const input = contentType.includes("multipart/form-data") ? await validateMultipartScanOrchestrationRequest(request) : validateJsonScanOrchestrationRequest(await request.json());
+    const workflowStartedAt = Date.now();
+    await recordOperationalEvent({ workflow: "scan", eventType: "started", status: "started", userId: user.id || null, safeMetadata: { provider: "openrouter" } });
     const { acceptance, workflow: result } = await executeAcceptedScanWorkflow(input, request, user as AuthenticatedScanUser, authorization);
     await persistScanOrchestrationArtifacts({ enabled: config.persistenceShadowEnabled, user: user as AuthenticatedScanUser, completedWorkflow: result });
     console.info("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_completed", result }));
+    await recordOperationalEvent({ workflow: "scan", eventType: "completed", status: "completed", userId: user.id || null, durationMs: Date.now() - workflowStartedAt, safeMetadata: { scanId: acceptance.scanId, provider: "openrouter", sourcesProcessed: result.evidence.sourceCount } });
     return Response.json(mapScanOrchestrationSuccessResponse(result, acceptance.scanId));
   } catch (error) {
     if (error instanceof AuthError) return Response.json({ success:false, error:"Unauthorized" }, { status:error.status });
-    if (isScanWorkflowFailure(error)) { console.warn("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_failed", failure:error })); return Response.json(mapScanOrchestrationFailureResponse(error), { status: scanWorkflowHttpStatusForFailure(error) }); }
+    if (isScanWorkflowFailure(error)) { console.warn("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_failed", failure:error })); await recordOperationalEvent({ workflow: "scan", eventType: "failed", status: "failed", durationMs: undefined, failureCategory: error.error.code, safeMetadata: { provider: "openrouter" } }); return Response.json(mapScanOrchestrationFailureResponse(error), { status: scanWorkflowHttpStatusForFailure(error) }); }
     if (error instanceof ScanEvidenceIngestionError) return Response.json({ success:false, error:{ code:error.code, message:"The Scan workflow request is invalid." } }, { status: scanEvidenceHttpStatusForCode(error.code) });
     return Response.json({ success:false, error:{ code:"scan_workflow_request_invalid", message:"The Scan workflow request is invalid." } }, { status:400 });
   }
