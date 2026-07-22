@@ -454,3 +454,38 @@ Opportunity deletion is `DELETE /api/opportunities` with only `opportunityId`. T
 Database privileges now follow least privilege in the final schema state. `anon` has no business-table access except beta signup insertion. `authenticated` keeps SELECT only for browser display tables protected by RLS and keeps INSERT/UPDATE only for the intentional `user_profiles` bootstrap/edit path. Server-owned mutation tables (`scan`, `scan_sources`, `opportunities`, `saved_ideas`, `evidence_analysis`, Discover action tables, Weekly tables, Problem Intelligence writes, Snapshot and Knowledge Evolution storage) are written by server routes/services using service-role clients after deriving authenticated ownership.
 
 The Weekly claim RPC `public.claim_weekly_intelligence_run(uuid, timestamp with time zone, timestamp with time zone, text, timestamp with time zone)` remains `SECURITY DEFINER` because it atomically reserves/reclaims a Weekly run for the authoritative manual/scheduled workflow. Its execution is explicitly revoked from `PUBLIC`, `anon`, and `authenticated`, granted only to `service_role`, and has a fixed `search_path = public` so browser roles cannot invoke it with arbitrary `p_user_id` values.
+
+## Closed Beta Operational Event Layer — 2026-07-22
+
+### Purpose
+
+The closed Beta operational event layer records high-level, server-owned workflow events so a founder can diagnose a small 10–25 user Beta without relying only on ephemeral console logs. It supports operational support questions such as whether Scan started, Weekly Intelligence reused an existing run, Discover partially persisted downstream knowledge, or Results validation degraded because supporting diagnostics were imperfect.
+
+### Non-goals
+
+This layer is not a monitoring platform. It does not provide dashboards, analytics, metrics aggregation, event streaming, queues, retries, alerting, notifications, reporting, log viewing, OpenTelemetry, Sentry, Datadog, Grafana, or any user-facing UI.
+
+### Architecture and best-effort behavior
+
+Operational events are written only from server workflows through `recordOperationalEvent()`. The helper performs one insert into `operational_events`, catches every persistence failure, logs a safe warning, and returns without throwing. Workflow success or failure semantics remain owned by the original workflow; operational event persistence must never become a critical dependency or change an API contract.
+
+### Recorded workflows
+
+The Beta scope records only high-value diagnostics:
+
+- Scan: `started`, `completed`, and `failed` with duration, scan identifier when available, provider, source count, and failure category.
+- Weekly Intelligence: `claimed`, `processing`, `completed`, `failed`, and `reused` across manual and scheduled generation because both entry points use the authoritative Weekly generation service.
+- Discover: `started`, `completed`, `failed`, and `partial_persistence` with discovery identifier, generated problem count, and replacement attempts.
+- Results validation: `completed`, `degraded`, and `failed` with batch size, validated idea count, aggregation source count, and duration.
+
+### Privacy rules
+
+Operational metadata must remain intentionally small and safe. It may store bounded identifiers, counts, workflow names, provider names, plans, durations, and coarse failure categories. It must not store prompts, opportunity descriptions, raw evidence, user content, AI outputs, token counts, secrets, provider responses, emails, authentication headers, or credentials. The helper defensively removes known sensitive metadata keys before persistence.
+
+### Database security
+
+`operational_events` is append-only operational data. Browser roles receive no read, insert, update, or delete grants. Row-level security is enabled, there are no browser policies, and only `service_role` receives table privileges for server-owned insertion and founder-side operational inspection. Update and delete attempts are rejected by triggers to preserve append-only history.
+
+### Future evolution
+
+Future observability vendors, dashboards, alerting, queues, request-correlation frameworks, and aggregate analytics can be added later if Beta evidence proves they are necessary. They should remain separate from this minimal operational support layer and must continue to protect prompts, AI responses, raw evidence, secrets, and user content.

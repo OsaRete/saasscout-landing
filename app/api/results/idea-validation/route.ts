@@ -4,6 +4,7 @@ import { AuthError, requireUser } from "../../_utils/auth";
 import { aggregateUserDataMoat, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { buildIdeaValidationDataMoatContext, stripIdeaValidationDiagnostics, validateIdeaAgainstDataMoatContext } from "@/lib/idea-validation";
 import { RESULTS_IDEA_VALIDATION_MAX_IDEAS } from "@/lib/results/idea-validation-contract";
+import { recordOperationalEvent } from "@/lib/operational-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -118,6 +119,7 @@ export async function POST(req: Request) {
       validations.push([idea.id, validation] as const);
     }
 
+    const durationMs = Date.now() - requestStartedAt;
     logResultsValidation("results_idea_validation_completed", {
       requestedCount: parsed.requestedCount,
       acceptedCount: parsed.ideas.length,
@@ -125,8 +127,10 @@ export async function POST(req: Request) {
       successfulValidationCount: validations.length,
       aggregationDurationMs,
       validationDurationMs: Date.now() - validationStartedAt,
-      durationMs: Date.now() - requestStartedAt,
+      durationMs,
     });
+
+    await recordOperationalEvent({ workflow: "results_validation", eventType: context.aggregationDiagnostics.normalizationFailures.length > 0 ? "degraded" : "completed", status: context.aggregationDiagnostics.normalizationFailures.length > 0 ? "degraded" : "completed", userId: user.id, durationMs, safeMetadata: { batchSize: parsed.ideas.length, ideasValidated: validatedById.size, aggregationSources: aggregation.diagnostics.sourcesQueried.length } });
 
     return NextResponse.json({
       validations: Object.fromEntries(validations),
@@ -135,6 +139,8 @@ export async function POST(req: Request) {
     if (error instanceof AuthError) {
       return NextResponse.json({ error: "Unauthorized" }, { status: error.status });
     }
+
+    await recordOperationalEvent({ workflow: "results_validation", eventType: "failed", status: "failed", durationMs: Date.now() - requestStartedAt, failureCategory: error instanceof Error ? error.name : "results_idea_validation_failed", safeMetadata: {} });
 
     console.error("Results idea validation failed", {
       event: "results_idea_validation_failed",
