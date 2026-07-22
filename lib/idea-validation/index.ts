@@ -1,2 +1,2 @@
-export { stripIdeaValidationDiagnostics, validateIdea, validateIdeaFromAggregation } from "./engine.ts";
-export type { IdeaValidationRecommendation, IdeaValidationResult, IdeaValidationSignal, IdeaValidationStatus, InternalIdeaValidationDiagnostics, PublicIdeaValidationResponse, PublicIdeaValidationResult, ValidateIdeaInput } from "./engine.ts";
+export { buildIdeaValidationDataMoatContext, stripIdeaValidationDiagnostics, validateIdea, validateIdeaAgainstDataMoatContext, validateIdeaFromAggregation, validateIdeasAgainstDataMoatContext } from "./engine.ts";
+export type { IdeaValidationDataMoatContext, IdeaValidationRecommendation, IdeaValidationResult, IdeaValidationSignal, IdeaValidationStatus, InternalIdeaValidationDiagnostics, PublicIdeaValidationResponse, PublicIdeaValidationResult, ValidateIdeaAgainstDataMoatContextInput, ValidateIdeaInput } from "./engine.ts";

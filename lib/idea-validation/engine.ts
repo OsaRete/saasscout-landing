@@ -25,8 +25,10 @@ export type InternalIdeaValidationDiagnostics = Readonly<{
 }>;
 export type IdeaValidationResult = PublicIdeaValidationResult & Readonly<{ diagnostics: InternalIdeaValidationDiagnostics }>;
 export type PublicIdeaValidationResponse = PublicIdeaValidationResult;
+export type IdeaValidationDataMoatContext = Readonly<{ userId: string; items: readonly NormalizedDataMoatItem[]; sharedContext: readonly NormalizedDataMoatItem[]; evidenceCounts: Readonly<Record<DataMoatSource, number>>; aggregationDiagnostics: DataMoatAggregation["diagnostics"] }>;
 export type IdeaValidationSignal = Readonly<{ direction: IdeaValidationSignalDirection; source: DataMoatSource; kind: DataMoatItemKind; itemId: string; title: string; occurredAt: string; strength: number; reason: string }>;
 export type ValidateIdeaInput = Readonly<{ userId: string; idea: Readonly<{ title: string; summary?: string; problem?: string; audience?: string }>; includeSharedContext?: boolean; limitPerSource?: number; now?: () => number; aggregation?: DataMoatAggregation }>;
+export type ValidateIdeaAgainstDataMoatContextInput = Readonly<{ userId: string; idea: ValidateIdeaInput["idea"]; dataMoatContext: IdeaValidationDataMoatContext; now?: () => number }>;
 
 const SUPPORTING_KINDS = new Set<DataMoatItemKind>(["scan", "opportunity", "discover_run", "discover_problem", "saved_idea", "weekly_report", "snapshot", "user_activity"]);
 const CONTRADICTION_TERMS = ["not viable", "no demand", "low demand", "invalid", "rejected", "contradict", "not worth", "too expensive", "low confidence", "failed"];
@@ -56,12 +58,21 @@ export function stripIdeaValidationDiagnostics(result: IdeaValidationResult): Pu
   });
 }
 
-export function validateIdeaFromAggregation(input: ValidateIdeaInput): IdeaValidationResult {
+export function buildIdeaValidationDataMoatContext(aggregation: DataMoatAggregation): IdeaValidationDataMoatContext {
+  return Object.freeze({
+    userId: aggregation.userId,
+    items: Object.freeze([...aggregation.items]),
+    sharedContext: Object.freeze([...aggregation.sharedContext]),
+    evidenceCounts: Object.freeze({ ...aggregation.diagnostics.countsBySource }),
+    aggregationDiagnostics: aggregation.diagnostics,
+  });
+}
+
+export function validateIdeaAgainstDataMoatContext(input: ValidateIdeaAgainstDataMoatContextInput): IdeaValidationResult {
   if (!input.userId) throw new Error("Idea validation requires an authenticated user.");
   const startedAt = input.now?.() ?? Date.now();
-  const aggregation = input.aggregation;
-  if (!aggregation) throw new Error("Idea validation requires aggregated Data Moat evidence.");
-  if (aggregation.userId !== input.userId) throw new Error("Idea validation aggregation owner mismatch.");
+  const context = input.dataMoatContext;
+  if (context.userId !== input.userId) throw new Error("Idea validation context owner mismatch.");
   const query = [input.idea.title, input.idea.summary, input.idea.problem, input.idea.audience].filter(Boolean).join(" ");
   const tokens = new Set(tokenize(query));
   const skippedEvidence: InternalIdeaValidationDiagnostics["skippedEvidence"] = [];
@@ -69,7 +80,7 @@ export function validateIdeaFromAggregation(input: ValidateIdeaInput): IdeaValid
   const supportingSignals: IdeaValidationSignal[] = [];
   const contradictorySignals: IdeaValidationSignal[] = [];
 
-  for (const item of aggregation.items) {
+  for (const item of context.items) {
     if (item.ownerId !== input.userId) { skippedEvidence.push({ id: item.id, source: item.source, reason: "owner_mismatch" }); continue; }
     if (!SUPPORTING_KINDS.has(item.kind)) { unsupportedEvidence.push({ id: item.id, source: item.source, kind: item.kind, reason: "unsupported_kind" }); continue; }
     const overlap = overlaps(item, tokens);
@@ -96,8 +107,19 @@ export function validateIdeaFromAggregation(input: ValidateIdeaInput): IdeaValid
   const recommendation: IdeaValidationRecommendation = status === "validated" ? "prioritize_beta_validation" : status === "promising" ? "run_deep_scan" : status === "contradicted" ? "do_not_prioritize" : "collect_more_evidence";
   const evidenceSummary = related.length === 0 ? "No related user-owned evidence was found through the Data Moat Aggregation Layer." : `${supportingSignals.length} supporting and ${contradictorySignals.length} contradictory related signals across ${sources.size} source types and ${windows.size} time windows.`;
   const explanation = related.length === 0 ? "The validation engine is read-only and cannot validate an idea without normalized evidence." : `Confidence is deterministic: support, source diversity, recurrence, freshness, and signal strength raise confidence; contradictory evidence lowers it.`;
-  const diagnostics = Object.freeze({ evidenceCounts: aggregation.diagnostics.countsBySource, validationDurationMs: Math.max(0, (input.now?.() ?? Date.now()) - startedAt), confidenceInputs: Object.freeze({ independentMentions: related.length, sourceDiversity: sources.size, recurrenceWindows: windows.size, supportingCount: supportingSignals.length, contradictoryCount: contradictorySignals.length, freshnessScore: fresh, signalStrength: clamp(supportingStrength - contradictoryStrength, 100), rawConfidence: clamp(rawConfidence) }), skippedEvidence, unsupportedEvidence, aggregationDiagnostics: aggregation.diagnostics });
+  const diagnostics = Object.freeze({ evidenceCounts: context.evidenceCounts as Record<DataMoatSource, number>, validationDurationMs: Math.max(0, (input.now?.() ?? Date.now()) - startedAt), confidenceInputs: Object.freeze({ independentMentions: related.length, sourceDiversity: sources.size, recurrenceWindows: windows.size, supportingCount: supportingSignals.length, contradictoryCount: contradictorySignals.length, freshnessScore: fresh, signalStrength: clamp(supportingStrength - contradictoryStrength, 100), rawConfidence: clamp(rawConfidence) }), skippedEvidence, unsupportedEvidence, aggregationDiagnostics: context.aggregationDiagnostics });
   return Object.freeze({ status, confidence, evidenceSummary, supportingSignals: supportingSignals.slice(0, 10), contradictorySignals: contradictorySignals.slice(0, 10), explanation, freshness: Object.freeze({ latestEvidenceAt, ageDays, level: freshnessLevel(ageDays) }), recommendation, diagnostics });
+}
+
+export function validateIdeaFromAggregation(input: ValidateIdeaInput): IdeaValidationResult {
+  const aggregation = input.aggregation;
+  if (!aggregation) throw new Error("Idea validation requires aggregated Data Moat evidence.");
+  if (aggregation.userId !== input.userId) throw new Error("Idea validation aggregation owner mismatch.");
+  return validateIdeaAgainstDataMoatContext({ userId: input.userId, idea: input.idea, dataMoatContext: buildIdeaValidationDataMoatContext(aggregation), now: input.now });
+}
+
+export function validateIdeasAgainstDataMoatContext(inputs: readonly Omit<ValidateIdeaAgainstDataMoatContextInput, "dataMoatContext">[], dataMoatContext: IdeaValidationDataMoatContext): IdeaValidationResult[] {
+  return inputs.map((input) => validateIdeaAgainstDataMoatContext({ ...input, dataMoatContext }));
 }
 
 export async function validateIdea(client: DataMoatAggregationClient, input: Omit<ValidateIdeaInput, "aggregation">, options: DataMoatAggregationOptions = {}): Promise<IdeaValidationResult> {

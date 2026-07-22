@@ -127,3 +127,9 @@ Manual and scheduled generation share the same atomic claim contract. A run is r
 Completed Weekly runs are reused. When a stale or failed processing run is reclaimed, completion replaces the child `weekly_detected_problems` set for that run before inserting the new validated set, so the persisted children match exactly one authoritative report output.
 
 Detected-problem identity is normalized through `problem_title_key`, which trims leading/trailing whitespace, collapses repeated internal whitespace, and lowercases the model title. The migration backfills this key, removes historical duplicates deterministically by preserving the row with the strongest score tuple, then creates the unique index on `(run_id, problem_title_key)`.
+
+## Results request-local aggregation reuse — 2026-07-22
+
+The Results Idea Validation API now treats Data Moat aggregation as an evidence-acquisition step that is owned by the authenticated server route and performed once per valid batch request. The route then derives a bounded immutable validation context containing normalized user-owned evidence, source counts, shared-context metadata when requested by the caller, and server diagnostics required by deterministic validation.
+
+No cross-request cache is introduced. The aggregation output is reused only inside the current request so evidence freshness, user isolation, ownership filtering, and serverless deployment boundaries remain unchanged. Deterministic per-idea validation may scale with the number of ideas, but Data Moat source reads do not scale linearly with the batch size.

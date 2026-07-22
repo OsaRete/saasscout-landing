@@ -56,3 +56,15 @@ The engine does not insert, update, delete, upsert, call LLMs, compute embedding
 ## Compatibility
 
 This implementation does not redesign Dashboard, Results, Discover, Weekly UI, saved ideas UI, Scan workflow, or Data Moat learning. Existing consumers can migrate incrementally in future PRs.
+
+## Results batch validation update — 2026-07-22
+
+Results validation now separates evidence acquisition from deterministic idea evaluation. `POST /api/results/idea-validation` remains the public browser contract and accepts `{ ideas: [...] }`, but the server authenticates first, validates the full batch envelope, performs exactly one request-local `aggregateUserDataMoat(userId)` call, builds an immutable internal Data Moat validation context, and evaluates each accepted idea against that shared context.
+
+The reusable deterministic core is `validateIdeaAgainstDataMoatContext()`. It does not read databases, call models, persist outcomes, or invoke `aggregateUserDataMoat()`. `validateIdeasAgainstDataMoatContext()` is a sequential batch helper over the same immutable context. `validateIdea()` remains the single-idea convenience wrapper for legitimate callers and aggregates once for one idea.
+
+The Results route enforces `RESULTS_IDEA_VALIDATION_MAX_IDEAS = 30`. Oversized batches are rejected with a controlled error instead of being silently truncated. The Results UI sends at most that supported maximum. Empty or malformed accepted input returns no validations before aggregation. Duplicate idea IDs are handled deterministically by validating the first accepted occurrence for that stable ID and reusing that public result for later duplicate positions; the response remains the existing object map keyed by idea/opportunity ID, so duplicate keys collapse in the same way JavaScript object responses historically expose them.
+
+Internal aggregation diagnostics and validation diagnostics remain server-only. Public responses still return only stripped validation results under `{ validations: Record<string, PublicIdeaValidationResponse> }`. The route logs only aggregate counts and durations: ideas requested, ideas accepted, unique ideas validated, one aggregation duration, validation duration, total duration, and controlled failure category. It does not log raw evidence, descriptions, user content, tokens, secrets, or provider credentials.
+
+This PR does not add global or cross-request caching. Reuse is request-local only, preserving user isolation and evidence freshness. Complexity changes from the previous Results loop risk of `O(N × aggregation sources)` to `O(aggregation sources + N × deterministic validation)` for each authenticated request. Confidence scoring, supporting-signal rules, contradictory-signal rules, recommendations, and UI labels are intentionally unchanged.
