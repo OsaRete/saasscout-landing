@@ -3,7 +3,8 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { authorizeScanOrchestration, mapScanOrchestrationFailureResponse, mapScanOrchestrationSuccessResponse, readScanServerOrchestrationConfig, validateJsonScanOrchestrationRequest } from "../lib/scan/server-orchestration.ts";
 import { ScanEvidenceIngestionError } from "../lib/scan/evidence-ingestion.ts";
-import type { ScanWorkflowFailureResult, ScanWorkflowResult } from "../lib/scan/workflow.ts";
+import { executeScanWorkflow, isScanWorkflowFailure, validateScanWorkflowIntent, type ScanWorkflowFailureResult, type ScanWorkflowResult } from "../lib/scan/workflow.ts";
+import { validateScanTrustedIntent } from "../lib/scan/trusted-intent.ts";
 
 test("scan server orchestration validates request shape before workflow execution", () => {
   const input = validateJsonScanOrchestrationRequest({
@@ -13,10 +14,39 @@ test("scan server orchestration validates request shape before workflow executio
     discoverContext: [{ content: "Prior Discovery problem context." }],
   });
 
-  assert.deepEqual(input.intent, { market: "Agencies", niche: undefined, audience: "Owners", region: "US", description: "Manual reporting" });
+  assert.deepEqual(input.intent, { market: "Agencies", audience: "Owners", region: "US", description: "Manual reporting" });
   assert.equal(input.pastedEvidence, "Evidence text");
   assert.equal(input.externalSnippets?.[0]?.title, "Forum");
   assert.equal(input.discoverContext?.[0]?.content, "Prior Discovery problem context.");
+});
+
+test("scan request boundary omits absent and normalized-empty intent fields", () => {
+  const complete = validateJsonScanOrchestrationRequest({ intent: { market: " Small Businesses ", audience: " Small business owners ", region: " Global " } });
+  assert.deepEqual(complete.intent, { market: "Small Businesses", audience: "Small business owners", region: "Global" });
+  assert.equal(Object.hasOwn(complete.intent, "niche"), false);
+  assert.equal(Object.hasOwn(complete.intent, "description"), false);
+  assert.equal(Object.values(complete.intent).includes(undefined), false);
+  const marketOnly = validateJsonScanOrchestrationRequest({ intent: { market: " Small Businesses ", niche: "   ", description: "\t" } });
+  assert.deepEqual(marketOnly.intent, { market: "Small Businesses" });
+  assert.deepEqual(validateScanWorkflowIntent(marketOnly.intent), { market: "Small Businesses" });
+});
+
+test("scan intent remains strict after request-boundary normalization", () => {
+  assert.throws(() => validateScanWorkflowIntent(validateJsonScanOrchestrationRequest({ intent: { market: " ", niche: "\t" } }).intent));
+  assert.throws(() => validateJsonScanOrchestrationRequest({ intent: { market: "Agencies", unexpected: "value" } }), ScanEvidenceIngestionError);
+  assert.throws(() => validateScanTrustedIntent({ niche: undefined }));
+  assert.throws(() => validateScanTrustedIntent({ audience: "" }));
+});
+
+test("production-shaped Deep Scan input progresses beyond input_validated", async () => {
+  const input = validateJsonScanOrchestrationRequest({ intent: { market: " Small Businesses ", audience: " Small business owners ", region: " Global ", niche: "", description: " " }, pastedEvidence: "Production-shaped evidence is long enough to reach evidence ingestion." });
+  await assert.rejects(() => executeScanWorkflow(input, { authenticated: true, authorizationMode: "internal_user" }, { now: () => new Date("2026-01-01T00:00:00.000Z"), createExecutionId: () => "scan-workflow-00000000-0000-4000-8000-000000000000", ingestEvidence: async () => { throw new ScanEvidenceIngestionError("scan_evidence_request_invalid"); } } as never), (error) => {
+    assert.equal(isScanWorkflowFailure(error), true);
+    const failure = error as ScanWorkflowFailureResult;
+    assert.equal(failure.error.stage, "evidence_ingested");
+    assert.equal(failure.processingHistory.some((record) => record.stage === "input_validated" && record.status === "completed"), true);
+    return true;
+  });
 });
 
 test("scan server orchestration rejects client-owned workflow and persistence fields", () => {
