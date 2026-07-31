@@ -186,9 +186,9 @@ if (profileData) {
     };
 
     const intent = {
-      market: cleanMarket,
-      audience: cleanAudience,
-      region: cleanRegion,
+      ...(cleanMarket ? { market: cleanMarket } : {}),
+      ...(cleanAudience ? { audience: cleanAudience } : {}),
+      ...(cleanRegion ? { region: cleanRegion } : {}),
     };
 
     const formData = new FormData();
