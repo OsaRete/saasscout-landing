@@ -29,6 +29,6 @@ test("failure paths after acceptance transition the legacy scan to failed", () =
 
 test("public legacy scan errors are safe after server workflow failure", () => {
   assert.match(scanPage, /const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed\. Please try again\.";/);
-  assert.match(scanPage, /setMessage\(SAFE_SCAN_FAILURE_MESSAGE\)/);
+  assert.match(scanPage, /setMessage\(error instanceof ScanSubmissionError \? error\.message : SAFE_SCAN_FAILURE_MESSAGE\)/);
   assert.doesNotMatch(scanPage, /error instanceof Error\s*\?\s*error\.message/);
 });

@@ -127,6 +127,7 @@ export function buildGenerateOpportunitiesPrompt(input: {
   const derivedAnalysisBlock = formatDerivedAnalysisContext(
     input.derivedAnalysis,
   );
+  const exampleEvidenceId = evidenceItems[0]?.evidenceId ?? "NO_ALLOWED_EVIDENCE_ID";
 
   return `You are SaaSScout, an AI SaaS opportunity analyst.
 
@@ -188,7 +189,7 @@ JSON format:
       "landing_page_idea": "Never lose a design client again. Track leads, proposals, and follow-ups in one simple workspace.",
       "acquisition_channels": "Design communities | LinkedIn outreach | Reddit | Freelance newsletters",
       "grounding": {
-        "pain": { "text": "why this pain is supported", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "primary" }] },
+        "pain": { "text": "why this pain is supported", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "${exampleEvidenceId}", "relevance": "primary" }] },
         "customer": { "text": "why this customer is supported", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "supporting" }] },
         "rationale": { "text": "why this opportunity follows", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Opportunity rationale is synthesized from the cited problem pattern." },
         "mvp": { "text": "why this MVP is recommended", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "MVP is a recommendation, not an observed fact." },
@@ -211,6 +212,7 @@ export function buildSolutionIntelligencePrompt(input: {
   const derivedAnalysisBlock = formatDerivedAnalysisContext(
     input.derivedAnalysis,
   );
+  const exampleEvidenceId = evidenceItems[0]?.evidenceId ?? "NO_ALLOWED_EVIDENCE_ID";
 
   return `You are SaaSScout Solution Intelligence.
 
@@ -246,7 +248,13 @@ Rules:
 - problemFraming, whatAppearsValidated, verifiedFoundation, and knownFacts are factual fields: use evidence grounding only, cite allowed evidence IDs, and omit inferenceReason.
 - Separate verified foundations from proposed innovation. VerifiedFoundation may be empty only for unproven_concept or no_innovation_needed; other innovation modes need at least one evidenced foundation.
 - Derived analysis is not independent evidence; cite only allowed evidence IDs or mark claims as inference.
-- Every material claim must use groundingMode "evidence" with valid evidenceRefs or groundingMode "inference" with no refs and inferenceReason.
+- Evidence IDs must be copied verbatim from the allowed list above. Never invent, rewrite, or cite any other ID.
+- Allowed relevance values are exactly "primary", "supporting", and "contradicting" (lowercase).
+- Every claim object uses the exact properties text, groundingMode, evidenceRefs, and (for inference only) inferenceReason. Evidence-grounded claims prohibit empty evidenceRefs; inference claims require empty evidenceRefs and a non-empty inferenceReason.
+- problemFraming and every item in whatAppearsValidated, verifiedFoundation, and knownFacts require groundingMode "evidence" and at least one allowed evidenceRefs entry.
+- recommendation, keyAssumptions, nextValidationAction, and every unverifiedAssumptions item require groundingMode "inference", empty evidenceRefs, and inferenceReason.
+- A direct_competitor requires at least one allowed reference in its own evidenceRefs array.
+- Every other material claim must use groundingMode "evidence" with one or more valid evidenceRefs, or groundingMode "inference" with no refs and inferenceReason. There is no aggregate coverage threshold: coverage is enforced on every required factual entity above.
 - recommendedCategory must tie for highest suitability. secondaryCategory, when present, must be evaluated, differ from recommendedCategory, and tie for second-highest suitability among non-recommended categories.
 - Identify the cheapest real-world validation step. Readiness beyond not_ready requires evidence-backed knownFacts; solution_validation_ready and demand_test_ready require criticalUnknowns.
 - Do not include markdown or prose outside JSON.
@@ -254,14 +262,14 @@ Rules:
 JSON shape:
 {
   "version": "scan-solution-intelligence@1",
-  "problemFraming": { "text": "problem stated from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "primary" }] },
+  "problemFraming": { "text": "problem stated from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "${exampleEvidenceId}", "relevance": "primary" }] },
   "evaluatedCategories": [{ "category": "software_product", "suitability": 0.62, "suitabilityBand": "possible", "rationale": { "text": "why this category fits or does not fit", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Category fit is inferred from the evidenced workflow." }, "advantages": [], "limitations": [], "prerequisites": [] }],
   "recommendedCategory": "validate_first",
   "secondaryCategory": "productized_service",
   "recommendation": { "text": "recommended approach", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Recommendation compares category fit under current evidence." },
   "existingSolutionAssessment": { "knownAlternatives": [], "evidenceCoverage": "limited", "whatAppearsValidated": [], "whatAppearsPoorlySolved": [], "replacementRisk": { "text": "replacement risk", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Replacement risk needs more competitor evidence." } },
   "innovationAssessment": { "innovationMode": "unproven_concept", "verifiedFoundation": [], "proposedDifferentiation": [], "unverifiedAssumptions": [], "feasibilityConstraints": [], "noveltyRisk": "moderate" },
-  "validationReadiness": { "readiness": "problem_validation_ready", "knownFacts": [{ "text": "known fact from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "scan-user-evidence", "relevance": "primary" }] }], "criticalUnknowns": [], "cheapestNextTest": "customer_interviews", "testRationale": { "text": "why this is cheapest", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Test choice is inferred from evidence gaps." }, "successSignal": { "text": "success signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." }, "failureSignal": { "text": "failure signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." } },
+  "validationReadiness": { "readiness": "problem_validation_ready", "knownFacts": [{ "text": "known fact from evidence", "groundingMode": "evidence", "evidenceRefs": [{ "evidenceId": "${exampleEvidenceId}", "relevance": "primary" }] }], "criticalUnknowns": [], "cheapestNextTest": "customer_interviews", "testRationale": { "text": "why this is cheapest", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Test choice is inferred from evidence gaps." }, "successSignal": { "text": "success signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." }, "failureSignal": { "text": "failure signal", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Validation signal is proposed." } },
   "keyAssumptions": [],
   "risks": [],
   "nextValidationAction": { "text": "next action", "groundingMode": "inference", "evidenceRefs": [], "inferenceReason": "Next action follows from critical unknowns." }

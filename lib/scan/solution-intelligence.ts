@@ -952,10 +952,37 @@ function collect(r: SolutionIntelligenceResult) {
     r.validationReadiness.failureSignal,
   ].filter(Boolean);
 }
+export function normalizeSolutionIntelligenceModelOutput(input: unknown): unknown {
+  if (Array.isArray(input)) return input.map(normalizeSolutionIntelligenceModelOutput);
+  if (!rec(input)) return input;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (key !== "evidenceRefs" || !Array.isArray(value)) {
+      normalized[key] = normalizeSolutionIntelligenceModelOutput(value);
+      continue;
+    }
+    const seen = new Set<string>();
+    normalized[key] = value.map((ref) => {
+      if (!rec(ref)) return ref;
+      const evidenceId = typeof ref.evidenceId === "string" ? ref.evidenceId.trim() : ref.evidenceId;
+      const relevance = typeof ref.relevance === "string" ? ref.relevance.trim().toLowerCase() : ref.relevance;
+      return { ...ref, evidenceId, ...(ref.relevance !== undefined ? { relevance } : {}) };
+    }).filter((ref) => {
+      if (!rec(ref) || typeof ref.evidenceId !== "string") return true;
+      const signature = `${ref.evidenceId}\u0000${String(ref.relevance ?? "")}`;
+      if (seen.has(signature)) return false;
+      seen.add(signature);
+      return true;
+    });
+  }
+  return normalized;
+}
+
 export function validateSolutionIntelligenceOutput(
   input: unknown,
   options: { evidenceIds?: readonly string[] } = {},
 ): SolutionIntelligenceResult {
+  input = normalizeSolutionIntelligenceModelOutput(input);
   const issues: SolutionIntelligenceIssue[] = [];
   if (!rec(input))
     throw new SolutionIntelligenceValidationError([

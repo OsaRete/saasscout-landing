@@ -510,28 +510,19 @@ test("hardens existing alternative evidence refs and category-level alternatives
       }),
     SolutionIntelligenceValidationError,
   );
-  assert.throws(
-    () =>
-      valid({
-        ...b,
-        existingSolutionAssessment: {
-          ...b.existingSolutionAssessment,
-          knownAlternatives: [
-            {
-              nameOrCategory: "NamedCo",
-              alternativeType: "direct_competitor",
-              observedStrengths: [],
-              observedWeaknesses: [],
-              evidenceRefs: [
-                { evidenceId: "scan-user-evidence" },
-                { evidenceId: "scan-user-evidence" },
-              ],
-            },
-          ],
-        },
-      }),
-    SolutionIntelligenceValidationError,
-  );
+  assert.equal(valid({
+    ...b,
+    existingSolutionAssessment: {
+      ...b.existingSolutionAssessment,
+      knownAlternatives: [{
+        nameOrCategory: "NamedCo",
+        alternativeType: "direct_competitor",
+        observedStrengths: [],
+        observedWeaknesses: [],
+        evidenceRefs: [{ evidenceId: "scan-user-evidence" }, { evidenceId: "scan-user-evidence" }],
+      }],
+    },
+  }).existingSolutionAssessment.knownAlternatives[0].evidenceRefs.length, 1);
   assert.throws(
     () =>
       valid({
@@ -663,4 +654,29 @@ test("legacy analyze and generate contracts remain compatible", () => {
     ).opportunities.length,
     3,
   );
+});
+
+test("solution prompt copies the runtime evidence ID and states the complete grounding contract", () => {
+  const prompt = buildSolutionIntelligencePrompt({ intent: { market: "Agencies" }, evidence: [{ evidenceId: "pasted-evidence-001", sourceKind: "pasted_evidence", content: "Operators report manual work." }] });
+  assert.match(prompt, /Allowed evidence IDs[\s\S]*pasted-evidence-001/);
+  assert.doesNotMatch(prompt.slice(prompt.indexOf("JSON shape:")), /scan-user-evidence/);
+  assert.match(prompt, /Allowed relevance values are exactly "primary", "supporting", and "contradicting"/);
+  assert.match(prompt, /problemFraming and every item in whatAppearsValidated, verifiedFoundation, and knownFacts/);
+  assert.match(prompt, /Evidence-grounded claims prohibit empty evidenceRefs/);
+});
+
+test("safe solution normalization trims IDs, normalizes documented relevance casing, and deduplicates identical refs", () => {
+  const value = base();
+  value.problemFraming.evidenceRefs = [
+    { evidenceId: " scan-user-evidence ", relevance: "PRIMARY" as never },
+    { evidenceId: "scan-user-evidence", relevance: "primary" },
+  ];
+  const output = valid(value);
+  assert.deepEqual(output.problemFraming.evidenceRefs, [{ evidenceId: "scan-user-evidence", relevance: "primary" }]);
+});
+
+test("normalization never invents or replaces unknown grounding", () => {
+  const value = base();
+  value.problemFraming.evidenceRefs = [{ evidenceId: " invented ", relevance: "PRIMARY" as never }];
+  assert.throws(() => valid(value), (error) => error instanceof SolutionIntelligenceValidationError && error.code === "solution_model_grounding_unknown_evidence_id");
 });

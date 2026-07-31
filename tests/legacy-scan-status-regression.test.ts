@@ -26,6 +26,6 @@ test("legacy scan completed status transition is server-owned before redirect", 
 
 test("legacy failure status transition is server-owned and sanitized", () => {
   assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "failed"\)/);
-  assert.match(scanPage, /setMessage\(SAFE_SCAN_FAILURE_MESSAGE\)/);
+  assert.match(scanPage, /setMessage\(error instanceof ScanSubmissionError \? error\.message : SAFE_SCAN_FAILURE_MESSAGE\)/);
   assert.doesNotMatch(scanPage, /file_url_persistence_failed/);
 });

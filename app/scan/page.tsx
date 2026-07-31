@@ -9,6 +9,8 @@ import { supabase } from "../supabase";
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
+const SOLUTION_GROUNDING_FAILURE_MESSAGE = "The generated opportunities could not be verified against your evidence. Please retry the scan.";
+class ScanSubmissionError extends Error {}
 
 type LoadingStep =
   | "idle"
@@ -232,13 +234,13 @@ if (profileData) {
       body: formData,
     });
 
-    const result = await response.json();
+    const result = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const safeCode = typeof result.error?.code === "string" ? result.error.code : "scan_workflow_failed";
-      const safeStage = typeof result.error?.stage === "string" ? result.error.stage : "unknown";
+      const safeCode = typeof result?.error?.code === "string" ? result.error.code : "scan_workflow_failed";
+      const safeStage = typeof result?.error?.stage === "string" ? result.error.stage : "unknown";
       console.warn("Scan workflow failed", { code: safeCode, stage: safeStage, status: response.status });
-      throw new Error(result.error?.message || result.error || SAFE_SCAN_FAILURE_MESSAGE);
+      throw new ScanSubmissionError(safeCode === "scan_workflow_solution_grounding_failed" ? SOLUTION_GROUNDING_FAILURE_MESSAGE : (typeof result?.error?.message === "string" ? result.error.message : SAFE_SCAN_FAILURE_MESSAGE));
     }
 
     return result as { success: true; scanId: string };
@@ -309,9 +311,9 @@ if (profileData) {
       await recordDiscoveryConversion({ accessToken, cleanMarket });
 
       router.push("/results");
-    } catch {
+    } catch (error) {
       console.error("Scan submission failed", { code: "scan_submission_failed" });
-      setMessage(SAFE_SCAN_FAILURE_MESSAGE);
+      setMessage(error instanceof ScanSubmissionError ? error.message : SAFE_SCAN_FAILURE_MESSAGE);
       setLoading(false);
       setLoadingStep("idle");
     }
