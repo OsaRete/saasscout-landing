@@ -5,6 +5,7 @@ import { executeScanWorkflow, buildSafeScanWorkflowLog, buildDerivedProblemConte
 const TEST_SCAN_WORKFLOW_AUTHORIZATION: ScanWorkflowAuthorizationContext = Object.freeze({ authenticated: true, authorizationMode: "internal_user" });
 import { validateAnalyzeEvidenceOutput } from "../lib/scan/output-validation.ts";
 import { validateSolutionIntelligenceOutput } from "../lib/scan/solution-intelligence.ts";
+import { SolutionIntelligenceServiceError } from "../lib/scan/solution-intelligence-service.ts";
 import { ingestScanEvidence } from "../lib/scan/evidence-ingestion.ts";
 import { computeScanQualityDiagnostics } from "../lib/scan/quality-diagnostics.ts";
 import { calibrateAnalyzeEvidenceConfidence } from "../lib/scan/score-calibration.ts";
@@ -85,4 +86,20 @@ test("workflow hardening source assertions cover route boundaries and public err
   assert.match(analyze, /legacy_scan_generation_route_rejected/);
   assert.match(analyze, /LEGACY_SCAN_ROUTE_STATUS = 410/);
   assert.doesNotMatch(analyze, /generateProblemIntelligence|error instanceof Error \? error\.message/);
+});
+
+
+test("solution grounding failure preserves a specific safe diagnostic reason", async () => {
+  const diagnostics = { validationReason:"solution_model_grounding_unknown_evidence_id", failingPath:"problemFraming.evidenceRefs.0.evidenceId", suppliedEvidenceRefCount:1, recognizedEvidenceRefCount:0, unknownEvidenceIds:["invented"], allowedEvidenceIdCount:1 } as const;
+  await assert.rejects(() => executeScanWorkflow({ intent:{ market:"x" }, pastedEvidence:"Evidence long enough for validation." }, TEST_SCAN_WORKFLOW_AUTHORIZATION, deps({ validateSolutionModelOutput: () => { throw new SolutionIntelligenceServiceError("grounding", "solution_model_grounding_unknown_evidence_id", diagnostics); } })), (error) => {
+    assert.equal(isScanWorkflowFailure(error), true);
+    const failure = error as import("../lib/scan/workflow.ts").ScanWorkflowFailureResult;
+    assert.equal(failure.error.code, "scan_workflow_solution_grounding_failed");
+    assert.deepEqual(failure.diagnostics, diagnostics);
+    const log = buildSafeScanWorkflowLog({ event:"scan_workflow_failed", failure });
+    assert.equal(log.event, "scan_solution_grounding_validation_failed");
+    assert.equal(log.validationReason, diagnostics.validationReason);
+    assert.equal(JSON.stringify(log).includes("Evidence long enough"), false);
+    return true;
+  });
 });

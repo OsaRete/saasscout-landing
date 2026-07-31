@@ -159,3 +159,16 @@ test("Scan page logs sanitized diagnostics without evidence or authorization hea
   assert.match(page, /console\.warn\("Scan workflow failed", \{ code: safeCode, stage: safeStage, status: response\.status \}\)/);
   assert.doesNotMatch(page, /console\.(warn|error)\([^\n]*(evidence|Authorization|accessToken|headers)/);
 });
+
+test("grounding failures use a controlled JSON envelope and application status", () => {
+  const failure = { version:"scan-workflow@1", executionId:"scan-workflow-x", status:"failed", error:{ code:"scan_workflow_solution_grounding_failed", stage:"solution_intelligence_validated", message:"The Scan workflow could not safely complete.", statusClass:"422" }, processingHistory:[] } as ScanWorkflowFailureResult;
+  const response = mapScanOrchestrationFailureResponse(failure);
+  assert.deepEqual(response.error, { code:"scan_workflow_solution_grounding_failed", stage:"solution_intelligence_validated", message:"The generated solutions could not be reliably grounded in the supplied evidence." });
+  assert.doesNotMatch(JSON.stringify(response), /<html/i);
+});
+
+test("Scan page renders the controlled grounding failure message and tolerates non-JSON proxies", () => {
+  const page = readFileSync("app/scan/page.tsx", "utf8");
+  assert.match(page, /generated opportunities could not be verified against your evidence/);
+  assert.match(page, /response\.json\(\)\.catch\(\(\) => null\)/);
+});
