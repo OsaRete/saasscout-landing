@@ -111,7 +111,7 @@ test("acceptance clients use server-only service role credentials", () => {
 });
 
 test("server-only accept_scan_request migration restricts execution to service_role", () => {
-  const migration = readFileSync("supabase/migrations/20260722010000_restore_server_owned_scan_acceptance.sql", "utf8");
+  const migration = readFileSync("supabase/migrations/20260722020000_restore_server_owned_scan_acceptance.sql", "utf8");
 
   assert.match(migration, /SECURITY INVOKER/i);
   assert.match(migration, /SET search_path = public, pg_temp/i);
