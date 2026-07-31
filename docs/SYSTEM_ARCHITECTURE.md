@@ -455,6 +455,14 @@ Database privileges now follow least privilege in the final schema state. `anon`
 
 The Weekly claim RPC `public.claim_weekly_intelligence_run(uuid, timestamp with time zone, timestamp with time zone, text, timestamp with time zone)` remains `SECURITY DEFINER` because it atomically reserves/reclaims a Weekly run for the authoritative manual/scheduled workflow. Its execution is explicitly revoked from `PUBLIC`, `anon`, and `authenticated`, granted only to `service_role`, and has a fixed `search_path = public` so browser roles cannot invoke it with arbitrary `p_user_id` values.
 
+### Exceptional Application Access
+
+`user_profiles` remains the server-owned source for plan and ordinary quota entitlements. Exceptional assignments live separately in `application_user_access`, keyed by the authenticated `auth.users.id`; browsers have no direct read or mutation privileges on this table. The currently constrained `internal_tester` role is an operational test identity, not an application administrator, paid plan, or design-partner role. `service_role` is the technical database execution role used by trusted server code and is never an end-user role.
+
+An active, unexpired `internal_tester` assignment grants unlimited Scan execution only when `unlimited_scans` is explicitly true. `public.accept_scan_request` resolves that fact at the database acceptance boundary, retains the per-user profile lock, bypasses quota rejection without incrementing `scans_used`, and otherwise preserves ordinary atomic quota enforcement. The `SCAN_SERVER_WORKFLOW_ALLOWED_USER_IDS` setting remains a rollout/access gate: being allowlisted does not create any quota entitlement, and an internal tester must still pass that gate while the closed rollout remains enabled.
+
+The Scan browser requests a minimal capability projection from an authenticated server route solely to render descriptive UX such as “Internal tester · Unlimited scans.” That label is not authority. Missing or failed capability reads fail closed to normal quota presentation, while the database acceptance function remains authoritative for every Scan.
+
 ## Closed Beta Operational Event Layer — 2026-07-22
 
 ### Purpose
