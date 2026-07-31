@@ -6,7 +6,6 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../supabase";
 
-const ADMIN_EMAIL = "cedeomartineze@gmail.com";
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
@@ -35,6 +34,12 @@ type UserProfile = {
   pdf_export_enabled: boolean;
 };
 
+type UserCapabilities = {
+  role: "internal_tester" | null;
+  isInternalTester: boolean;
+  unlimitedScans: boolean;
+};
+
 function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
@@ -55,8 +60,8 @@ function ScanPageContent() {
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [capabilities, setCapabilities] = useState<UserCapabilities | null>(null);
 
   const [market, setMarket] = useState("");
   const [audience, setAudience] = useState("");
@@ -67,8 +72,6 @@ function ScanPageContent() {
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState<LoadingStep>("idle");
   const [message, setMessage] = useState("");
-
-  const isAdmin = userEmail?.toLowerCase() === ADMIN_EMAIL;
 
   useEffect(() => {
     async function checkUser() {
@@ -82,7 +85,25 @@ function ScanPageContent() {
       }
 
       setUserId(user.id);
-      setUserEmail(user.email || null);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session?.access_token) {
+        try {
+          const capabilityResponse = await fetch("/api/user/capabilities", {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (capabilityResponse.ok) {
+            const capabilityBody = await capabilityResponse.json();
+            setCapabilities(capabilityBody.capabilities ?? null);
+          }
+        } catch {
+          // Capability labels are descriptive only. The database remains authoritative,
+          // and a failed display lookup must leave the ordinary quota experience usable.
+          setCapabilities(null);
+        }
+      }
       const { data: profileData, error: profileError } = await supabase
   .from("user_profiles")
   .select("*")
@@ -344,9 +365,9 @@ if (profileData) {
               </p>
             </div>
 
-            {isAdmin ? (
+            {capabilities?.isInternalTester && capabilities.unlimitedScans ? (
               <div className="inline-flex shrink-0 items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-violet-200">
-                Admin · Unlimited scans
+                Internal tester · Unlimited scans
               </div>
             ) : (
               <div className="w-fit rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-300">
