@@ -31,16 +31,7 @@ function category(category: SolutionCategory, suitability = 0.5) {
   return {
     category,
     suitability,
-    suitabilityBand:
-      suitability < 0.2
-        ? "poor"
-        : suitability < 0.4
-          ? "weak"
-          : suitability < 0.65
-            ? "possible"
-            : suitability < 0.85
-              ? "strong"
-              : "best_fit",
+    suitabilityBand: deriveSuitabilityBand(suitability),
     rationale: inf(`${category} fit is inferred.`),
     advantages: [inf("Advantage")],
     limitations: [inf("Limitation")],
@@ -420,32 +411,51 @@ test("hardens factual claim grounding and readiness floors", () => {
   );
 });
 
-test("derives suitability bands and rejects band mismatches", () => {
+test("derives every suitability boundary from the single policy", () => {
   for (const [score, band] of [
     [0, "poor"],
-    [0.19, "poor"],
+    [0.2 - Number.EPSILON, "poor"],
     [0.2, "weak"],
-    [0.39, "weak"],
+    [0.2 + Number.EPSILON, "weak"],
+    [0.4 - Number.EPSILON, "weak"],
     [0.4, "possible"],
-    [0.64, "possible"],
+    [0.4 + Number.EPSILON, "possible"],
+    [0.65 - Number.EPSILON, "possible"],
     [0.65, "strong"],
-    [0.84, "strong"],
+    [0.65 + Number.EPSILON, "strong"],
+    [0.85 - Number.EPSILON, "strong"],
     [0.85, "best_fit"],
+    [0.85 + Number.EPSILON, "best_fit"],
     [1, "best_fit"],
   ] as const) {
     assert.equal(deriveSuitabilityBand(score), band);
   }
-  assert.throws(
-    () =>
-      valid({
-        ...base("validate_first", [
-          category("software_product", 0.5),
-          category("productized_service", 0.4),
-          { ...category("validate_first", 0.85), suitabilityBand: "strong" },
-        ]),
-      }),
-    SolutionIntelligenceValidationError,
-  );
+  for (const invalid of [NaN, Infinity, -0.01, 1.01]) {
+    assert.throws(() => deriveSuitabilityBand(invalid), RangeError);
+  }
+});
+
+test("overwrites an inconsistent legacy band and derives a missing band", () => {
+  const mismatch = base("validate_first", [
+    category("software_product", 0.5),
+    category("productized_service", 0.4),
+    { ...category("validate_first", 0.85), suitabilityBand: "strong" },
+  ]);
+  const normalized = valid(mismatch);
+  assert.equal(normalized.evaluatedCategories[2].suitability, 0.85);
+  assert.equal(normalized.evaluatedCategories[2].suitabilityBand, "best_fit");
+
+  const missing = base();
+  delete (missing.evaluatedCategories[0] as { suitabilityBand?: string }).suitabilityBand;
+  assert.equal(valid(missing).evaluatedCategories[0].suitabilityBand, "possible");
+});
+
+test("rejects missing, malformed, non-finite, and out-of-range suitability", () => {
+  for (const suitability of [undefined, "0.9", NaN, Infinity, -0.01, 1.01]) {
+    const input = base();
+    (input.evaluatedCategories[0] as { suitability?: unknown }).suitability = suitability;
+    assert.throws(() => valid(input), SolutionIntelligenceValidationError);
+  }
 });
 
 test("validates recommendation ordering, secondary presence, and ties", () => {
@@ -594,6 +604,8 @@ test("prompt states neutrality and grounding boundaries", () => {
   assert.match(prompt, /validate_first or no_build_recommended/);
   assert.match(prompt, /Do not invent competitors/);
   assert.match(prompt, /Derived analysis is not independent evidence/);
+  assert.match(prompt, /Return suitability only; do not return suitabilityBand/);
+  assert.doesNotMatch(prompt.slice(prompt.indexOf("JSON shape:")), /suitabilityBand/);
 });
 
 test("legacy analyze and generate contracts remain compatible", () => {

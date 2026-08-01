@@ -61,7 +61,7 @@ Each execution evaluates 3 to 8 relevant categories, including at least one buil
 
 ## Suitability score semantics
 
-Suitability is canonical on a 0–1 scale. It means how well a solution category fits the evidenced problem under current assumptions. It does not mean probability of business success, market size, profitability, certainty, founder-market fit, investment return, or opportunity score. It is not connected to existing legacy opportunity scoring and is not persisted or exposed in the UI in this PR.
+Suitability is canonical on a 0–1 scale. It means how well a solution category fits the evidenced problem under current assumptions. It does not mean probability of business success, market size, profitability, certainty, founder-market fit, investment return, or opportunity score. It is not connected to existing legacy opportunity scoring. The validated Solution Intelligence artifact preserves both the numeric score and its server-derived band; legacy opportunity persistence derives any band-dependent projection from the numeric score again. No UI renders `suitabilityBand` directly today.
 
 ## Existing-solution assessment
 
@@ -204,7 +204,9 @@ Suitability is a 0-to-1 fit score under current evidence and assumptions. It is 
 - `[0.65, 0.85)` => `strong`
 - `[0.85, 1]` => `best_fit`
 
-The model must still return `suitabilityBand` for contract compatibility, but validation rejects mismatches against the deterministic derived band.
+The model generates the numeric `suitability` only. The server owns the derived `suitabilityBand`: after strict JSON parsing and numeric validation it applies the thresholds above, while preserving the numeric score. Derived fields are not authoritative model outputs because accepting two representations of the same decision permits deterministic contradictions.
+
+For compatibility, responses from older prompts may still contain `suitabilityBand`. The property is optional and non-authoritative: normalization overwrites it with the server-derived value before contract validation. A missing band is populated. An inconsistent band does not invalidate an otherwise valid response. Invalid, missing, non-finite, or out-of-range `suitability` remains a controlled contract failure; it is never clamped into validity.
 
 ### Recommendation ranking rules
 

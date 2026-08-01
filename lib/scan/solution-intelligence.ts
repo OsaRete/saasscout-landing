@@ -179,6 +179,9 @@ export const SOLUTION_SUITABILITY_POLICY_V1 = Object.freeze({
 export function deriveSuitabilityBand(
   suitability: number,
 ): SolutionSuitabilityBand {
+  if (!Number.isFinite(suitability) || suitability < 0 || suitability > 1) {
+    throw new RangeError("Suitability must be finite on a 0-1 scale.");
+  }
   if (suitability < SOLUTION_SUITABILITY_POLICY_V1.poorMaxExclusive)
     return "poor";
   if (suitability < SOLUTION_SUITABILITY_POLICY_V1.weakMaxExclusive)
@@ -559,22 +562,23 @@ function assess(
         "Suitability must be finite on a 0-1 scale.",
       ),
     );
-  const suitabilityBand = enumv<SolutionSuitabilityBand>(
-    raw.suitabilityBand,
-    bands,
-    `${p}.suitabilityBand`,
-    issues,
-  );
-  if (Number.isFinite(suitability)) {
-    const derivedBand = deriveSuitabilityBand(suitability);
-    if (suitabilityBand !== derivedBand)
+  let suitabilityBand = undefined as unknown as SolutionSuitabilityBand;
+  if (Number.isFinite(suitability) && suitability >= 0 && suitability <= 1) {
+    suitabilityBand = enumv<SolutionSuitabilityBand>(
+      raw.suitabilityBand,
+      bands,
+      `${p}.suitabilityBand`,
+      issues,
+    );
+    if (suitabilityBand !== deriveSuitabilityBand(suitability)) {
       issues.push(
         issue(
           `${p}.suitabilityBand`,
-          "solution_model_grounding_mismatch",
-          "Suitability band must match deterministic suitability thresholds.",
+          "solution_model_schema_validation_failed",
+          "Normalized suitability band must match the server policy.",
         ),
       );
+    }
   }
   return Object.freeze({
     category,
@@ -957,6 +961,23 @@ export function normalizeSolutionIntelligenceModelOutput(input: unknown): unknow
   if (!rec(input)) return input;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
+    if (key === "evaluatedCategories" && Array.isArray(value)) {
+      normalized[key] = value.map((assessment) => {
+        const item = normalizeSolutionIntelligenceModelOutput(assessment);
+        if (!rec(item)) return item;
+        const suitability = item.suitability;
+        if (
+          typeof suitability !== "number" ||
+          !Number.isFinite(suitability) ||
+          suitability < 0 ||
+          suitability > 1
+        ) {
+          return item;
+        }
+        return { ...item, suitabilityBand: deriveSuitabilityBand(suitability) };
+      });
+      continue;
+    }
     if (key !== "evidenceRefs" || !Array.isArray(value)) {
       normalized[key] = normalizeSolutionIntelligenceModelOutput(value);
       continue;
