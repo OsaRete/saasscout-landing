@@ -663,6 +663,67 @@ test("solution prompt copies the runtime evidence ID and states the complete gro
   assert.match(prompt, /Allowed relevance values are exactly "primary", "supporting", and "contradicting"/);
   assert.match(prompt, /problemFraming and every item in whatAppearsValidated, verifiedFoundation, and knownFacts/);
   assert.match(prompt, /Evidence-grounded claims prohibit empty evidenceRefs/);
+  assert.match(prompt, /Claim arrays must contain claim objects, never strings/);
+  assert.match(prompt, /Parent or sibling evidence references do not support a child claim/);
+  assert.match(prompt, /Unknown evidence IDs are prohibited/);
+  assert.match(prompt, /"advantages": \[\{ "text": "evidenced advantage", "groundingMode": "evidence"/);
+  assert.match(prompt, /"text": "inferred advantage", "groundingMode": "inference"/);
+  assert.match(prompt, /"limitations": \[\{ "text": "evidenced limitation"/);
+  assert.match(prompt, /"prerequisites": \[\{ "text": "inferred prerequisite"/);
+  assert.match(prompt, /"whatAppearsValidated": \[\{/);
+  assert.match(prompt, /"unverifiedAssumptions": \[\{/);
+  assert.match(prompt, /"alternativeType": "direct_competitor"[\s\S]*?"evidenceRefs": \[\{ "evidenceId": "pasted-evidence-001"/);
+
+  const example = prompt.slice(prompt.indexOf("JSON shape:"));
+  const exampleIds = [...example.matchAll(/"evidenceId": "([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(exampleIds.length > 0);
+  assert.deepEqual(new Set(exampleIds), new Set(["pasted-evidence-001"]));
+});
+
+test("claim arrays reject scalars, missing local references, missing inference reasons, unknown IDs, and parent-only references at exact paths", () => {
+  const expectPath = (value: unknown, path: string) =>
+    assert.throws(
+      () => valid(value),
+      (error) =>
+        error instanceof SolutionIntelligenceValidationError &&
+        error.issues.some((candidate) => candidate.path === path),
+    );
+  const scalar = base();
+  scalar.evaluatedCategories[0].advantages = ["Reduces manual work" as never];
+  expectPath(scalar, "evaluatedCategories.0.advantages.0");
+
+  const noRefs = base();
+  noRefs.evaluatedCategories[0].advantages = [{
+    text: "Reduces manual work",
+    groundingMode: "evidence",
+    evidenceRefs: [],
+  } as never];
+  expectPath(noRefs, "evaluatedCategories.0.advantages.0.evidenceRefs");
+
+  const noReason = base();
+  noReason.evaluatedCategories[0].advantages = [{
+    text: "May improve conversion",
+    groundingMode: "inference",
+    evidenceRefs: [],
+  } as never];
+  expectPath(noReason, "evaluatedCategories.0.advantages.0.inferenceReason");
+
+  const unknown = base();
+  unknown.evaluatedCategories[0].advantages = [{
+    text: "Unknown support",
+    groundingMode: "evidence",
+    evidenceRefs: [{ evidenceId: "invented-id", relevance: "supporting" }],
+  } as never];
+  expectPath(unknown, "evaluatedCategories.0.advantages.0.evidenceRefs.0.evidenceId");
+
+  const parentOnly = base();
+  parentOnly.existingSolutionAssessment.knownAlternatives[0].evidenceRefs = [{ evidenceId: "scan-user-evidence" }];
+  parentOnly.existingSolutionAssessment.knownAlternatives[0].observedStrengths = [{
+    text: "Child claim has no local reference",
+    groundingMode: "evidence",
+    evidenceRefs: [],
+  } as never];
+  expectPath(parentOnly, "existingSolutionAssessment.knownAlternatives.0.observedStrengths.0.evidenceRefs");
 });
 
 test("safe solution normalization trims IDs, normalizes documented relevance casing, and deduplicates identical refs", () => {

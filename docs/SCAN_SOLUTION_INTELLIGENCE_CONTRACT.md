@@ -79,6 +79,54 @@ Validation readiness prepares for future real-world validation without implement
 
 `buildSolutionIntelligencePrompt()` preserves the Untrusted Evidence Boundary, uses trusted user intent separately from untrusted evidence, labels derived analysis as non-independent context, requires strict JSON, forbids invented competitors/demand/willingness-to-pay/novelty, and permits citations only to allowed evidence IDs.
 
+## Prompt-contract alignment audit
+
+The production prompt example uses the first ID from the runtime evidence envelope; it never contains a fixed example ID. “Populated” below describes the production JSON example after the claim-shape reliability fix. Optional arrays may still be empty in a real response when no claim is justified.
+
+| JSON path | Type | Mode | Evidence refs | Inference reason | Prompt instruction | Example | Populated |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `problemFraming` | `ScanGroundedClaim` | evidence required | required | prohibited | factual field | evidence object | yes |
+| `evaluatedCategories[].rationale` | `ScanGroundedClaim` | flexible | required in evidence mode | required in inference mode | other material claim | evidence and inference objects | yes |
+| `evaluatedCategories[].advantages[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | claim arrays are objects; local grounding | evidence and inference objects | yes |
+| `evaluatedCategories[].limitations[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | claim arrays are objects; local grounding | evidence object | yes |
+| `evaluatedCategories[].prerequisites[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | claim arrays are objects; local grounding | inference object | yes |
+| `knownAlternatives[]` | `ExistingAlternative` | entity-local evidence for a named direct competitor | required for `direct_competitor` | n/a on entity | direct competitor needs its own allowed ref | named direct competitor with local ref | yes |
+| `knownAlternatives[].observedStrengths[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | child claims need local grounding | evidence object | yes |
+| `knownAlternatives[].observedWeaknesses[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | child claims need local grounding | inference object | yes |
+| `whatAppearsValidated[]` | `ScanGroundedClaim[]` | evidence required | required | prohibited | factual field | evidence object | yes |
+| `whatAppearsPoorlySolved[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | other material claim | evidence object | yes |
+| `replacementRisk` | `ScanGroundedClaim` | flexible | required in evidence mode | required in inference mode | other material claim | inference object | yes |
+| `verifiedFoundation[]` | `ScanGroundedClaim[]` | evidence required | required | prohibited | factual field; required for most innovation modes | evidence object | yes |
+| `proposedDifferentiation[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | separate proposed innovation | inference object | yes |
+| `unverifiedAssumptions[]` | `ScanGroundedClaim[]` | inference required | prohibited | required | inference-required item | inference object | yes |
+| `feasibilityConstraints[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | other material claim | evidence object | yes |
+| `knownFacts[]` | `ScanGroundedClaim[]` | evidence required | required | prohibited | factual field | evidence object | yes |
+| `criticalUnknowns[]` | `ScanGroundedClaim[]` | inference required | prohibited | required | required at higher readiness | inference object | yes |
+| `testRationale` | `ScanGroundedClaim` | flexible | required in evidence mode | required in inference mode | proposed tests normally use inference | inference object | yes |
+| `successSignal` | `ScanGroundedClaim` | flexible | required in evidence mode | required in inference mode | proposed tests normally use inference | inference object | yes |
+| `failureSignal` | `ScanGroundedClaim` | flexible | required in evidence mode | required in inference mode | proposed tests normally use inference | inference object | yes |
+| `recommendation` | `ScanGroundedClaim` | inference required | prohibited | required | recommendation field | inference object | yes |
+| `keyAssumptions[]` | `ScanGroundedClaim[]` | inference required | prohibited | required | inference-required item | inference object | yes |
+| `risks[]` | `ScanGroundedClaim[]` | flexible | required in evidence mode | required in inference mode | other material claim | evidence object | yes |
+| `nextValidationAction` | `ScanGroundedClaim` | inference required | prohibited | required | recommendation/action field | inference object | yes |
+
+Deterministic non-claim fields remain aligned as well: `suitabilityBand` is derived from `suitability`; `recommendedCategory` must tie for the highest evaluated suitability; `secondaryCategory`, when supplied, must be the highest-suitability non-recommended category; and `cheapestNextTest` must be a contract enum value. These fields do not accept evidence references or inference reasons.
+
+## Manual production verification
+
+For each production run, record total duration plus the Problem Intelligence and Solution Intelligence durations, then verify the persisted Scan and artifact rather than relying only on the HTTP response.
+
+1. Run a pasted single-source Scan and an uploaded-file Scan.
+2. Run another Scan with different evidence and a different market.
+3. Confirm each complete workflow reaches persistence and the Scan status becomes `completed`.
+4. Inspect every generated `evaluatedCategories[].advantages[]` item and confirm it is an object with the contract fields, never a scalar.
+5. Confirm all cited IDs belong to that run's allowed evidence set and no unknown evidence IDs appear.
+6. Confirm persisted `evidence_analysis` and `opportunities` records exist.
+7. For an internal tester, compare usage before and after and confirm `scans_used` does not increase.
+8. Record total, Problem Intelligence, and Solution Intelligence duration for each run.
+
+No database migration is required for this prompt-contract-only change.
+
 ## Dedicated server boundary
 
 `app/api/solution-intelligence/route.ts` is now a compatibility tombstone, not a generation boundary. It returns HTTP 410 with `legacy_scan_generation_route_gone`, points callers to `/api/scan/workflow`, and performs no model execution, diagnostics calculation, persistence, or client-evidence trust. Solution Intelligence generation remains available only inside the authoritative server-owned Scan workflow and server-only Scan modules.
