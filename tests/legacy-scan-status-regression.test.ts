@@ -17,15 +17,15 @@ test("legacy scan migration adds a duplicate-safe owner-scoped authenticated UPD
 });
 
 test("legacy scan completed status transition is server-owned before redirect", () => {
-  assert.match(orchestration, /await persistLegacyResults\(client, user\.id \|\| "", acceptance\.scanId, workflow, input\.legacyContext\)/);
-  assert.match(orchestration, /await transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "completed"\)/);
+  assert.match(orchestration, /await persistLegacyResults\(client, userId, acceptance\.scanId, workflow, input\.legacyContext\)/);
+  assert.match(orchestration, /await finishLegacyScan\(client, acceptance\.scanId, userId, "completed"\)/);
   assert.match(scanPage, /await runServerScanWorkflow/);
   assert.match(scanPage, /router\.push\("\/results"\)/);
   assert.doesNotMatch(scanPage, /const completedTransitioned/);
 });
 
 test("legacy failure status transition is server-owned and sanitized", () => {
-  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "failed"\)/);
+  assert.match(orchestration, /finishLegacyScan\(client, acceptance\.scanId, userId, "failed"\)/);
   assert.match(scanPage, /setMessage\(error instanceof ScanSubmissionError \? error\.message : SAFE_SCAN_FAILURE_MESSAGE\)/);
   assert.doesNotMatch(scanPage, /file_url_persistence_failed/);
 });
