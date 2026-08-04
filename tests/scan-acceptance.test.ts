@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { SCAN_ACCEPTANCE_VERSION, ScanAcceptanceError, acceptScanRequest, validateScanAcceptanceRequest } from "../lib/scan/acceptance.ts";
 
-function mockRpcClient(result: { data: unknown; error: unknown } = { data: { scan_id: "scan-123", status: "pending", accepted: true, rejection_code: null }, error: null }) {
+function mockRpcClient(result: { data: unknown; error: unknown } = { data: { scan_id: "scan-123", disposition: "created", existing_status: null, execution_claim_required: true, unlimited_entitlement_used: false, attempt_number: 1, retry_of_scan_id: null, accepted: true, rejection_code: null }, error: null }) {
   const calls: unknown[] = [];
   return {
     calls,
@@ -17,41 +17,41 @@ function mockRpcClient(result: { data: unknown; error: unknown } = { data: { sca
 test("valid Scan requests are accepted with a stable server contract", async () => {
   const input = validateScanAcceptanceRequest({ market: " Agencies ", audience: " Owners ", region: " US ", evidence: " Manual reporting " });
   const client = mockRpcClient();
-  const acceptance = await acceptScanRequest(input, { id: "user-1" }, client as never);
+  const acceptance = await acceptScanRequest(input, { id: "user-1" }, client as never, "a".repeat(64));
 
   assert.deepEqual(input, { market: "Agencies", audience: "Owners", region: "US", evidence: "Manual reporting" });
-  assert.deepEqual(acceptance, { version: SCAN_ACCEPTANCE_VERSION, scanId: "scan-123", status: "pending" });
-  assert.deepEqual(Object.keys(acceptance), ["version", "scanId", "status"]);
-  assert.deepEqual(client.calls, [{ functionName: "accept_scan_request", args: { p_user_id: "user-1", p_market: "Agencies", p_audience: "Owners", p_region: "US", p_evidence: "Manual reporting" } }]);
+  assert.deepEqual(acceptance, { version: SCAN_ACCEPTANCE_VERSION, scanId: "scan-123", disposition: "created", existingStatus: null, executionClaimRequired: true, unlimitedEntitlementUsed: false, attemptNumber: 1, retryOfScanId: null });
+  assert.deepEqual(Object.keys(acceptance), ["version", "scanId", "disposition", "existingStatus", "executionClaimRequired", "unlimitedEntitlementUsed", "attemptNumber", "retryOfScanId"]);
+  assert.deepEqual(client.calls, [{ functionName: "accept_scan_request_v2", args: { p_user_id: "user-1", p_request_fingerprint: "a".repeat(64), p_market: "Agencies", p_audience: "Owners", p_region: "US", p_evidence: "Manual reporting" } }]);
 });
 
 test("users under their Scan limit are accepted and reserve one server execution", async () => {
-  const client = mockRpcClient({ data: [{ scan_id: "scan-under-limit", status: "pending", accepted: true, rejection_code: null }], error: null });
-  const acceptance = await acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never);
+  const client = mockRpcClient({ data: [{ scan_id: "scan-under-limit", disposition: "created", existing_status: null, execution_claim_required: true, unlimited_entitlement_used: false, attempt_number: 1, retry_of_scan_id: null, accepted: true, rejection_code: null }], error: null });
+  const acceptance = await acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never, "a".repeat(64));
 
   assert.equal(acceptance.scanId, "scan-under-limit");
-  assert.equal((client.calls[0] as { functionName: string }).functionName, "accept_scan_request");
+  assert.equal((client.calls[0] as { functionName: string }).functionName, "accept_scan_request_v2");
 });
 
 test("users over their Scan limit are rejected by the server acceptance boundary", async () => {
   const client = mockRpcClient({ data: { scan_id: null, status: null, accepted: false, rejection_code: "scan_limit_exceeded" }, error: null });
 
-  await assert.rejects(() => acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never), (error) => error instanceof ScanAcceptanceError && error.code === "scan_acceptance_limit_exceeded");
+  await assert.rejects(() => acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never, "a".repeat(64)), (error) => error instanceof ScanAcceptanceError && error.code === "scan_acceptance_limit_exceeded");
   assert.equal(client.calls.length, 1);
 });
 
 test("rejected Scan requests do not receive an acceptance or consume client-side usage", async () => {
   const client = mockRpcClient({ data: { scan_id: null, status: null, accepted: false, rejection_code: "scan_limit_exceeded" }, error: null });
 
-  await assert.rejects(() => acceptScanRequest({ evidence: "Repeated pain" }, { id: "user-1" }, client as never));
-  assert.deepEqual(client.calls, [{ functionName: "accept_scan_request", args: { p_user_id: "user-1", p_market: null, p_audience: null, p_region: null, p_evidence: "Repeated pain" } }]);
+  await assert.rejects(() => acceptScanRequest({ evidence: "Repeated pain" }, { id: "user-1" }, client as never, "a".repeat(64)));
+  assert.deepEqual(client.calls, [{ functionName: "accept_scan_request_v2", args: { p_user_id: "user-1", p_request_fingerprint: "a".repeat(64), p_market: null, p_audience: null, p_region: null, p_evidence: "Repeated pain" } }]);
 });
 
 test("duplicate Scan requests return the existing acceptance instead of creating another Scan", async () => {
-  const client = mockRpcClient({ data: { scan_id: "existing-scan", status: "pending", accepted: true, rejection_code: null }, error: null });
+  const client = mockRpcClient({ data: { scan_id: "existing-scan", disposition: "reused_pending", existing_status: "pending", execution_claim_required: true, unlimited_entitlement_used: false, attempt_number: 1, retry_of_scan_id: null, accepted: true, rejection_code: null }, error: null });
 
-  const first = await acceptScanRequest({ market: "Agencies", evidence: "Manual reporting" }, { id: "user-1" }, client as never);
-  const second = await acceptScanRequest({ market: "Agencies", evidence: "Manual reporting" }, { id: "user-1" }, client as never);
+  const first = await acceptScanRequest({ market: "Agencies", evidence: "Manual reporting" }, { id: "user-1" }, client as never, "a".repeat(64));
+  const second = await acceptScanRequest({ market: "Agencies", evidence: "Manual reporting" }, { id: "user-1" }, client as never, "a".repeat(64));
 
   assert.deepEqual(first, second);
   assert.equal(first.scanId, "existing-scan");
@@ -80,7 +80,7 @@ test("browser cannot bypass acceptance by owning server fields", () => {
 
 test("acceptance persistence failures are controlled", async () => {
   const client = mockRpcClient({ data: null, error: { message: "denied" } });
-  await assert.rejects(() => acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never), (error) => error instanceof ScanAcceptanceError && error.code === "scan_acceptance_persistence_failed");
+  await assert.rejects(() => acceptScanRequest({ market: "Agencies" }, { id: "user-1" }, client as never, "a".repeat(64)), (error) => error instanceof ScanAcceptanceError && error.code === "scan_acceptance_persistence_failed");
 });
 
 test("Scan UI delegates acceptance and legacy processing to the server workflow", () => {
@@ -92,7 +92,7 @@ test("Scan UI delegates acceptance and legacy processing to the server workflow"
   assert.doesNotMatch(page, /fetch\("\/api\/scan\/acceptance"/);
   assert.match(orchestration, /acceptScanRequest/);
   assert.match(orchestration, /acceptance\.scanId/);
-  assert.match(orchestration, /transitionLegacyScan/);
+  assert.match(orchestration, /claimScanExecution/);
   assert.doesNotMatch(page, /\.from\("scan"\)\s*\.insert/s);
   assert.doesNotMatch(page, /scans_used:\s*newScansUsed/);
   assert.match(route, /runScanAcceptance/);

@@ -10,21 +10,22 @@ test("legacy accepted scan lifecycle is server-owned behind workflow endpoint", 
   assert.doesNotMatch(scanPage, /transitionLegacyScanStatus/);
   assert.doesNotMatch(scanPage, /failAcceptedScan/);
   assert.match(orchestration, /acceptScanRequest/);
-  assert.match(orchestration, /transitionLegacyScan/);
+  assert.match(orchestration, /claimScanExecution/);
+  assert.match(orchestration, /finishLegacyScan/);
   assert.match(orchestration, /"processing"/);
   assert.match(orchestration, /"completed"/);
   assert.match(orchestration, /"failed"/);
 });
 
 test("successful server scan path reaches completed after Results-compatible persistence", () => {
-  assert.match(orchestration, /await transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "processing"\)/);
-  assert.match(orchestration, /await persistLegacyResults\(client, user\.id \|\| "", acceptance\.scanId, workflow, input\.legacyContext\)/);
-  assert.match(orchestration, /await transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "completed"\)/);
+  assert.match(orchestration, /await claimScanExecution/);
+  assert.match(orchestration, /await persistLegacyResults\(client, userId, acceptance\.scanId, workflow, input\.legacyContext\)/);
+  assert.match(orchestration, /await finishLegacyScan\(client, acceptance\.scanId, userId, "completed"\)/);
   assert.doesNotMatch(scanPage, /status:\s*"completed"/);
 });
 
 test("failure paths after acceptance transition the legacy scan to failed", () => {
-  assert.match(orchestration, /catch \(error\) \{[\s\S]*transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "failed"\)[\s\S]*throw error;[\s\S]*\}/);
+  assert.match(orchestration, /catch \(error\) \{[\s\S]*finishLegacyScan\(client, acceptance\.scanId, userId, "failed"\)[\s\S]*throw error;[\s\S]*\}/);
 });
 
 test("public legacy scan errors are safe after server workflow failure", () => {

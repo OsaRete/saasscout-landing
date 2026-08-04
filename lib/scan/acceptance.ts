@@ -3,7 +3,7 @@ import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { AuthError, requireUser } from "../../app/api/_utils/auth.ts";
 
-export const SCAN_ACCEPTANCE_VERSION = "scan-acceptance@1" as const;
+export const SCAN_ACCEPTANCE_VERSION = "scan-acceptance@2" as const;
 
 export type ScanAcceptanceInput = Readonly<{
   market?: string;
@@ -15,8 +15,15 @@ export type ScanAcceptanceInput = Readonly<{
 export type ScanAcceptanceContract = Readonly<{
   version: typeof SCAN_ACCEPTANCE_VERSION;
   scanId: string;
-  status: "pending";
+  disposition: "created" | "reused_pending" | "already_processing" | "already_completed" | "retry_created";
+  existingStatus: "pending" | "processing" | "completed" | "failed" | null;
+  executionClaimRequired: boolean;
+  unlimitedEntitlementUsed: boolean;
+  attemptNumber: number;
+  retryOfScanId: string | null;
 }>;
+
+export type ScanExecutionClaim = Readonly<{ claimed: boolean; resultingStatus: "processing" | "completed" | "failed" | null; rejectionCode: string | null }>;
 
 export class ScanAcceptanceError extends Error {
   readonly code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded";
@@ -32,7 +39,7 @@ export class ScanAcceptanceError extends Error {
 }
 
 type AuthenticatedScanUser = Readonly<{ id: string }>;
-type ScanAcceptanceRpcResult = Readonly<{ scan_id?: unknown; status?: unknown; accepted?: unknown; rejection_code?: unknown }>;
+type ScanAcceptanceRpcResult = Readonly<Record<string, unknown>>;
 type InsertableSupabaseClient = Pick<SupabaseClient, "from" | "rpc">;
 
 const ALLOWED_ACCEPTANCE_FIELDS = new Set(["market", "audience", "region", "evidence"]);
@@ -111,9 +118,10 @@ function normalizeRpcResult(data: unknown): ScanAcceptanceRpcResult | null {
   return objectRecord(data) ? data : null;
 }
 
-export async function acceptScanRequest(input: ScanAcceptanceInput, user: AuthenticatedScanUser, client: InsertableSupabaseClient): Promise<ScanAcceptanceContract> {
-  const { data, error } = await client.rpc("accept_scan_request", {
+export async function acceptScanRequest(input: ScanAcceptanceInput, user: AuthenticatedScanUser, client: InsertableSupabaseClient, requestFingerprint: string): Promise<ScanAcceptanceContract> {
+  const { data, error } = await client.rpc("accept_scan_request_v2", {
     p_user_id: user.id,
+    p_request_fingerprint: requestFingerprint,
     p_market: input.market ?? null,
     p_audience: input.audience ?? null,
     p_region: input.region ?? null,
@@ -130,18 +138,31 @@ export async function acceptScanRequest(input: ScanAcceptanceInput, user: Authen
     throw new ScanAcceptanceError("scan_acceptance_limit_exceeded", "You have reached your plan Scan limit.");
   }
 
-  if (result.accepted !== true || typeof result.scan_id !== "string" || result.status !== "pending") {
+  const dispositions = new Set(["created", "reused_pending", "already_processing", "already_completed", "retry_created"]);
+  const statuses = new Set(["pending", "processing", "completed", "failed"]);
+  if (result.accepted !== true || typeof result.scan_id !== "string" || !dispositions.has(String(result.disposition)) ||
+      !(result.existing_status === null || statuses.has(String(result.existing_status))) || typeof result.execution_claim_required !== "boolean" ||
+      typeof result.unlimited_entitlement_used !== "boolean" || typeof result.attempt_number !== "number") {
     throw new ScanAcceptanceError("scan_acceptance_persistence_failed", "The Scan could not be accepted.");
   }
 
-  return Object.freeze({ version: SCAN_ACCEPTANCE_VERSION, scanId: result.scan_id, status: "pending" });
+  return Object.freeze({ version: SCAN_ACCEPTANCE_VERSION, scanId: result.scan_id, disposition: result.disposition as ScanAcceptanceContract["disposition"], existingStatus: result.existing_status as ScanAcceptanceContract["existingStatus"], executionClaimRequired: result.execution_claim_required, unlimitedEntitlementUsed: result.unlimited_entitlement_used, attemptNumber: result.attempt_number, retryOfScanId: typeof result.retry_of_scan_id === "string" ? result.retry_of_scan_id : null });
+}
+
+export async function claimScanExecution(userId: string, scanId: string, requestFingerprint: string, client: InsertableSupabaseClient): Promise<ScanExecutionClaim> {
+  const { data, error } = await client.rpc("claim_scan_execution_v1", { p_user_id: userId, p_scan_id: scanId, p_request_fingerprint: requestFingerprint });
+  const result = normalizeRpcResult(data);
+  if (error || !result || typeof result.claimed !== "boolean") throw new ScanAcceptanceError("scan_acceptance_persistence_failed", "The Scan execution could not be claimed.");
+  return Object.freeze({ claimed: result.claimed, resultingStatus: result.resulting_status === "processing" || result.resulting_status === "completed" || result.resulting_status === "failed" ? result.resulting_status : null, rejectionCode: typeof result.rejection_code === "string" ? result.rejection_code : null });
 }
 
 export async function runScanAcceptance(request: Request, dependencies: { client?: InsertableSupabaseClient } = {}): Promise<Response> {
   try {
     const user = await requireUser(request);
     const input = validateScanAcceptanceRequest(await request.json());
-    const acceptance = await acceptScanRequest(input, { id: user.id }, dependencies.client ?? createScanAcceptanceClient());
+    const { buildScanRequestFingerprint } = await import("./request-fingerprint.ts");
+    const fingerprint = buildScanRequestFingerprint(user.id, { intent: { market: input.market, audience: input.audience, region: input.region }, pastedEvidence: input.evidence });
+    const acceptance = await acceptScanRequest(input, { id: user.id }, dependencies.client ?? createScanAcceptanceClient(), fingerprint.fingerprint);
     return Response.json({ success: true, acceptance });
   } catch (error) {
     if (error instanceof AuthError) return Response.json({ success: false, error: "Unauthorized" }, { status: error.status });

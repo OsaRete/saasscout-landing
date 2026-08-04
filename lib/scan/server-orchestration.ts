@@ -2,13 +2,14 @@ import "server-only";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { AuthError, requireUser } from "../../app/api/_utils/auth.ts";
-import { ScanAcceptanceError, acceptScanRequest, scanAcceptanceHttpStatusForCode } from "./acceptance.ts";
+import { ScanAcceptanceError, acceptScanRequest, claimScanExecution, scanAcceptanceHttpStatusForCode, type ScanAcceptanceContract } from "./acceptance.ts";
 import { createScanArtifactPersistenceAuthorizationContext, type ScanArtifactPersistenceAuthorizationContext } from "./artifact-persistence.ts";
 import { runScanArtifactPersistenceShadow } from "./artifact-persistence-shadow-runner.ts";
 import { preflightScanEvidenceMultipartFiles, ScanEvidenceIngestionError, scanEvidenceHttpStatusForCode, type ScanDiscoverContextInput, type ScanEvidenceFileInput, type ScanExternalSnippetInput } from "./evidence-ingestion.ts";
 import { recordOperationalEvent } from "../operational-events.ts";
 import { deriveSuitabilityBand } from "./solution-intelligence.ts";
 import { buildSafeScanWorkflowLog, executeScanWorkflow, isScanWorkflowFailure, scanWorkflowHttpStatusForFailure, type ScanWorkflowAuthorizationContext, type ScanWorkflowFailureResult, type ScanWorkflowInput, type ScanWorkflowResult } from "./workflow.ts";
+import { buildScanRequestFingerprint, SCAN_REQUEST_FINGERPRINT_VERSION } from "./request-fingerprint.ts";
 
 export const SCAN_SERVER_ORCHESTRATION_VERSION = "scan-server-orchestration@1" as const;
 
@@ -17,7 +18,7 @@ const ALLOWED_MULTIPART = new Set(["intent", "pastedEvidence", "files", "externa
 const ALLOWED_INTENT = new Set(["market", "niche", "audience", "region", "description"]);
 const ALLOWED_ITEM = new Set(["title", "content"]);
 const ALLOWED_LEGACY_CONTEXT = new Set(["sourceProblemTitle", "sourceProblemId", "sourceDiscoveryId"]);
-const FORBIDDEN_CLIENT_FIELDS = new Set(["userId", "executionId", "status", "allowedEvidenceIds", "derivedAnalysis", "calibration", "diagnostics", "workflowVersion", "technicalContext", "authorization", "authorizationMode"]);
+const FORBIDDEN_CLIENT_FIELDS = new Set(["userId", "executionId", "status", "requestFingerprint", "request_fingerprint", "fingerprint", "allowedEvidenceIds", "derivedAnalysis", "calibration", "diagnostics", "workflowVersion", "technicalContext", "authorization", "authorizationMode"]);
 
 type AuthenticatedScanUser = Readonly<{ id?: string }>;
 export type ScanServerOrchestrationConfig = Readonly<{ workflowEnabled: boolean; persistenceShadowEnabled: boolean; allowedUserIds: ReadonlySet<string> }>;
@@ -39,7 +40,7 @@ type ScanPersistenceClient = Pick<SupabaseClient, "from" | "rpc">;
 
 function readSupabaseConfig(env: NodeJS.ProcessEnv = process.env) { const url = env.NEXT_PUBLIC_SUPABASE_URL; const key = env.SUPABASE_SERVICE_ROLE_KEY; if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing."); if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing."); return { url, key }; }
 export function createScanOrchestrationPersistenceClient(): SupabaseClient { const { url, key } = readSupabaseConfig(); return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } }); }
-async function transitionLegacyScan(client: ScanPersistenceClient, scanId: string, userId: string, status: "processing" | "completed" | "failed") { const { error } = await client.from("scan").update({ status }).eq("id", scanId).eq("user_id", userId); if (error) throw error; }
+async function finishLegacyScan(client: ScanPersistenceClient, scanId: string, userId: string, status: "completed" | "failed") { const { error } = await client.from("scan").update({ status }).eq("id", scanId).eq("user_id", userId).eq("status", "processing"); if (error) throw error; }
 async function persistLegacyResults(client: ScanPersistenceClient, userId: string, scanId: string, workflow: ScanWorkflowResult, legacyContext?: ScanLegacyContext) {
   const p = workflow.problemIntelligence;
   const { error: analysisError } = await client.from("evidence_analysis").insert([{ scan_id: scanId, inferred_market: p.inferred_market, audience_summary: p.audience_summary, evidence_summary: p.evidence_summary, pain_points: p.pain_points, repeated_patterns: p.repeated_patterns, workflow_problems: p.workflow_problems, willingness_to_pay_signals: p.willingness_to_pay_signals, opportunity_angles: p.opportunity_angles, confidence_score: p.confidence_score }]);
@@ -51,15 +52,20 @@ async function persistLegacyResults(client: ScanPersistenceClient, userId: strin
   if (opportunityError) throw opportunityError;
 }
 export async function executeAcceptedScanWorkflow(input: ScanWorkflowInput & { legacyContext?: ScanLegacyContext }, _request: Request, user: AuthenticatedScanUser, authorization: ScanWorkflowAuthorizationContext, client = createScanOrchestrationPersistenceClient()) {
-  const acceptance = await acceptScanRequest({ market: input.intent.market ?? input.intent.niche, audience: input.intent.audience, region: input.intent.region, evidence: input.pastedEvidence }, { id: user.id || "" }, client);
+  const userId = user.id || "";
+  const requestIdentity = buildScanRequestFingerprint(userId, input);
+  const acceptance = await acceptScanRequest({ market: input.intent.market ?? input.intent.niche, audience: input.intent.audience, region: input.intent.region, evidence: input.pastedEvidence }, { id: userId }, client, requestIdentity.fingerprint);
+  if (!acceptance.executionClaimRequired) return { acceptance, workflow: null, claim: null } as const;
+  const claim = await claimScanExecution(userId, acceptance.scanId, requestIdentity.fingerprint, client);
+  console.info("Scan acceptance", { scanId: acceptance.scanId, fingerprintVersion: SCAN_REQUEST_FINGERPRINT_VERSION, disposition: acceptance.disposition, existingStatus: acceptance.existingStatus, claimAttempted: true, claimResult: claim.claimed, unlimitedEntitlementUsed: acceptance.unlimitedEntitlementUsed, retryOfScanId: acceptance.retryOfScanId });
+  if (!claim.claimed) return { acceptance, workflow: null, claim } as const;
   try {
-    await transitionLegacyScan(client, acceptance.scanId, user.id || "", "processing");
     const workflow = await executeScanOrchestrationWorkflow(input, authorization);
-    await persistLegacyResults(client, user.id || "", acceptance.scanId, workflow, input.legacyContext);
-    await transitionLegacyScan(client, acceptance.scanId, user.id || "", "completed");
-    return { acceptance, workflow };
+    await persistLegacyResults(client, userId, acceptance.scanId, workflow, input.legacyContext);
+    await finishLegacyScan(client, acceptance.scanId, userId, "completed");
+    return { acceptance, workflow, claim } as const;
   } catch (error) {
-    await transitionLegacyScan(client, acceptance.scanId, user.id || "", "failed").catch(() => undefined);
+    await finishLegacyScan(client, acceptance.scanId, userId, "failed").catch(() => undefined);
     throw error;
   }
 }
@@ -74,6 +80,10 @@ export async function persistScanOrchestrationArtifacts(input: { enabled: boolea
 export function mapScanOrchestrationSuccessResponse(workflow: ScanWorkflowResult, scanId?: string): ScanServerOrchestrationSuccessResponse { return Object.freeze({ success: true, ...(scanId ? { scanId } : {}), workflow: { version: workflow.version, executionId: workflow.executionId, status: workflow.status, problemIntelligence: workflow.problemIntelligence, problemCalibration: { version: workflow.problemCalibration.version, score10: workflow.problemCalibration.score10, score100: workflow.problemCalibration.score100, scoreBand: workflow.problemCalibration.scoreBand, reliabilityClassification: workflow.problemCalibration.reliabilityClassification }, solutionIntelligence: workflow.solutionIntelligence, evidenceSummary: workflow.evidence, processingHistory: workflow.processingHistory, technicalContext: workflow.technicalContext } }); }
 export function mapScanOrchestrationFailureResponse(failure: ScanWorkflowFailureResult): ScanServerOrchestrationFailureResponse { const message = failure.error.code === "scan_workflow_solution_grounding_failed" ? "The generated solutions could not be reliably grounded in the supplied evidence." : failure.error.message; return Object.freeze({ success:false, error:{ code: failure.error.code, stage: failure.error.stage, message }, execution:{ version:failure.version, executionId:failure.executionId, status:failure.status, processingHistory:failure.processingHistory } }); }
 export function scanOrchestrationUnavailableResponse() { return Response.json({ success:false, error:{ code:"scan_workflow_temporarily_unavailable", message:"The Scan workflow is temporarily unavailable." } }, { status: 503 }); }
+function scanNotExecutedResponse(acceptance: ScanAcceptanceContract, claimFailed = false) {
+  if (acceptance.disposition === "already_completed") return Response.json({ success: true, scanId: acceptance.scanId, reused: true, disposition: acceptance.disposition }, { status: 200 });
+  return Response.json({ success: false, scanId: acceptance.scanId, disposition: acceptance.disposition, error: { code: claimFailed ? "scan_execution_not_claimed" : "scan_already_processing", stage: "acceptance", message: "This Scan is already in progress." } }, { status: claimFailed ? 409 : 202 });
+}
 
 export async function runScanServerOrchestration(request: Request, config: ScanServerOrchestrationConfig = readScanServerOrchestrationConfig()): Promise<Response> {
   try {
@@ -85,7 +95,8 @@ export async function runScanServerOrchestration(request: Request, config: ScanS
     const input = contentType.includes("multipart/form-data") ? await validateMultipartScanOrchestrationRequest(request) : validateJsonScanOrchestrationRequest(await request.json());
     const workflowStartedAt = Date.now();
     await recordOperationalEvent({ workflow: "scan", eventType: "started", status: "started", userId: user.id || null, safeMetadata: { provider: "openrouter" } });
-    const { acceptance, workflow: result } = await executeAcceptedScanWorkflow(input, request, user as AuthenticatedScanUser, authorization);
+    const { acceptance, workflow: result, claim } = await executeAcceptedScanWorkflow(input, request, user as AuthenticatedScanUser, authorization);
+    if (!result) return scanNotExecutedResponse(acceptance, claim?.claimed === false);
     await persistScanOrchestrationArtifacts({ enabled: config.persistenceShadowEnabled, user: user as AuthenticatedScanUser, completedWorkflow: result });
     console.info("Scan workflow", buildSafeScanWorkflowLog({ event:"scan_workflow_completed", result }));
     await recordOperationalEvent({ workflow: "scan", eventType: "completed", status: "completed", userId: user.id || null, durationMs: Date.now() - workflowStartedAt, safeMetadata: { scanId: acceptance.scanId, provider: "openrouter", sourcesProcessed: result.evidence.sourceCount } });

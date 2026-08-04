@@ -1,5 +1,16 @@
 Arquitectura del Sistema
 
+## Integridad de ejecución de Scan
+
+La frontera de ingestión distingue una solicitud lógica de Scan de sus intentos de
+ejecución. La solicitud se identifica mediante una huella criptográfica canónica,
+derivada exclusivamente en el servidor después de incorporar toda la evidencia,
+incluido el contenido de archivos. Cada intento tiene un ID y número inmutables; un
+reintento tras fallo crea un intento relacionado nuevo. Una aceptación duplicada
+expone su disposición real y nunca finge un estado pendiente. Solo una reclamación
+atómica puede mover `pending` a `processing`; `completed` y `failed` son terminales.
+Estas reglas evitan que concurrencia o reintentos ambiguos dupliquen conocimiento.
+
 Propósito
 
 Este documento describe la arquitectura conceptual de SaaSScout.

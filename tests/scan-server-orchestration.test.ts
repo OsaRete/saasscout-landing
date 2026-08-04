@@ -94,7 +94,7 @@ test("scan server orchestration keeps route thin and separates boundaries", () =
   assert.match(orchestration, /validateJsonScanOrchestrationRequest/);
   assert.match(orchestration, /executeAcceptedScanWorkflow/);
   assert.match(orchestration, /acceptScanRequest/);
-  assert.match(orchestration, /transitionLegacyScan/);
+  assert.match(orchestration, /claimScanExecution/);
   assert.match(orchestration, /persistLegacyResults/);
   assert.match(orchestration, /persistScanOrchestrationArtifacts/);
   assert.match(orchestration, /mapScanOrchestrationSuccessResponse/);
@@ -119,9 +119,9 @@ test("scan server owns lifecycle persistence and Results compatibility rows", ()
   const orchestration = readFileSync("lib/scan/server-orchestration.ts", "utf8");
 
   assert.match(orchestration, /acceptScanRequest/);
-  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "processing"\)/);
-  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "completed"\)/);
-  assert.match(orchestration, /transitionLegacyScan\(client, acceptance\.scanId, user\.id \|\| "", "failed"\)/);
+  assert.match(orchestration, /claimScanExecution/);
+  assert.match(orchestration, /finishLegacyScan\(client, acceptance\.scanId, userId, "completed"\)/);
+  assert.match(orchestration, /finishLegacyScan\(client, acceptance\.scanId, userId, "failed"\)/);
   assert.match(orchestration, /from\("evidence_analysis"\)\.insert/);
   assert.match(orchestration, /from\("opportunities"\)\.insert/);
   assert.match(orchestration, /source_discovery_id/);
@@ -139,7 +139,7 @@ test("scan server persistence keeps trusted user ownership constraints after bro
 
   assert.match(orchestration, /createScanOrchestrationPersistenceClient\(\)/);
   assert.match(orchestration, /SUPABASE_SERVICE_ROLE_KEY/);
-  assert.match(orchestration, /acceptScanRequest\([^\n]+\{ id: user\.id \|\| "" \}/);
+  assert.match(orchestration, /acceptScanRequest\([^\n]+\{ id: userId \}/);
   assert.match(orchestration, /from\("scan"\)\.update\(\{ status \}\)\.eq\("id", scanId\)\.eq\("user_id", userId\)/);
   assert.match(orchestration, /user_id: userId/);
 });
