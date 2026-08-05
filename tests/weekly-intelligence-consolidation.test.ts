@@ -38,10 +38,13 @@ test("authoritative weekly persistence uses idempotent run and problem conflict 
   const route = read("app/api/weekly-intelligence/route.ts");
   assert.match(route, /claim_weekly_intelligence_run/);
 
-  const migration = read("supabase/migrations/20260721000000_consolidate_weekly_intelligence_pipeline.sql");
-  assert.match(migration, /on conflict \(user_id, period_start, period_end\) do nothing/);
-  assert.match(migration, /weekly_detected_problems_run_title_key_unique/);
-  assert.match(migration, /weekly_detected_problems\(run_id, problem_title_key\)/);
+  const consolidationMigration = read("supabase/migrations/20260721000000_consolidate_weekly_intelligence_pipeline.sql");
+  const repairMigration = read("supabase/migrations/20260805000000_repair_weekly_run_claim_contract.sql");
+  assert.match(repairMigration, /pg_advisory_xact_lock/);
+  assert.doesNotMatch(repairMigration, /on conflict \(user_id, period_start, period_end\)/);
+  assert.match(repairMigration, /weekly_intelligence_runs_user_period_unique/);
+  assert.match(consolidationMigration, /weekly_detected_problems_run_title_key_unique/);
+  assert.match(consolidationMigration, /weekly_detected_problems\(run_id, problem_title_key\)/);
 });
 
 test("dashboard compatibility model is derived from authoritative run and problem rows", () => {
@@ -187,4 +190,26 @@ test("Vercel cron is documented as Monday UTC and points at authoritative schedu
 test("weekly generation replaces validated children before completing the run", () => {
   const service = read("lib/weekly-intelligence-service.ts");
   assert.ok(service.indexOf("repository.replaceProblems") < service.indexOf("repository.completeRun"));
+});
+
+
+test("weekly claim repair preflights duplicates and keeps RPC service-role only", () => {
+  const migration = read("supabase/migrations/20260805000000_repair_weekly_run_claim_contract.sql");
+  assert.match(migration, /contains duplicate user-period rows/);
+  assert.match(migration, /security definer/);
+  assert.match(migration, /set search_path = public/);
+  assert.match(migration, /revoke all on function public\.claim_weekly_intelligence_run/);
+  assert.match(migration, /revoke execute on function public\.claim_weekly_intelligence_run[^;]+from anon/);
+  assert.match(migration, /revoke execute on function public\.claim_weekly_intelligence_run[^;]+from authenticated/);
+  assert.match(migration, /grant execute on function public\.claim_weekly_intelligence_run[^;]+to service_role/);
+});
+
+test("weekly route validates claim RPC statuses and logs safe database diagnostics", () => {
+  const route = read("app/api/weekly-intelligence/route.ts");
+  assert.match(route, /WEEKLY_CLAIM_STATUSES/);
+  assert.match(route, /parseWeeklyClaimRpcResponse/);
+  assert.match(route, /weekly_claim_rpc_failed/);
+  assert.match(route, /postgresCode/);
+  assert.match(route, /argumentPresence/);
+  assert.doesNotMatch(route, /error\.message[^;]+throw new Response/);
 });
