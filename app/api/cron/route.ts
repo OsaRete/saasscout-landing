@@ -37,21 +37,23 @@ export async function GET(req: Request) {
     }
 
     const period = getWeeklyIntelligencePeriod();
+    console.info("Weekly intelligence diagnostic", { event: "schedule_started", entryPath: "weekly_schedule", periodKey: `${period.period_start}/${period.period_end}`, timezone: period.timezone });
     const eligibleUsers = await getEligibleWeeklyUsers();
     const results = [];
 
     for (const user of eligibleUsers) {
       try {
         const result = await runWeeklyGenerationForUser(user.user_id, period);
-        results.push({ user_id: user.user_id, status: result.status, success: true });
+        results.push({ user_id: user.user_id, status: result.status, success: true, problems: result.problems.length, sources_saved: result.sources_saved });
       } catch (error) {
-        results.push({ user_id: user.user_id, success: false, error: error instanceof Error ? error.message : "Weekly generation failed." });
+        console.warn("Weekly intelligence diagnostic", { event: "schedule_user_failed", entryPath: "weekly_schedule", userId: user.user_id, periodKey: `${period.period_start}/${period.period_end}`, failureCategory: error instanceof Error ? error.name : "weekly_generation_failed" });
+        results.push({ user_id: user.user_id, success: false, error: "Could not generate weekly intelligence." });
       }
     }
 
     return NextResponse.json({ success: true, period, users_considered: eligibleUsers.length, results });
   } catch (error) {
-    console.error("Cron weekly intelligence error:", error);
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Cron failed." }, { status: 500 });
+    console.error("Cron weekly intelligence error", { failureCategory: error instanceof Error ? error.name : "cron_failed" });
+    return NextResponse.json({ success: false, error: "Cron weekly intelligence failed." }, { status: 500 });
   }
 }

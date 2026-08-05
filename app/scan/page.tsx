@@ -8,6 +8,8 @@ import { supabase } from "../supabase";
 
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const MIN_USEFUL_EVIDENCE_CHARACTERS = 20;
+const SUPPORTED_EVIDENCE_EXTENSIONS = [".txt", ".pdf", ".docx"] as const;
 const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
 const SOLUTION_GROUNDING_FAILURE_MESSAGE = "The generated opportunities could not be verified against your evidence. Please retry the scan.";
 class ScanSubmissionError extends Error {}
@@ -152,9 +154,8 @@ if (profileData) {
       return;
     }
 
-    const allowedExtensions = [".txt", ".pdf", ".docx"];
     const fileName = file.name.toLowerCase();
-    const isAllowed = allowedExtensions.some((extension) =>
+    const isAllowed = SUPPORTED_EVIDENCE_EXTENSIONS.some((extension) =>
       fileName.endsWith(extension)
     );
 
@@ -279,8 +280,8 @@ if (profileData) {
 
     if (!userId) return;
 
-    if (!market.trim() && !evidence.trim() && !evidenceFile) {
-      setMessage("Please provide a market, paste evidence, or upload a file.");
+    if (!evidenceFile && evidence.trim().length < MIN_USEFUL_EVIDENCE_CHARACTERS) {
+      setMessage("Evidence is required. Paste at least 20 useful characters or upload a supported TXT, PDF, or DOCX file before running a Scan.");
       return;
     }
 
@@ -361,9 +362,8 @@ if (profileData) {
               </h1>
 
               <p className="mt-5 max-w-2xl text-lg text-gray-400">
-                Add a niche to search external sources, or optionally paste/upload your own evidence.
-                SaaSScout will detect pain points and generate actionable SaaS
-                opportunities.
+                Provide real evidence by pasting conversations, reviews, tickets, or uploading a supported file.
+                Market, audience, and region help frame the analysis, but the grounded Scan workflow requires independent evidence before it can run.
               </p>
             </div>
 
@@ -391,7 +391,7 @@ if (profileData) {
               <input
                 type="text"
                 maxLength={120}
-                placeholder="Optional: Freelance designers, fitness coaches, book authors..."
+                placeholder="Context: Freelance designers, fitness coaches, book authors..."
                 value={market}
                 onChange={(e) => setMarket(e.target.value)}
                 className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
@@ -432,12 +432,12 @@ if (profileData) {
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.02] p-5">
               <p className="text-sm font-semibold text-white">
-                Option 1: Paste evidence
+                Option 1: Paste evidence (required unless uploading a file)
               </p>
 
               <p className="mt-2 text-sm text-gray-500">
                 Paste real conversations, reviews, support tickets, interview
-                notes, market reports, or podcast transcripts.
+                notes, market reports, or podcast transcripts. Minimum useful length: 20 characters.
               </p>
 
               <textarea
@@ -461,7 +461,7 @@ if (profileData) {
 
             <div className="rounded-3xl border border-dashed border-white/15 bg-white/[0.03] p-5">
               <p className="text-sm font-semibold text-white">
-                Option 2: Upload evidence file
+                Option 2: Upload evidence file (required unless pasting evidence)
               </p>
 
               <p className="mt-2 text-sm text-gray-500">
@@ -525,7 +525,7 @@ if (profileData) {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (!evidenceFile && evidence.trim().length < MIN_USEFUL_EVIDENCE_CHARACTERS)}
               className="mt-4 rounded-2xl bg-violet-600 px-6 py-4 font-semibold text-white shadow-lg shadow-violet-600/30 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {getButtonText()}

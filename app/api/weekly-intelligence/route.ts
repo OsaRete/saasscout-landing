@@ -680,12 +680,17 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
         .from("weekly_intelligence_runs")
         .update({ user_id: userId, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: totalSourcesAnalyzed, summary })
         .eq("id", runId)
+        .eq("user_id", userId)
+        .neq("status", "completed")
         .select()
         .single();
       if (error || !data) throw error || new Error("Could not complete weekly intelligence run.");
       return data;
     },
     async replaceProblems({ runId, problems }) {
+      const { data: runRow, error: runError } = await getSupabaseAdminClient().from("weekly_intelligence_runs").select("status").eq("id", runId).single();
+      if (runError) throw runError;
+      if (runRow?.status === "completed") return getProblemsForRun(runId);
       const { error: deleteError } = await getSupabaseAdminClient().from("weekly_detected_problems").delete().eq("run_id", runId);
       if (deleteError) throw deleteError;
       if (problems.length === 0) return [];
@@ -699,7 +704,7 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
       return data || [];
     },
     async markRunFailed({ runId }) {
-      await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId);
+      await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId).neq("status", "completed");
     },
   };
 }
@@ -815,6 +820,7 @@ export async function POST(req: Request) {
     const period = getWeeklyIntelligencePeriod();
     logWeeklyDiagnostic("period_selected", { userId: user.id, period });
     const result = await runWeeklyGenerationForUser(user.id, period);
+    logWeeklyDiagnostic("button_generation_result", { entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, generatedProblems: result.problems.length, sourcesSaved: result.sources_saved });
     const statusCode = result.status === "processing" ? 202 : 200;
     return NextResponse.json(result, { status: statusCode });
   } catch (error) {

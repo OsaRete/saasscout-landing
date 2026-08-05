@@ -172,3 +172,46 @@ test("Scan page renders the controlled grounding failure message and tolerates n
   assert.match(page, /generated opportunities could not be verified against your evidence/);
   assert.match(page, /response\.json\(\)\.catch\(\(\) => null\)/);
 });
+
+test("manual Scan UI requires evidence before authoritative acceptance", () => {
+  const page = readFileSync("app/scan/page.tsx", "utf8");
+  assert.match(page, /MIN_USEFUL_EVIDENCE_CHARACTERS = 20/);
+  assert.match(page, /Evidence is required/);
+  assert.match(page, /disabled=\{loading \|\| \(!evidenceFile && evidence\.trim\(\)\.length < MIN_USEFUL_EVIDENCE_CHARACTERS\)\}/);
+  assert.ok(page.indexOf("Evidence is required") < page.indexOf("setLoading(true)"));
+});
+
+test("manual Scan UI file rules match server validator policy", () => {
+  const page = readFileSync("app/scan/page.tsx", "utf8");
+  const server = readFileSync("lib/scan/evidence-ingestion.ts", "utf8");
+  assert.match(page, /SUPPORTED_EVIDENCE_EXTENSIONS = \["\.txt", "\.pdf", "\.docx"\]/);
+  assert.match(server, /maxFileBytes: 5 \* 1024 \* 1024/);
+  assert.match(page, /MAX_FILE_SIZE_MB = 5/);
+  assert.match(page, /Only \.txt, \.pdf, and \.docx files are supported/);
+});
+
+test("intent-only manual request is not treated as evidence by the workflow", async () => {
+  const input = validateJsonScanOrchestrationRequest({ intent: { market: "automatization", audience: "founders", region: "US" }, legacyContext: { sourceProblemTitle: "automatization" } });
+  assert.deepEqual(input.intent, { market: "automatization", audience: "founders", region: "US" });
+  assert.equal(input.pastedEvidence, undefined);
+  assert.equal(input.externalSnippets, undefined);
+  assert.equal(input.discoverContext, undefined);
+  await assert.rejects(() => executeScanWorkflow(input, { authenticated: true, authorizationMode: "internal_user" }), (error) => {
+    assert.equal(isScanWorkflowFailure(error), true);
+    assert.equal((error as ScanWorkflowFailureResult).error.stage, "evidence_ingested");
+    return true;
+  });
+});
+
+test("Discover linkage context remains optional compatibility metadata and not proof of evidence", () => {
+  const input = validateJsonScanOrchestrationRequest({ intent: { market: "Agencies" }, legacyContext: { sourceProblemTitle: "Manual reporting", sourceProblemId: "problem-1", sourceDiscoveryId: "discovery-1" } });
+  assert.equal(input.legacyContext?.sourceDiscoveryId, "discovery-1");
+  assert.equal(input.discoverContext, undefined);
+  assert.equal(input.pastedEvidence, undefined);
+});
+
+test("browser cannot provide trusted evidence, owner, quota, plan, or capability authority", () => {
+  for (const field of ["allowedEvidenceIds", "userId", "ownerId", "plan", "quota", "capability", "requestFingerprint"]) {
+    assert.throws(() => validateJsonScanOrchestrationRequest({ intent: { market: "x" }, [field]: "attacker" }), ScanEvidenceIngestionError);
+  }
+});

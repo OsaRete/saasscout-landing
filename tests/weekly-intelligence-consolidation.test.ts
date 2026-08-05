@@ -147,7 +147,7 @@ test("claimed generation replaces children exactly once", async () => {
     },
   });
   assert.equal(result.status, "claimed");
-  assert.deepEqual(calls, ["claim", "complete", "replaceProblems"]);
+  assert.deepEqual(calls, ["claim", "replaceProblems", "complete"]);
 });
 
 test("migration cleans historical duplicates before unique title-key constraint", () => {
@@ -156,4 +156,35 @@ test("migration cleans historical duplicates before unique title-key constraint"
   assert.match(migration, /delete from public\.weekly_detected_problems duplicate/);
   assert.match(migration, /weekly_detected_problems_run_title_key_unique/);
   assert.match(migration, /claim_weekly_intelligence_run/);
+});
+
+test("weekly route protects completed reports from replacement or failed marking", () => {
+  const route = read("app/api/weekly-intelligence/route.ts");
+  assert.match(route, /runRow\?\.status === "completed"/);
+  assert.match(route, /return getProblemsForRun\(runId\)/);
+  assert.match(route, /\.neq\("status", "completed"\)/);
+});
+
+test("weekly diagnostics distinguish button and schedule entry paths without unsafe content", () => {
+  const manualRoute = read("app/api/weekly-intelligence/route.ts");
+  const scheduler = read("app/api/cron/route.ts");
+  assert.match(manualRoute, /entryPath: "weekly_button"/);
+  assert.match(scheduler, /entryPath: "weekly_schedule"/);
+  assert.match(scheduler, /Could not generate weekly intelligence/);
+  assert.doesNotMatch(scheduler, /error instanceof Error \? error\.message/);
+  assert.doesNotMatch(scheduler, /authorization: authHeader|CRON_SECRET[^;]+results/);
+});
+
+test("Vercel cron is documented as Monday UTC and points at authoritative scheduler", () => {
+  const vercel = read("vercel.json");
+  const docs = read("docs/ENTRY_PATH_COMPATIBILITY_REPAIR.md");
+  assert.match(vercel, /"path": "\/api\/cron"/);
+  assert.match(vercel, /"schedule": "0 8 \* \* 1"/);
+  assert.match(docs, /every Monday at 08:00 UTC/);
+  assert.match(docs, /same authoritative Weekly generation service/);
+});
+
+test("weekly generation replaces validated children before completing the run", () => {
+  const service = read("lib/weekly-intelligence-service.ts");
+  assert.ok(service.indexOf("repository.replaceProblems") < service.indexOf("repository.completeRun"));
 });
