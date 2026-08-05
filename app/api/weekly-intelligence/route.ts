@@ -659,20 +659,58 @@ function logWeeklyDiagnostic(event: string, payload: Record<string, unknown>) {
   console.info("Weekly intelligence diagnostic", { event, ...payload });
 }
 
+const WEEKLY_CLAIM_RPC_NAME = "claim_weekly_intelligence_run";
+const WEEKLY_CLAIM_STATUSES = new Set(["claimed", "completed", "processing", "reclaimed"]);
+const REQUIRED_WEEKLY_RUN_FIELDS = ["id", "user_id", "period_start", "period_end", "timezone", "status"] as const;
+
+function safeRpcErrorPayload(error: { code?: string; details?: string; hint?: string; message?: string } | null, input: { userId: string; period: WeeklyPeriod; staleBefore: string }) {
+  return {
+    rpcName: WEEKLY_CLAIM_RPC_NAME,
+    postgresCode: error?.code || null,
+    hasDetails: Boolean(error?.details),
+    hasHint: Boolean(error?.hint),
+    hasMessage: Boolean(error?.message),
+    argumentPresence: {
+      p_user_id: Boolean(input.userId),
+      p_period_start: Boolean(input.period.period_start),
+      p_period_end: Boolean(input.period.period_end),
+      p_timezone: Boolean(input.period.timezone),
+      p_stale_before: Boolean(input.staleBefore),
+    },
+    periodKey: `${input.period.period_start}/${input.period.period_end}`,
+    userId: input.userId,
+  };
+}
+
+function parseWeeklyClaimRpcResponse(data: unknown) {
+  const claim = Array.isArray(data) ? data[0] : data;
+  if (!claim || typeof claim !== "object") throw new Error("Weekly claim RPC returned no claim row.");
+  const row = claim as { claim_status?: unknown; run?: unknown };
+  if (typeof row.claim_status !== "string" || !WEEKLY_CLAIM_STATUSES.has(row.claim_status)) throw new Error("Weekly claim RPC returned an unknown claim status.");
+  if (!row.run || typeof row.run !== "object" || Array.isArray(row.run)) throw new Error("Weekly claim RPC returned an invalid run payload.");
+  const run = row.run as Record<string, unknown>;
+  for (const field of REQUIRED_WEEKLY_RUN_FIELDS) {
+    if (run[field] === undefined || run[field] === null || run[field] === "") throw new Error(`Weekly claim RPC run payload is missing ${field}.`);
+  }
+  return { status: row.claim_status as "claimed" | "completed" | "processing" | "reclaimed", run };
+}
+
 export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGenerationRepository {
   return {
     async claimRun({ userId, period, staleBefore }) {
-      const { data, error } = await getSupabaseAdminClient().rpc("claim_weekly_intelligence_run", {
+      const rpcArgs = {
         p_user_id: userId,
         p_period_start: period.period_start,
         p_period_end: period.period_end,
         p_timezone: period.timezone,
         p_stale_before: staleBefore,
-      });
-      if (error) throw error;
-      const claim = Array.isArray(data) ? data[0] : data;
-      if (!claim?.run) throw new Error("Could not claim weekly intelligence run.");
-      return { status: claim.claim_status, run: claim.run };
+      };
+      const { data, error } = await getSupabaseAdminClient().rpc(WEEKLY_CLAIM_RPC_NAME, rpcArgs);
+      if (error) {
+        logWeeklyDiagnostic("weekly_claim_rpc_failed", safeRpcErrorPayload(error, { userId, period, staleBefore }));
+        throw error;
+      }
+      return parseWeeklyClaimRpcResponse(data);
     },
     getProblemsForRun,
     async completeRun({ runId, userId, period, totalSourcesAnalyzed, summary }) {
