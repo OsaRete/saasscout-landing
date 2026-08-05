@@ -18,7 +18,7 @@ const ALLOWED_MULTIPART = new Set(["intent", "pastedEvidence", "files", "externa
 const ALLOWED_INTENT = new Set(["market", "niche", "audience", "region", "description"]);
 const ALLOWED_ITEM = new Set(["title", "content"]);
 const ALLOWED_LEGACY_CONTEXT = new Set(["sourceProblemTitle", "sourceProblemId", "sourceDiscoveryId"]);
-const FORBIDDEN_CLIENT_FIELDS = new Set(["userId", "executionId", "status", "requestFingerprint", "request_fingerprint", "fingerprint", "allowedEvidenceIds", "derivedAnalysis", "calibration", "diagnostics", "workflowVersion", "technicalContext", "authorization", "authorizationMode"]);
+const FORBIDDEN_CLIENT_FIELDS = new Set(["userId", "ownerId", "plan", "quota", "capability", "executionId", "status", "requestFingerprint", "request_fingerprint", "fingerprint", "allowedEvidenceIds", "derivedAnalysis", "calibration", "diagnostics", "workflowVersion", "technicalContext", "authorization", "authorizationMode"]);
 
 type AuthenticatedScanUser = Readonly<{ id?: string }>;
 export type ScanServerOrchestrationConfig = Readonly<{ workflowEnabled: boolean; persistenceShadowEnabled: boolean; allowedUserIds: ReadonlySet<string> }>;

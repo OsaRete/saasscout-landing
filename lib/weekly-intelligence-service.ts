@@ -104,8 +104,8 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       ? buildEmptyWeeklyReport(period)
       : validateWeeklyModelOutput(await dependencies.analyze({ period, userEvidence, priorUserContext, sharedContext }), userEvidence);
     const normalizedProblems = normalizeWeeklyProblemsForPersistence(report.problems);
-    const completedRun = await dependencies.repository.completeRun({ runId, userId, period, totalSourcesAnalyzed: userEvidence.length, summary: report.summary });
     const problems = await dependencies.repository.replaceProblems({ runId, problems: normalizedProblems });
+    const completedRun = await dependencies.repository.completeRun({ runId, userId, period, totalSourcesAnalyzed: userEvidence.length, summary: report.summary });
     await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: "completed", status: "completed", userId, durationMs: Date.now() - workflowStartedAt, safeMetadata: { runId, reused: false, generatedProblems: problems.length, plan: completedRun.plan } });
     return { success: true, status: claim.status, run: completedRun, sources_saved: userEvidence.length, problems };
   } catch (error) {
