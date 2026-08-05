@@ -5,11 +5,17 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../supabase";
+import {
+  SCAN_MANUAL_FILE_FIELD,
+  classifyScanManualFile,
+  hasUsefulManualEvidence,
+  normalizeScanManualIntent,
+  normalizeScanManualLegacyContext,
+} from "@/lib/scan/manual-contract";
 
 const MAX_FILE_SIZE_MB = 5;
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const MIN_USEFUL_EVIDENCE_CHARACTERS = 20;
-const SUPPORTED_EVIDENCE_EXTENSIONS = [".txt", ".pdf", ".docx"] as const;
+const SUPPORTED_EVIDENCE_EXTENSIONS = [".txt", ".pdf", ".docx"];
 const SAFE_SCAN_FAILURE_MESSAGE = "Your scan could not be completed. Please try again.";
 const SOLUTION_GROUNDING_FAILURE_MESSAGE = "The generated opportunities could not be verified against your evidence. Please retry the scan.";
 class ScanSubmissionError extends Error {}
@@ -154,18 +160,21 @@ if (profileData) {
       return;
     }
 
-    const fileName = file.name.toLowerCase();
-    const isAllowed = SUPPORTED_EVIDENCE_EXTENSIONS.some((extension) =>
-      fileName.endsWith(extension)
-    );
+    const classification = classifyScanManualFile(file);
 
-    if (!isAllowed) {
+    if (classification === "scan_manual_file_empty") {
+      setEvidenceFile(null);
+      setMessage("The selected evidence file is empty. Upload a non-empty TXT, PDF, or DOCX file.");
+      return;
+    }
+
+    if (classification === "scan_manual_file_unsupported") {
       setEvidenceFile(null);
       setMessage("Only .txt, .pdf, and .docx files are supported.");
       return;
     }
 
-    if (file.size > MAX_FILE_SIZE_BYTES) {
+    if (classification === "scan_manual_file_too_large") {
       setEvidenceFile(null);
       setMessage(`File is too large. Maximum size is ${MAX_FILE_SIZE_MB}MB.`);
       return;
@@ -203,28 +212,28 @@ if (profileData) {
     cleanAudience: string;
     cleanRegion: string;
   }) {
-    const legacyContext = {
-      sourceProblemTitle: problemTitleParam || cleanMarket || undefined,
+    const legacyContext = normalizeScanManualLegacyContext({
+      sourceProblemTitle: problemTitleParam || undefined,
       sourceProblemId: problemIdParam || undefined,
       sourceDiscoveryId: discoveryIdParam || undefined,
-    };
+    });
 
-    const intent = {
-      ...(cleanMarket ? { market: cleanMarket } : {}),
-      ...(cleanAudience ? { audience: cleanAudience } : {}),
-      ...(cleanRegion ? { region: cleanRegion } : {}),
-    };
+    const intent = normalizeScanManualIntent({
+      market: cleanMarket,
+      audience: cleanAudience,
+      region: cleanRegion,
+    });
 
     const formData = new FormData();
     formData.append("intent", JSON.stringify(intent));
-    formData.append("legacyContext", JSON.stringify(legacyContext));
+    if (legacyContext) formData.append("legacyContext", JSON.stringify(legacyContext));
 
     if (evidence.trim()) {
       formData.append("pastedEvidence", evidence.trim());
     }
 
     if (evidenceFile) {
-      formData.append("files", evidenceFile);
+      formData.append(SCAN_MANUAL_FILE_FIELD, evidenceFile);
     }
 
     const response = await fetch("/api/scan/workflow", {
@@ -280,7 +289,8 @@ if (profileData) {
 
     if (!userId) return;
 
-    if (!evidenceFile && evidence.trim().length < MIN_USEFUL_EVIDENCE_CHARACTERS) {
+    if (!hasUsefulManualEvidence({ pastedEvidence: evidence, file: evidenceFile })) {
+      // Contract equivalent: !evidenceFile && evidence.trim().length < MIN_USEFUL_EVIDENCE_CHARACTERS
       setMessage("Evidence is required. Paste at least 20 useful characters or upload a supported TXT, PDF, or DOCX file before running a Scan.");
       return;
     }
@@ -480,7 +490,7 @@ if (profileData) {
                 <input
                   id="evidence-file"
                   type="file"
-                  accept=".txt,.pdf,.docx"
+                  accept={SUPPORTED_EVIDENCE_EXTENSIONS.join(",")}
                   onChange={handleFileChange}
                   className="hidden"
                 />
