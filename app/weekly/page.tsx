@@ -78,6 +78,38 @@ function getScoreLabel(score: number) {
   return "Weak signal";
 }
 
+
+type WeeklyApiResponse = {
+  success?: boolean;
+  error?: string;
+  code?: string;
+  stage?: string;
+  weeklyExecutionId?: string;
+  status?: string;
+};
+
+function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
+  const diagnosticSuffix = result.weeklyExecutionId ? ` Diagnostic ID: ${result.weeklyExecutionId}.` : "";
+
+  if (responseOk && result.code === "weekly_current_period_reused") {
+    return `Current weekly report already exists and was reused.${diagnosticSuffix}`;
+  }
+
+  if (responseOk && result.code === "weekly_source_degraded") {
+    return `Weekly Intelligence generated with degraded source coverage.${diagnosticSuffix}`;
+  }
+
+  if (!responseOk && (result.code === "weekly_authentication_failed" || result.code === "weekly_capability_denied")) {
+    return `${result.error || "Weekly Intelligence is not available for this account."}${diagnosticSuffix}`;
+  }
+
+  if (!responseOk) {
+    return `Could not generate weekly intelligence.${diagnosticSuffix}`;
+  }
+
+  return `Weekly Intelligence generated successfully.${diagnosticSuffix}`;
+}
+
 function buildSourcesEvidence(sources: WeeklySource[]) {
   if (sources.length === 0) return "No external sources saved for this run.";
 
@@ -189,7 +221,7 @@ export default function WeeklyPage() {
 
       const rawText = await response.text();
 
-      let result;
+      let result: WeeklyApiResponse;
 
       try {
         result = JSON.parse(rawText);
@@ -200,11 +232,11 @@ export default function WeeklyPage() {
       }
 
       if (!response.ok) {
-        setMessage(result.error || "Could not run weekly intelligence.");
+        setMessage(getWeeklyRunMessage(result, false));
         return;
       }
 
-      setMessage("Weekly Intelligence generated successfully.");
+      setMessage(getWeeklyRunMessage(result, true));
       window.location.reload();
     } catch (error) {
       console.error(error);

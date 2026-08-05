@@ -6,7 +6,7 @@ import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, type Weekly
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
-import { runAuthoritativeWeeklyGenerationForUser, type AuthoritativeWeeklyGenerationRepository } from "@/lib/weekly-intelligence-service";
+import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -709,7 +709,7 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
   };
 }
 
-export async function runWeeklyGenerationForUser(userId: string, period: WeeklyPeriod) {
+export async function runWeeklyGenerationForUser(userId: string, period: WeeklyPeriod, options: { weeklyExecutionId?: string; entryPath?: WeeklyEntryPath } = {}) {
   return runAuthoritativeWeeklyGenerationForUser({
     userId,
     period,
@@ -723,6 +723,8 @@ export async function runWeeklyGenerationForUser(userId: string, period: WeeklyP
         }),
       analyze: analyzeUserScopedWeeklySignals,
       log: logWeeklyDiagnostic,
+      weeklyExecutionId: options.weeklyExecutionId,
+      entryPath: options.entryPath,
     },
   });
 }
@@ -809,27 +811,51 @@ async function analyzeUserScopedWeeklySignals(input: {
 }
 
 export async function POST(req: Request) {
+  const weeklyExecutionId = createWeeklyExecutionId();
   try {
+    logWeeklyDiagnostic("received", { weeklyExecutionId, entryPath: "button" });
     const user = await requireUser(req);
-    const profile = await getUserProfile(user.id);
+    logWeeklyDiagnostic("authenticated", { weeklyExecutionId, entryPath: "button", userId: user.id });
 
-    if (profile && profile.weekly_intelligence_enabled === false) {
-      return NextResponse.json({ success: false, error: "Weekly Intelligence is not enabled for this plan." }, { status: 403 });
+    let profile;
+    try {
+      profile = await getUserProfile(user.id);
+    } catch (error) {
+      throw new WeeklyDiagnosticError("weekly_profile_unavailable", "capability_checked", "Weekly profile lookup failed.", { cause: error, weeklyExecutionId });
     }
 
-    const period = getWeeklyIntelligencePeriod();
-    logWeeklyDiagnostic("period_selected", { userId: user.id, period });
-    const result = await runWeeklyGenerationForUser(user.id, period);
-    logWeeklyDiagnostic("button_generation_result", { entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, generatedProblems: result.problems.length, sourcesSaved: result.sources_saved });
+    if (!profile) {
+      throw new WeeklyDiagnosticError("weekly_profile_unavailable", "capability_checked", "Weekly profile is unavailable.", { weeklyExecutionId });
+    }
+
+    if (profile.weekly_intelligence_enabled === false) {
+      return NextResponse.json({ success: false, error: "Weekly Intelligence is not enabled for this plan.", code: "weekly_capability_denied", stage: "capability_checked", weeklyExecutionId }, { status: 403 });
+    }
+    logWeeklyDiagnostic("capability_checked", { weeklyExecutionId, entryPath: "button", userId: user.id, weeklyEnabled: true });
+
+    let period;
+    try {
+      period = getWeeklyIntelligencePeriod();
+    } catch (error) {
+      throw new WeeklyDiagnosticError("weekly_period_resolution_failed", "period_resolved", "Weekly period resolution failed.", { cause: error, weeklyExecutionId });
+    }
+    logWeeklyDiagnostic("period_resolved", { weeklyExecutionId, entryPath: "button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}` });
+
+    const result = await runWeeklyGenerationForUser(user.id, period, { weeklyExecutionId, entryPath: "button" });
+    logWeeklyDiagnostic("button_generation_result", { weeklyExecutionId, entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, generatedProblems: result.problems.length, sourcesSaved: result.sources_saved, code: result.code, stage: result.stage });
     const statusCode = result.status === "processing" ? 202 : 200;
     return NextResponse.json(result, { status: statusCode });
   } catch (error) {
-    console.error("Weekly intelligence error:", error);
+    const diagnostic = error instanceof AuthError
+      ? { code: "weekly_authentication_failed" as const, stage: "authenticated" as const, weeklyExecutionId }
+      : getWeeklyDiagnostic(error, "response_completed", weeklyExecutionId);
+    console.error("Weekly intelligence error", { weeklyExecutionId, code: diagnostic.code, stage: diagnostic.stage, errorName: error instanceof Error ? error.name : "UnknownError" });
 
     if (error instanceof AuthError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+      return NextResponse.json({ success: false, error: "Please sign in again to run Weekly Intelligence.", code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId }, { status: error.status });
     }
 
-    return NextResponse.json({ success: false, error: sanitizeWeeklyError() }, { status: 500 });
+    const status = diagnostic.code === "weekly_capability_denied" ? 403 : 500;
+    return NextResponse.json({ success: false, error: sanitizeWeeklyError(), code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId }, { status });
   }
 }
