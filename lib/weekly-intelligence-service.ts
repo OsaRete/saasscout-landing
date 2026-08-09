@@ -239,7 +239,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       logStage("model_generation_completed");
       logStage("model_response_parsed");
       try {
-        report = validateWeeklyModelOutput(modelOutput, userEvidence);
+        report = validateWeeklyModelOutput(modelOutput, userEvidence, priorUserContext);
       } catch (error) {
         throw classifyWeeklyError(error, "model_response_validated", weeklyExecutionId);
       }

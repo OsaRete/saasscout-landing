@@ -18,6 +18,18 @@ type WeeklyProblem = {
   id: string;
   run_id: string;
   problem_title: string;
+  affected_users?: string | null;
+  observed_evidence?: string | null;
+  repeated_patterns?: string | null;
+  business_impact?: string | null;
+  why_existing_tools_fail?: string | null;
+  suggested_mvp?: string | null;
+  recommended_validation?: string | null;
+  recommended_deep_scan?: string | null;
+  evidence_references?: string[];
+  intelligence_score?: number | null;
+  confidence_score?: number | null;
+  evidence_strength?: string | null;
   problem_summary: string | null;
   affected_niches: string | null;
   suggested_solutions: string | null;
@@ -61,17 +73,11 @@ function scoreWidth(score: number | null) {
 }
 
 function getProblemScore(problem: WeeklyProblem) {
-  const pain = Number(problem.pain_score || 0);
-  const revenue = Number(problem.revenue_score || 0);
-  const urgency = Number(problem.urgency_score || 0);
-  const trend = Number(problem.trend_score || 0);
-
-  return Number(
-    (pain * 0.3 + revenue * 0.3 + urgency * 0.2 + trend * 0.2).toFixed(1)
-  );
+  return problem.intelligence_score == null ? null : Number(problem.intelligence_score);
 }
 
-function getScoreLabel(score: number) {
+function getScoreLabel(score: number | null) {
+  if (score == null) return "Insufficient evidence";
   if (score >= 8.5) return "Strong signal";
   if (score >= 7) return "Promising";
   if (score >= 5.5) return "Early signal";
@@ -111,19 +117,15 @@ function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
 }
 
 function buildSourcesEvidence(sources: WeeklySource[]) {
-  if (sources.length === 0) return "No external sources saved for this run.";
-
   return sources
     .slice(0, 12)
-    .map(
-      (source, index) => `
-External Source ${index + 1}
-Title: ${source.source_title || "Untitled source"}
-URL: ${source.source_url || "No URL"}
-Snippet: ${source.source_snippet || "No snippet"}
-Type: ${source.source_type || "unknown"}
-`
-    )
+    .map((source) => [
+      source.source_title && `Title: ${source.source_title}`,
+      source.source_url && `URL: ${source.source_url}`,
+      source.source_snippet && `Snippet: ${source.source_snippet}`,
+      source.source_type && `Type: ${source.source_type}`,
+    ].filter(Boolean).join("\n"))
+    .filter(Boolean)
     .join("\n");
 }
 
@@ -143,58 +145,19 @@ export default function WeeklyPage() {
   useEffect(() => {
     async function loadWeeklyData() {
       setLoadingData(true);
-  
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-  
-      if (!user) {
-        router.push("/login");
-        return;
-      }
-  
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push("/login"); return; }
       setLoadingAuth(false);
-  
-      const { data: runsData, error: runsError } = await supabase
-        .from("weekly_intelligence_runs")
-        .select("*")
-        .order("created_at", { ascending: false });
-  
-      if (runsError) {
-        console.error(runsError);
-        setMessage("Could not load weekly intelligence runs.");
-        setLoadingData(false);
-        return;
-      }
-  
-      const runIds = (runsData || []).map((run) => run.id);
-  
-      let problemsData: WeeklyProblem[] = [];
-      let sourcesData: WeeklySource[] = [];
-  
-      if (runIds.length > 0) {
-        const { data: problemRows } = await supabase
-          .from("weekly_detected_problems")
-          .select("*")
-          .in("run_id", runIds);
-  
-        const { data: sourceRows } = await supabase
-          .from("weekly_sources")
-          .select("*")
-          .in("run_id", runIds)
-          .order("source_rank", { ascending: true });
-  
-        problemsData = problemRows || [];
-        sourcesData = sourceRows || [];
-      }
-  
-      setRuns(runsData || []);
-      setProblems(problemsData);
-      setSources(sourcesData);
-      setSelectedRunId(runsData?.[0]?.id || null);
-      setLoadingData(false);
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch("/api/weekly-intelligence", {
+        headers: { Authorization: `Bearer ${session?.access_token || ""}` }, cache: "no-store",
+      });
+      const projection = await response.json();
+      if (!response.ok) { setMessage(projection.error || "Could not load weekly intelligence."); setLoadingData(false); return; }
+      const runsData = projection.runs || [];
+      setRuns(runsData); setProblems(projection.problems || []); setSources(projection.externalSources || []);
+      setSelectedRunId(runsData[0]?.id || null); setLoadingData(false);
     }
-  
     void loadWeeklyData();
   }, [router]);
 
@@ -255,7 +218,7 @@ export default function WeeklyPage() {
 
     return problems
       .filter((problem) => problem.run_id === selectedRun.id)
-      .sort((a, b) => getProblemScore(b) - getProblemScore(a));
+      .sort((a, b) => Number(getProblemScore(b) ?? -1) - Number(getProblemScore(a) ?? -1));
   }, [problems, selectedRun]);
 
   const selectedSources = useMemo(() => {
@@ -268,17 +231,10 @@ export default function WeeklyPage() {
 
   const topProblem = selectedProblems[0] || null;
 
-  const averageProblemScore =
-    selectedProblems.length > 0
-      ? Number(
-          (
-            selectedProblems.reduce(
-              (sum, problem) => sum + getProblemScore(problem),
-              0
-            ) / selectedProblems.length
-          ).toFixed(1)
-        )
-      : 0;
+  const scoredProblems = selectedProblems.map(getProblemScore).filter((score): score is number => score !== null);
+  const averageProblemScore = scoredProblems.length > 0
+    ? Number((scoredProblems.reduce((sum, score) => sum + score, 0) / scoredProblems.length).toFixed(1))
+    : null;
 
   if (loadingAuth || loadingData) {
     return (
@@ -327,13 +283,11 @@ export default function WeeklyPage() {
               </p>
 
               <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">
-                Automatic market problem discovery.
+                Evidence-grounded weekly market intelligence.
               </h1>
 
               <p className="mt-5 max-w-3xl text-gray-400">
-                SaaSScout scans external signals, detects monetizable problems,
-                identifies affected niches, suggests SaaS solutions, and feeds
-                the data moat automatically.
+                SaaSScout connects your eligible activity, saved market evidence, and clearly labeled external signals into traceable observations and next steps.
               </p>
             </div>
 
@@ -351,7 +305,7 @@ export default function WeeklyPage() {
                   Auto-updated
                 </p>
                 <p className="mt-1 text-sm text-gray-300">
-                  Generated from external market signals.
+                  Generated from traceable, user-owned market evidence.
                 </p>
               </div>
             </div>
@@ -417,7 +371,7 @@ export default function WeeklyPage() {
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Sources saved</p>
+                    <p className="text-sm text-gray-400">External evidence</p>
                     <h2 className="mt-3 text-4xl font-bold">
                       {selectedSources.length}
                     </h2>
@@ -426,29 +380,29 @@ export default function WeeklyPage() {
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                     <p className="text-sm text-gray-400">Avg intelligence</p>
                     <h2 className="mt-3 text-4xl font-bold">
-                      {averageProblemScore}
+                      {averageProblemScore ?? "—"}
                     </h2>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                     <p className="text-sm text-gray-400">Top problem</p>
                     <h2 className="mt-3 text-xl font-bold">
-                      {topProblem?.problem_title || "Unknown"}
+                      {topProblem?.problem_title || "—"}
                     </h2>
                   </div>
                 </div>
 
-                <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
+                {selectedRun.summary && <section className="mt-8 rounded-3xl border border-white/10 bg-[#0B1020] p-7">
                   <h2 className="text-2xl font-bold">Weekly Summary</h2>
                   <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
-                    {selectedRun.summary || "No weekly summary available."}
+                    {selectedRun.summary}
                   </p>
-                </section>
+                </section>}
 
                 <section className="mt-8 rounded-3xl border border-cyan-500/20 bg-cyan-500/10 p-7">
-                  <h2 className="text-2xl font-bold">External Sources</h2>
+                  <h2 className="text-2xl font-bold">External evidence</h2>
                   <p className="mt-2 text-sm text-gray-400">
-                    These sources are now saved and passed into deeper scans.
+                    Public market references are shown separately from user-owned Data Moat evidence and model-derived insights.
                   </p>
 
                   <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -468,12 +422,10 @@ export default function WeeklyPage() {
                           {source.source_rank || "-"}
                         </p>
 
-                        <h3 className="mt-2 font-semibold text-white">
-                          {source.source_title || "Untitled source"}
-                        </h3>
+                        {source.source_title && <h3 className="mt-2 font-semibold text-white">{source.source_title}</h3>}
 
                         <p className="mt-3 line-clamp-3 text-sm text-gray-400">
-                          {source.source_snippet || "No snippet available."}
+                          {source.source_snippet}
                         </p>
                       </a>
                     ))}
@@ -481,7 +433,7 @@ export default function WeeklyPage() {
 
                   {selectedSources.length === 0 && (
                     <p className="mt-4 text-sm text-gray-500">
-                      No external sources were saved for this run.
+                      This report contains no public external references.
                     </p>
                   )}
                 </section>
@@ -505,17 +457,21 @@ Suggested solutions:
 ${problem.suggested_solutions || ""}
 
 Scores:
-Pain: ${problem.pain_score || 0}/10
-Revenue: ${problem.revenue_score || 0}/10
-Urgency: ${problem.urgency_score || 0}/10
-Trend: ${problem.trend_score || 0}/10
-Intelligence score: ${problemScore}/10
+Pain: ${problem.pain_score == null ? "not scored" : `${problem.pain_score}/10`}
+Revenue: ${problem.revenue_score == null ? "not scored" : `${problem.revenue_score}/10`}
+Urgency: ${problem.urgency_score == null ? "not scored" : `${problem.urgency_score}/10`}
+Trend: ${problem.trend_score == null ? "not scored" : `${problem.trend_score}/10`}
+Intelligence score: ${problemScore == null ? "Not scored" : `${problemScore}/10`}
 
 Monetization angle:
 ${problem.monetization_angle || ""}
 
-Source evidence:
+Weekly problem ID: ${problem.id}
+Evidence summary:
 ${problem.source_evidence || ""}
+Evidence references: ${(problem.evidence_references || []).join(", ")}
+Recommended investigation: ${problem.recommended_deep_scan || problem.recommended_validation || ""}
+Relevant Data Moat context: ${problem.observed_evidence || problem.repeated_patterns || ""}
 
 External sources:
 ${sourcesEvidence}`;
@@ -528,17 +484,14 @@ ${sourcesEvidence}`;
                         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                           <div>
                             <p className="text-sm text-violet-400">
-                              Detected problem #{index + 1}
+                              Evidence-grounded insight #{index + 1}
                             </p>
 
                             <h3 className="mt-3 text-3xl font-bold">
                               {problem.problem_title}
                             </h3>
 
-                            <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
-                              {problem.problem_summary ||
-                                "No problem summary available."}
-                            </p>
+                            {problem.problem_summary && <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">{problem.problem_summary}</p>}
                           </div>
 
                           <div className="w-full rounded-3xl border border-violet-500/30 bg-violet-500/10 p-5 lg:max-w-xs">
@@ -547,7 +500,7 @@ ${sourcesEvidence}`;
                             </p>
 
                             <h4 className="mt-3 text-4xl font-bold">
-                              {problemScore}/10
+                              {problemScore == null ? "Not scored" : `${problemScore}/10`}
                             </h4>
 
                             <p className="mt-2 text-sm text-violet-100/80">
@@ -562,11 +515,11 @@ ${sourcesEvidence}`;
                             { label: "Revenue", value: problem.revenue_score },
                             { label: "Urgency", value: problem.urgency_score },
                             { label: "Trend", value: problem.trend_score },
-                          ].map((score) => (
+                          ].filter((score) => score.value != null).map((score) => (
                             <div key={score.label}>
                               <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
                                 <span>{score.label}</span>
-                                <span>{score.value || 0}/10</span>
+                                <span>{score.value == null ? "Not scored" : `${score.value}/10`}</span>
                               </div>
 
                               <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
@@ -580,14 +533,11 @@ ${sourcesEvidence}`;
                         </div>
 
                         <div className="mt-6 grid gap-4 lg:grid-cols-3">
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                            <h4 className="font-semibold">Affected Niches</h4>
+                          {niches.length > 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold">Affected niches</h4>
 
                             <div className="mt-4 space-y-3">
-                              {(niches.length > 0
-                                ? niches
-                                : ["No affected niches available."]
-                              ).map((item) => (
+                              {niches.map((item) => (
                                 <p
                                   key={item}
                                   className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
@@ -596,18 +546,15 @@ ${sourcesEvidence}`;
                                 </p>
                               ))}
                             </div>
-                          </div>
+                          </div>}
 
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                          {solutions.length > 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                             <h4 className="font-semibold">
-                              Monetizable Solutions
+                              Suggested opportunities
                             </h4>
 
                             <div className="mt-4 space-y-3">
-                              {(solutions.length > 0
-                                ? solutions
-                                : ["No suggested solution available."]
-                              ).map((item) => (
+                              {solutions.map((item) => (
                                 <p
                                   key={item}
                                   className="rounded-xl bg-black/20 px-4 py-3 text-sm text-gray-300"
@@ -616,17 +563,12 @@ ${sourcesEvidence}`;
                                 </p>
                               ))}
                             </div>
-                          </div>
+                          </div>}
 
                           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                            <h4 className="font-semibold">
-                              Monetization Angle
-                            </h4>
-
-                            <p className="mt-4 text-sm leading-relaxed text-gray-300">
-                              {problem.monetization_angle ||
-                                "No monetization angle available."}
-                            </p>
+                            {problem.monetization_angle && <><h4 className="font-semibold">
+                              Monetization angle
+                            </h4><p className="mt-4 text-sm leading-relaxed text-gray-300">{problem.monetization_angle}</p></>}
 
                             <div className="mt-5 rounded-2xl border border-violet-500/20 bg-violet-500/10 p-4">
                               <p className="text-xs leading-relaxed text-violet-200/80">
@@ -648,14 +590,10 @@ ${sourcesEvidence}`;
                           </div>
                         </div>
 
-                        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                          <h4 className="font-semibold">Source Evidence</h4>
-
-                          <p className="mt-3 text-sm leading-relaxed text-gray-400">
-                            {problem.source_evidence ||
-                              "No source evidence available."}
-                          </p>
-                        </div>
+                        {problem.source_evidence && <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                          <h4 className="font-semibold">Observed evidence</h4>
+                          <p className="mt-3 text-sm leading-relaxed text-gray-400">{problem.source_evidence}</p>
+                        </div>}
                       </div>
                     );
                   })}

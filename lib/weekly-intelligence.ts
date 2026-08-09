@@ -13,6 +13,7 @@ export type WeeklyEvidenceSource = {
   title: string;
   summary: string;
   created_at: string;
+  provenance?: string;
 };
 
 export type WeeklySharedSource = {
@@ -25,14 +26,26 @@ export type WeeklySharedSource = {
 
 export type WeeklyReportProblem = {
   problem_title: string;
-  problem_summary: string;
-  affected_niches: string;
-  suggested_solutions: string;
-  pain_score: number;
-  revenue_score: number;
-  urgency_score: number;
-  trend_score: number;
-  monetization_angle: string;
+  problem_summary: string | null;
+  affected_users?: string | null;
+  affected_niches: string | null;
+  observed_evidence?: string | null;
+  repeated_patterns?: string | null;
+  business_impact?: string | null;
+  why_existing_tools_fail?: string | null;
+  suggested_solutions: string | null;
+  suggested_mvp?: string | null;
+  monetization_angle: string | null;
+  recommended_validation?: string | null;
+  recommended_deep_scan?: string | null;
+  evidence_references?: string[];
+  pain_score: number | null;
+  revenue_score: number | null;
+  urgency_score: number | null;
+  trend_score: number | null;
+  intelligence_score?: number | null;
+  confidence_score?: number;
+  evidence_strength?: "limited" | "moderate" | "strong";
   source_evidence: string;
   buying_signal_score: number;
   frequency_score: number;
@@ -175,10 +188,46 @@ export function normalizeWeeklyProblemTitleKey(title: string | null | undefined)
     .toLowerCase();
 }
 
-function clamp(score: unknown, fallback = 5) {
+function clamp(score: unknown, fallback: number | null = null) {
   const value = Number(score);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(10, Math.max(0, Number(value.toFixed(1))));
+}
+
+const SCORE_SIGNALS = {
+  pain: ["pain", "friction", "manual", "wasting", "difficult", "broken", "error", "complaint"],
+  urgency: ["urgent", "immediately", "blocked", "deadline", "now", "critical", "cannot"],
+  revenue: ["pay", "paid", "price", "revenue", "cost", "customer", "client", "business"],
+} as const;
+
+function signalScore(texts: string[], signals: readonly string[]) {
+  if (texts.length === 0) return null;
+  const matches = texts.reduce((total, text) => total + signals.filter((signal) => text.toLowerCase().includes(signal)).length, 0);
+  return clamp(2 + Math.min(8, matches * 2));
+}
+
+/** Deterministic scores derived only from references to eligible evidence. */
+export function calculateWeeklyProblemScores(references: string[], evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = []) {
+  const referenceSet = new Set(references);
+  const matched = evidence.filter((item) => referenceSet.has(item.id));
+  const texts = matched.map((item) => `${item.title} ${item.summary}`);
+  const uniqueTypes = new Set(matched.map((item) => item.type)).size;
+  const confidence = matched.length === 0 ? 0 : clamp(matched.length * 1.6 + uniqueTypes * 1.2, 0) || 0;
+  const trend = matched.length < 2 ? null : clamp(2 + Math.min(8, (matched.length - 1) * 2 + (priorUserContext.length > 0 ? 1 : 0)));
+  const pain = signalScore(texts, SCORE_SIGNALS.pain);
+  const urgency = signalScore(texts, SCORE_SIGNALS.urgency);
+  const revenue = signalScore(texts, SCORE_SIGNALS.revenue);
+  const scored = [pain, urgency, revenue, trend].filter((value): value is number => value !== null);
+  const intelligence = scored.length < 2 ? null : Number((scored.reduce((sum, value) => sum + value, 0) / scored.length).toFixed(1));
+  return {
+    pain_score: pain,
+    urgency_score: urgency,
+    revenue_score: revenue,
+    trend_score: trend,
+    intelligence_score: intelligence,
+    confidence_score: confidence,
+    evidence_strength: matched.length >= 4 && uniqueTypes >= 2 ? "strong" as const : matched.length >= 2 ? "moderate" as const : "limited" as const,
+  };
 }
 
 
@@ -302,7 +351,7 @@ export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<Wee
 }
 
 export function hasMeaningfulWeeklyEvidence(sources: WeeklyEvidenceSource[]) {
-  return sources.some((source) => source.type === "scan" || source.type === "discover" || source.type === "saved_idea" || source.type === "conversion");
+  return sources.some((source) => Boolean(source.id) && (source.type === "scan" || source.type === "discover" || source.type === "saved_idea" || source.type === "conversion"));
 }
 
 export function buildEmptyWeeklyReport(period: WeeklyPeriod) {
@@ -340,12 +389,17 @@ Generation constraints:
 - Do not claim week-over-week change unless prior user context supports it.
 - Do not present shared aggregate context as the user's own activity.
 - Do not fabricate metrics or sources.
-- Return ONLY valid JSON with { "summary": string, "problems": [] } using the existing problem fields.`;
+- Every problem must include a specific title and evidence_references containing only IDs shown above.
+- A problem requires at least one evidence reference. Do not output a problem that cannot be traced to eligible evidence.
+- Do not assign numeric scores. SaaSScout calculates scores deterministically after validation.
+- Optional fields must be null when evidence does not support them; never use generic filler.
+- Return ONLY valid JSON with { "summary": string, "problems": [{ "problem_title": string, "problem_summary": string|null, "affected_users": string|null, "affected_niches": string|null, "observed_evidence": string|null, "repeated_patterns": string|null, "business_impact": string|null, "why_existing_tools_fail": string|null, "suggested_solutions": string|null, "suggested_mvp": string|null, "monetization_angle": string|null, "recommended_validation": string|null, "recommended_deep_scan": string|null, "evidence_references": string[] }] }.`;
 }
 
-export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[]) {
+export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = []) {
   if (!output || typeof output !== "object") throw new Error("Malformed weekly intelligence output.");
-  const summary = safeText(output.summary, "Weekly intelligence generated from user-owned activity.");
+  const summary = safeText(output.summary);
+  if (!summary) throw new Error("Weekly intelligence output is missing a summary.");
   if (!Array.isArray(output.problems)) throw new Error("Malformed weekly intelligence output.");
 
   const hasEvidence = hasMeaningfulWeeklyEvidence(evidence);
@@ -356,25 +410,25 @@ export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: W
   const problems = output.problems.slice(0, 5).map((raw) => {
     if (!raw || typeof raw !== "object") throw new Error("Malformed weekly intelligence problem.");
     const row = raw as Record<string, unknown>;
-    const sourceEvidence = safeText(row.source_evidence);
-    if (hasEvidence && !sourceEvidence) throw new Error("Weekly intelligence problem is missing source evidence.");
+    const title = safeText(row.problem_title);
+    if (!title) throw new Error("Weekly intelligence problem is missing a title.");
+    const references = Array.isArray(row.evidence_references) ? [...new Set(row.evidence_references.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))] : [];
+    const eligibleIds = new Set(evidence.map((item) => item.id));
+    if (references.length === 0 || references.some((id) => !eligibleIds.has(id))) throw new Error("Weekly intelligence problem has invalid evidence references.");
+    const matchedEvidence = evidence.filter((item) => references.includes(item.id));
+    const sourceEvidence = matchedEvidence.map((item) => item.summary).filter(Boolean).join(" ");
+    const scores = calculateWeeklyProblemScores(references, evidence, priorUserContext);
+    const optionalText = (key: string) => safeText(row[key]) || null;
 
     return {
-      problem_title: safeText(row.problem_title, "Untitled weekly pattern"),
-      problem_summary: safeText(row.problem_summary, "Observed from user-owned weekly activity."),
-      affected_niches: safeText(row.affected_niches, "User explored market"),
-      suggested_solutions: safeText(row.suggested_solutions, "Validation follow-up"),
-      pain_score: clamp(row.pain_score),
-      revenue_score: clamp(row.revenue_score),
-      urgency_score: clamp(row.urgency_score),
-      trend_score: clamp(row.trend_score),
-      monetization_angle: safeText(row.monetization_angle, "Validate willingness to pay before building."),
-      source_evidence: sourceEvidence || "No eligible user evidence available this period.",
-      buying_signal_score: clamp(row.buying_signal_score, 0),
-      frequency_score: clamp(row.frequency_score, 0),
-      opportunity_score: clamp(row.opportunity_score, 0),
-      problem_cluster: safeText(row.problem_cluster, "user_weekly_activity"),
-      source_quality_score: clamp(row.source_quality_score, 0),
+      problem_title: title,
+      problem_summary: optionalText("problem_summary"), affected_users: optionalText("affected_users"), affected_niches: optionalText("affected_niches"),
+      observed_evidence: optionalText("observed_evidence"), repeated_patterns: optionalText("repeated_patterns"), business_impact: optionalText("business_impact"),
+      why_existing_tools_fail: optionalText("why_existing_tools_fail"), suggested_solutions: optionalText("suggested_solutions"), suggested_mvp: optionalText("suggested_mvp"),
+      monetization_angle: optionalText("monetization_angle"), recommended_validation: optionalText("recommended_validation"), recommended_deep_scan: optionalText("recommended_deep_scan"),
+      evidence_references: references, ...scores, source_evidence: sourceEvidence,
+      buying_signal_score: 0, frequency_score: clamp(matchedEvidence.length * 2, 0) || 0, opportunity_score: scores.intelligence_score || 0,
+      problem_cluster: normalizeWeeklyProblemTitleKey(title), source_quality_score: scores.confidence_score,
     };
   });
 
