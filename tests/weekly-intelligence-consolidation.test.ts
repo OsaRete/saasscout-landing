@@ -146,7 +146,7 @@ test("claimed generation replaces children exactly once", async () => {
     dependencies: {
       repository: repo,
       aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "scan-1", title: "Scan", summary: "Evidence", occurredAt: "2026-07-14T00:00:00.000Z" }], sharedContext: [], bySource: {} }),
-      analyze: async () => ({ summary: "ok", problems: [{ problem_title: "Problem", source_evidence: "scan" }] }),
+      analyze: async () => ({ summary: "ok", problems: [{ problem_title: "Problem", source_evidence: "scan", evidence_references: ["scan-1"] }] }),
     },
   });
   assert.equal(result.status, "claimed");

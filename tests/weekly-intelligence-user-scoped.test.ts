@@ -98,6 +98,7 @@ test("valid output preserves existing Weekly UI response-compatible problem fiel
           trend_score: 5,
           monetization_angle: "Validate paid onboarding workflows.",
           source_evidence: "Observed in the user's Discover generation.",
+          evidence_references: ["d"],
         },
       ],
     },
