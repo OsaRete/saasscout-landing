@@ -7,6 +7,7 @@ import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregati
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
+import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,11 +150,49 @@ export async function runWeeklyGenerationForUser(userId: string, period: WeeklyP
           limitPerSource: 100,
           logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
         }),
+      loadPriorWeeklyMonitoringRecords,
       analyze: analyzeUserScopedWeeklySignals,
       log: logWeeklyDiagnostic,
       weeklyExecutionId: options.weeklyExecutionId,
       entryPath: options.entryPath,
     },
+  });
+}
+
+async function loadPriorWeeklyMonitoringRecords(userId: string, period: WeeklyPeriod): Promise<WeeklyMonitoringRecord[]> {
+  const client = getSupabaseAdminClient();
+  const { data: runs, error: runsError } = await client
+    .from("weekly_intelligence_runs")
+    .select("id,user_id,total_sources_analyzed,period_end")
+    .eq("user_id", userId)
+    .eq("status", "completed")
+    .lt("period_end", period.period_start)
+    .order("period_end", { ascending: false })
+    .limit(26);
+  if (runsError) throw runsError;
+  if (!runs?.length) return [];
+  const runsById = new Map(runs.map((run) => [run.id, run]));
+  const { data: problems, error: problemsError } = await client
+    .from("weekly_detected_problems")
+    .select("id,run_id,problem_title,problem_summary,affected_niches,evidence_references,created_at")
+    .in("run_id", [...runsById.keys()])
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (problemsError) throw problemsError;
+  return (problems || []).flatMap((problem) => {
+    const run = runsById.get(problem.run_id);
+    if (!run || run.user_id !== userId) return [];
+    return [{
+      id: problem.id,
+      ownerId: userId,
+      kind: "prior_weekly_problem" as const,
+      occurredAt: problem.created_at || run.period_end,
+      title: problem.problem_title,
+      niche: problem.affected_niches,
+      problemSummary: problem.problem_summary,
+      evidenceReferenceCount: Array.isArray(problem.evidence_references) ? problem.evidence_references.length : 0,
+      sourceCount: Number(run.total_sources_analyzed || 0),
+    }];
   });
 }
 
