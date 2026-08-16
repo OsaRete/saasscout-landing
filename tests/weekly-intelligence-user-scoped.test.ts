@@ -33,7 +33,7 @@ test("weekly evidence counts authenticated user's eligible Scan and Discover act
     { type: "scan", id: "scan-1", title: "CRM scan", summary: "Manual CRM pain", created_at: "2026-07-14T00:00:00.000Z" },
     { type: "discover", id: "discover-1", title: "Discovery", summary: "Accepted onboarding problem", created_at: "2026-07-15T00:00:00.000Z" },
   ];
-  assert.deepEqual(countWeeklyEvidence(evidence), { scan: 1, discover: 1, saved_idea: 0, conversion: 0 });
+  assert.deepEqual(countWeeklyEvidence(evidence), { scan: 1, discover: 1, saved_idea: 0, conversion: 0, external: 0 });
 });
 
 test("prompt separates user-owned evidence from supplementary shared intelligence", () => {
@@ -159,7 +159,7 @@ test("weekly evidence is collected through Data Moat aggregation and preserves s
 
   assert.deepEqual(calls, ["user-a"]);
   assert.deepEqual(result.userEvidence.map((item) => item.id), ["scan-start", "discover-mid", "saved-mid", "action-mid", "problem-mid", "opp-mid"]);
-  assert.deepEqual(countWeeklyEvidence(result.userEvidence), { scan: 1, discover: 3, saved_idea: 1, conversion: 1 });
+  assert.deepEqual(countWeeklyEvidence(result.userEvidence), { scan: 1, discover: 3, saved_idea: 1, conversion: 1, external: 0 });
   assert.deepEqual(result.priorUserContext.map((item) => item.id), ["prior-week"]);
   assert.deepEqual(result.sharedContext.map((item) => item.id), ["shared-1"]);
 });
