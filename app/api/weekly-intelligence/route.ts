@@ -8,6 +8,7 @@ import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelli
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
+import { collectWeeklyExternalEvidence, createWeeklySerpApiProvider, type WeeklyExternalEvidence } from "@/lib/weekly-external-evidence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -135,6 +136,23 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
     async markRunFailed({ runId }) {
       await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId).neq("status", "completed");
     },
+    async loadExternalHistory({ userId, beforePeriodStart }) {
+      const client = getSupabaseAdminClient();
+      const { data: runs, error: runError } = await client.from("weekly_intelligence_runs").select("id,period_start").eq("user_id", userId).lt("period_start", beforePeriodStart).order("period_start", { ascending: false }).limit(52);
+      if (runError) throw runError;
+      if (!runs?.length) return [];
+      const periods = new Map(runs.map((run) => [run.id, run.period_start]));
+      const { data, error } = await client.from("weekly_sources").select("run_id,canonical_url,content_fingerprint,first_seen_at,first_seen_period_start,last_seen_at,monitoring_topic_fingerprint").in("run_id", [...periods.keys()]).not("canonical_url", "is", null);
+      if (error) throw error;
+      return (data || []).flatMap((row) => row.canonical_url && row.content_fingerprint && row.first_seen_at && row.first_seen_period_start && row.last_seen_at && row.monitoring_topic_fingerprint ? [{ canonicalUrl: row.canonical_url, contentFingerprint: row.content_fingerprint, firstSeenAt: row.first_seen_at, firstSeenPeriodStart: row.first_seen_period_start, lastSeenAt: row.last_seen_at, periodStart: periods.get(row.run_id) || "", monitoringTopicFingerprint: row.monitoring_topic_fingerprint }] : []);
+    },
+    async persistExternalSources({ runId, sources }) {
+      if (!sources.length) return 0;
+      const rows = sources.map((source: WeeklyExternalEvidence, index) => ({ run_id: runId, evidence_id: source.evidenceId, source_title: source.title, source_url: source.url, source_snippet: source.snippet, source_type: source.sourceType, source_rank: source.sourceRank ?? index + 1, monitoring_topic_fingerprint: source.monitoringTopicFingerprint, source_provider: source.sourceProvider, canonical_url: source.canonicalUrl, published_at: source.publishedAt, collected_at: source.collectedAt, first_seen_at: source.firstSeenAt, last_seen_at: source.lastSeenAt, first_seen_period_start: source.firstSeenPeriodStart, content_fingerprint: source.contentFingerprint, freshness_class: source.freshness, origin_class: source.originClass }));
+      const { data, error } = await getSupabaseAdminClient().from("weekly_sources").upsert(rows, { onConflict: "run_id,evidence_id", ignoreDuplicates: true }).select("id");
+      if (error) throw error;
+      return data?.length || 0;
+    },
   };
 }
 
@@ -151,6 +169,7 @@ export async function runWeeklyGenerationForUser(userId: string, period: WeeklyP
           logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
         }),
       loadPriorWeeklyMonitoringRecords,
+      collectExternal: ({ topics, runId, period, collectedAt }) => collectWeeklyExternalEvidence({ topics, runId, period, collectedAt, providers: [createWeeklySerpApiProvider()] }),
       analyze: analyzeUserScopedWeeklySignals,
       log: logWeeklyDiagnostic,
       weeklyExecutionId: options.weeklyExecutionId,
@@ -313,7 +332,7 @@ export async function POST(req: Request) {
 
 const SAFE_WEEKLY_RUN_FIELDS = "id,status,total_sources_analyzed,summary,period_start,period_end,created_at";
 const SAFE_WEEKLY_PROBLEM_FIELDS = "id,run_id,problem_title,problem_summary,affected_users,affected_niches,observed_evidence,repeated_patterns,business_impact,why_existing_tools_fail,suggested_solutions,suggested_mvp,monetization_angle,recommended_validation,recommended_deep_scan,evidence_references,pain_score,revenue_score,urgency_score,trend_score,intelligence_score,confidence_score,evidence_strength,source_evidence,created_at";
-const SAFE_WEEKLY_SOURCE_FIELDS = "id,run_id,source_title,source_url,source_snippet,source_type,source_rank,category,created_at";
+const SAFE_WEEKLY_SOURCE_FIELDS = "id,evidence_id,run_id,source_title,source_url,source_snippet,source_type,source_provider,canonical_url,published_at,collected_at,first_seen_at,last_seen_at,first_seen_period_start,content_fingerprint,freshness_class,origin_class,source_rank,category,created_at";
 
 /** Authenticated, ownership-checked projection. The browser never reads Weekly tables directly. */
 export async function GET(req: Request) {

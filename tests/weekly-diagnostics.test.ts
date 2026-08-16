@@ -81,6 +81,24 @@ test("historical monitoring context is diagnosed but cannot bypass the no-curren
   assert.equal(JSON.stringify(diagnostic).includes("Manual invoice workflows"), false);
 });
 
+test("fresh external evidence can generate without current activity and reports truthful counts", async () => {
+  let persisted = 0; let analyzedIds: string[] = [];
+  const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
+    repository: repository({ async loadExternalHistory() { return []; }, async persistExternalSources({ sources }: { sources: unknown[] }) { persisted += sources.length; return sources.length; } }),
+    aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old", ownerId: "user-1", title: "Agency invoicing", summary: "Historical only", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
+    collectExternal: async ({ runId, period: currentPeriod, collectedAt }: { runId: string; period: typeof period; collectedAt: string }) => ({ status: "healthy" as const, observations: [{ evidenceId: "weekly_external_abc", runId, monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: "https://example.com/a", canonicalUrl: "https://example.com/a", title: "Invoice pain", snippet: "Manual errors", publishedAt: "2026-08-04T00:00:00.000Z", collectedAt, firstSeenAt: collectedAt, lastSeenAt: collectedAt, firstSeenPeriodStart: currentPeriod.period_start, contentFingerprint: "wec_1", freshness: "new" as const, originClass: "raw_external" as const, sourceRank: 1 }], metrics: { providerAttemptCount: 1, providerSuccessCount: 1, providerFailureCount: 0, providerNotConfiguredCount: 0, rawExternalResultCount: 1, normalizedExternalResultCount: 1, deduplicatedExternalCount: 1, sourceDegraded: false } }),
+    analyze: async ({ userEvidence }: { userEvidence: Array<{ id: string }> }) => { analyzedIds = userEvidence.map((item) => item.id); return { summary: "Fresh evidence found", problems: [] }; },
+  }) });
+  assert.deepEqual(analyzedIds, ["weekly_external_abc"]); assert.equal(persisted, 1); assert.equal(result.sources_saved, 1);
+  assert.equal(result.sourceCounts.externalSourcesPersisted, 1); assert.equal(result.sourceCounts.currentPeriodInternalEvidenceCount, 0); assert.equal(result.sourceCounts.totalEvidenceUsed, 1);
+});
+
+test("completed reuse performs no collection, source persistence, or model work", async () => {
+  let work = 0;
+  await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({ repository: repository({ async claimRun() { return { status: "completed" as const, run: { id: "run-1", total_sources_analyzed: 2 } }; }, async persistExternalSources() { work += 1; return 0; } }), collectExternal: async () => { work += 1; throw new Error("must not collect"); }, analyze: async () => { work += 1; return { summary: "bad", problems: [] }; } }) });
+  assert.equal(work, 0);
+});
+
 test("safe diagnostics contract is wired through button, cron, UI, and Vercel schedule", () => {
   const buttonRoute = readFileSync("app/api/weekly-intelligence/route.ts", "utf8");
   const cronRoute = readFileSync("app/api/cron/route.ts", "utf8");

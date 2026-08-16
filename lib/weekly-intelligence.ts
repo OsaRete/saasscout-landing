@@ -5,7 +5,7 @@ export type WeeklyPeriod = {
   boundary: "[start,end)";
 };
 
-export type WeeklyEvidenceSourceType = "scan" | "discover" | "saved_idea" | "conversion";
+export type WeeklyEvidenceSourceType = "scan" | "discover" | "saved_idea" | "conversion" | "external";
 
 export type WeeklyEvidenceSource = {
   type: WeeklyEvidenceSourceType;
@@ -346,12 +346,12 @@ export async function collectWeeklyEvidenceFromDataMoat(input: {
 export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<WeeklyEvidenceSourceType, number> {
   return sources.reduce<Record<WeeklyEvidenceSourceType, number>>(
     (counts, source) => ({ ...counts, [source.type]: counts[source.type] + 1 }),
-    { scan: 0, discover: 0, saved_idea: 0, conversion: 0 }
+    { scan: 0, discover: 0, saved_idea: 0, conversion: 0, external: 0 }
   );
 }
 
 export function hasMeaningfulWeeklyEvidence(sources: WeeklyEvidenceSource[]) {
-  return sources.some((source) => Boolean(source.id) && (source.type === "scan" || source.type === "discover" || source.type === "saved_idea" || source.type === "conversion"));
+  return sources.some((source) => Boolean(source.id));
 }
 
 export function buildEmptyWeeklyReport(period: WeeklyPeriod) {
@@ -375,7 +375,7 @@ Reporting period:
 - timezone: ${input.period.timezone}
 
 User-owned evidence for this period:
-${input.userEvidence.map((source, index) => `${index + 1}. [${source.type}] ${source.title}\nCreated: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
+${input.userEvidence.map((source, index) => `${index + 1}. ID: ${source.id}\nClass: ${source.type === "external" ? "raw_external" : "internal_user_activity"}\n[${source.type}] ${source.title}\nObserved/published: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
 
 Prior user context, outside the reporting period, for continuity only:
 ${input.priorUserContext.map((source, index) => `${index + 1}. [${source.type}] ${source.title}\nCreated: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
