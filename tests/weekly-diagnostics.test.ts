@@ -60,6 +60,27 @@ test("provider missing configuration is classified without exposing raw error", 
   );
 });
 
+test("historical monitoring context is diagnosed but cannot bypass the no-current-evidence gate", async () => {
+  const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  let analyzeCalls = 0;
+  const result = await runAuthoritativeWeeklyGenerationForUser({
+    userId: "user-1",
+    period,
+    dependencies: deps({
+      aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old-scan", ownerId: "user-1", title: "Agency invoicing", summary: "Manual invoice workflows", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
+      analyze: async () => { analyzeCalls += 1; return { summary: "must not run", problems: [] }; },
+      log: (event: string, payload: Record<string, unknown>) => events.push({ event, payload }),
+    }),
+  });
+  assert.equal(analyzeCalls, 0);
+  assert.equal(result.problems.length, 0);
+  const diagnostic = events.find((entry) => entry.event === "monitoring_context_selected")?.payload;
+  assert.equal(diagnostic?.currentPeriodEvidenceCount, 0);
+  assert.equal(diagnostic?.monitoringTopicCount, 1);
+  assert.equal(diagnostic?.historicalContextAvailable, true);
+  assert.equal(JSON.stringify(diagnostic).includes("Manual invoice workflows"), false);
+});
+
 test("safe diagnostics contract is wired through button, cron, UI, and Vercel schedule", () => {
   const buttonRoute = readFileSync("app/api/weekly-intelligence/route.ts", "utf8");
   const cronRoute = readFileSync("app/api/cron/route.ts", "utf8");

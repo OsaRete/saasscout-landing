@@ -14,6 +14,7 @@ import {
   type WeeklyReportProblem,
   type WeeklySharedSource,
 } from "./weekly-intelligence.ts";
+import { buildWeeklyMonitoringRecordsFromDataMoat, selectWeeklyMonitoringTopics, type WeeklyMonitoringRecord } from "./weekly-monitoring-context.ts";
 
 export type WeeklyGenerationClaimStatus = "claimed" | "completed" | "processing" | "reclaimed";
 
@@ -28,6 +29,7 @@ export type WeeklyDiagnosticStage =
   | "run_claimed"
   | "external_sources_collected"
   | "data_moat_sources_loaded"
+  | "monitoring_context_selected"
   | "model_generation_started"
   | "model_generation_completed"
   | "model_response_parsed"
@@ -136,6 +138,7 @@ export type AuthoritativeWeeklyGenerationRepository = {
 export type AuthoritativeWeeklyGenerationDependencies = {
   repository: AuthoritativeWeeklyGenerationRepository;
   aggregate: (userId: string) => Promise<Parameters<typeof collectWeeklyEvidenceFromDataMoat>[0] extends { aggregate: infer A } ? Awaited<ReturnType<Extract<A, (...args: never[]) => unknown>>> : never>;
+  loadPriorWeeklyMonitoringRecords?: (userId: string, period: WeeklyPeriod) => Promise<WeeklyMonitoringRecord[]>;
   analyze: (input: {
     period: WeeklyPeriod;
     userEvidence: WeeklyEvidenceSource[];
@@ -211,11 +214,20 @@ export async function runAuthoritativeWeeklyGenerationForUser({
 
   try {
     currentStage = "data_moat_sources_loaded";
-    const { userEvidence, priorUserContext, sharedContext } = await collectWeeklyEvidenceFromDataMoat({
+    const { aggregation, userEvidence, priorUserContext, sharedContext } = await collectWeeklyEvidenceFromDataMoat({
       userId,
       period,
       aggregate: dependencies.aggregate,
     });
+    const priorWeeklyRecords = dependencies.loadPriorWeeklyMonitoringRecords
+      ? await dependencies.loadPriorWeeklyMonitoringRecords(userId, period)
+      : [];
+    const monitoring = selectWeeklyMonitoringTopics({
+      authenticatedUserId: userId,
+      periodEnd: period.period_end,
+      records: [...buildWeeklyMonitoringRecordsFromDataMoat(aggregation, userId), ...priorWeeklyRecords],
+    });
+    logStage("monitoring_context_selected", { ...monitoring.diagnostics, currentPeriodEvidenceCount: userEvidence.length });
     logStage("external_sources_collected", { sourceCount: userEvidence.length });
     logStage("data_moat_sources_loaded", { sourceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
     const emptyEvidence = userEvidence.length === 0;
