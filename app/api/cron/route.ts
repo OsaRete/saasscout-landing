@@ -54,11 +54,11 @@ export async function GET(req: Request) {
       const weeklyExecutionId = createWeeklyExecutionId();
       try {
         const result = await runWeeklyGenerationForUser(user.user_id, period, { weeklyExecutionId, entryPath: "cron" });
-        results.push({ user_id: user.user_id, weeklyExecutionId, code: result.code, stage: result.stage, status: result.status, success: true, reused: result.code === "weekly_current_period_reused", problems: result.problems.length, sources_saved: result.sources_saved });
+        results.push({ weeklyExecutionId, code: result.code, stage: result.stage, status: result.status, success: true, reused: result.reused, executionMode: result.executionMode, providerState: result.providerState, sourceDegraded: result.sourceCounts.sourceDegraded, problems: result.problems.length, externalSourcesPersisted: result.sourceCounts.externalSourcesPersisted });
       } catch (error) {
         const diagnostic = getWeeklyDiagnostic(error, "response_completed", weeklyExecutionId);
-        console.warn("Weekly intelligence diagnostic", { event: "schedule_user_failed", invocationId, weeklyExecutionId, entryPath: "weekly_schedule", userId: user.user_id, periodKey: `${period.period_start}/${period.period_end}`, code: diagnostic.code, stage: diagnostic.stage });
-        results.push({ user_id: user.user_id, weeklyExecutionId, success: false, error: "Could not generate weekly intelligence.", code: diagnostic.code, stage: diagnostic.stage });
+        console.warn("Weekly intelligence diagnostic", { event: "schedule_user_failed", invocationId, weeklyExecutionId, entryPath: "weekly_schedule", periodKey: `${period.period_start}/${period.period_end}`, code: diagnostic.code, stage: diagnostic.stage });
+        results.push({ weeklyExecutionId, success: false, error: "Could not generate weekly intelligence.", code: diagnostic.code, stage: diagnostic.stage });
       }
     }
 

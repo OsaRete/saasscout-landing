@@ -12,6 +12,10 @@ type WeeklyRun = {
   total_sources_analyzed: number | null;
   summary: string | null;
   created_at: string;
+  execution_mode: "fresh_market" | "mixed" | "data_moat_fallback" | "insufficient_context" | null;
+  external_provider_state: "healthy" | "degraded" | "unavailable" | "not_configured" | "no_results" | null;
+  external_sources_persisted: number | null;
+  source_degraded: boolean | null;
 };
 
 type WeeklyProblem = {
@@ -92,13 +96,16 @@ type WeeklyApiResponse = {
   stage?: string;
   weeklyExecutionId?: string;
   status?: string;
+  executionMode?: WeeklyRun["execution_mode"];
+  providerState?: WeeklyRun["external_provider_state"];
+  reused?: boolean;
 };
 
 function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
   const diagnosticSuffix = result.weeklyExecutionId ? ` Diagnostic ID: ${result.weeklyExecutionId}.` : "";
 
   if (responseOk && result.code === "weekly_current_period_reused") {
-    return `Current weekly report already exists and was reused.${diagnosticSuffix}`;
+    return `This week's intelligence is already up to date.${diagnosticSuffix}`;
   }
 
   if (responseOk && result.code === "weekly_source_degraded") {
@@ -113,7 +120,14 @@ function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
     return `Could not generate weekly intelligence.${diagnosticSuffix}`;
   }
 
-  return `Weekly Intelligence generated successfully.${diagnosticSuffix}`;
+  if (result.executionMode === "data_moat_fallback") return `Live market sources were temporarily unavailable, so SaaSScout generated this report from your existing Data Moat.${diagnosticSuffix}`;
+  if (result.executionMode === "insufficient_context") return `SaaSScout did not have enough reliable fresh or historical evidence to generate a trustworthy report this week.${diagnosticSuffix}`;
+  if (result.providerState === "degraded") return `Weekly Intelligence was updated with partial live-market coverage and your Data Moat.${diagnosticSuffix}`;
+  return `Weekly Intelligence was updated using fresh market evidence.${diagnosticSuffix}`;
+}
+
+function modeLabel(mode: WeeklyRun["execution_mode"]) {
+  return ({ fresh_market: "Fresh market", mixed: "Fresh + Data Moat", data_moat_fallback: "Data Moat fallback", insufficient_context: "Insufficient context" } as const)[mode || "insufficient_context"];
 }
 
 function buildSourcesEvidence(sources: WeeklySource[]) {
@@ -189,8 +203,7 @@ export default function WeeklyPage() {
       try {
         result = JSON.parse(rawText);
       } catch {
-        console.error("Raw API response:", rawText);
-        setMessage("The API returned an invalid response. Check terminal logs.");
+        setMessage("The API returned an invalid response.");
         return;
       }
 
@@ -230,11 +243,6 @@ export default function WeeklyPage() {
   }, [sources, selectedRun]);
 
   const topProblem = selectedProblems[0] || null;
-
-  const scoredProblems = selectedProblems.map(getProblemScore).filter((score): score is number => score !== null);
-  const averageProblemScore = scoredProblems.length > 0
-    ? Number((scoredProblems.reduce((sum, score) => sum + score, 0) / scoredProblems.length).toFixed(1))
-    : null;
 
   if (loadingAuth || loadingData) {
     return (
@@ -297,7 +305,7 @@ export default function WeeklyPage() {
                 disabled={generating}
                 className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {generating ? "Generating..." : "Run Weekly Intelligence"}
+                {generating ? "Refreshing..." : "Refresh Weekly Intelligence"}
               </button>
 
               <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">
@@ -362,7 +370,23 @@ export default function WeeklyPage() {
 
             {selectedRun && (
               <>
-                <div className="mt-8 grid gap-5 md:grid-cols-4">
+                <div className="mt-8 grid gap-5 md:grid-cols-3 lg:grid-cols-6">
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+                    <p className="text-sm text-gray-400">Last updated</p>
+                    <h2 className="mt-3 text-lg font-bold">{formatDate(selectedRun.created_at)}</h2>
+                    <p className="mt-1 text-xs text-gray-500">Automatic Monday run</p>
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+                    <p className="text-sm text-gray-400">Intelligence mode</p>
+                    <h2 className="mt-3 text-lg font-bold">{modeLabel(selectedRun.execution_mode)}</h2>
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+                    <p className="text-sm text-gray-400">Live market coverage</p>
+                    <h2 className="mt-3 text-lg font-bold capitalize">{selectedRun.source_degraded ? "Degraded" : (selectedRun.external_provider_state || "Legacy / unknown").replace("_", " ")}</h2>
+                  </div>
+
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                     <p className="text-sm text-gray-400">Problems detected</p>
                     <h2 className="mt-3 text-4xl font-bold">
@@ -373,14 +397,7 @@ export default function WeeklyPage() {
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                     <p className="text-sm text-gray-400">External evidence</p>
                     <h2 className="mt-3 text-4xl font-bold">
-                      {selectedSources.length}
-                    </h2>
-                  </div>
-
-                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">Avg intelligence</p>
-                    <h2 className="mt-3 text-4xl font-bold">
-                      {averageProblemScore ?? "—"}
+                      {selectedRun.external_sources_persisted ?? selectedSources.length}
                     </h2>
                   </div>
 
