@@ -8,7 +8,7 @@ import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelli
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
-import { collectWeeklyExternalEvidence, createWeeklySerpApiProvider, type WeeklyExternalEvidence } from "@/lib/weekly-external-evidence";
+import { collectWeeklyExternalEvidence, createWeeklySerpApiProvider, normalizeWeeklyExternalHistoryRows, type WeeklyExternalEvidence } from "@/lib/weekly-external-evidence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +45,10 @@ function sanitizeWeeklyError() {
 
 function logWeeklyDiagnostic(event: string, payload: Record<string, unknown>) {
   console.info("Weekly intelligence diagnostic", { event, ...payload });
+}
+
+function safePostgrestFailure(operation: string, error: { code?: string; details?: string; hint?: string; message?: string } | null) {
+  logWeeklyDiagnostic("weekly_repository_operation_failed", { operation, postgresCode: error?.code || null, hasDetails: Boolean(error?.details), hasHint: Boolean(error?.hint), hasMessage: Boolean(error?.message) });
 }
 
 const WEEKLY_CLAIM_RPC_NAME = "claim_weekly_intelligence_run";
@@ -139,18 +143,18 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
     async loadExternalHistory({ userId, beforePeriodStart }) {
       const client = getSupabaseAdminClient();
       const { data: runs, error: runError } = await client.from("weekly_intelligence_runs").select("id,period_start").eq("user_id", userId).lt("period_start", beforePeriodStart).order("period_start", { ascending: false }).limit(52);
-      if (runError) throw runError;
+      if (runError) { safePostgrestFailure("weekly_external_history_runs_select", runError); throw runError; }
       if (!runs?.length) return [];
       const periods = new Map(runs.map((run) => [run.id, run.period_start]));
       const { data, error } = await client.from("weekly_sources").select("run_id,canonical_url,content_fingerprint,first_seen_at,first_seen_period_start,last_seen_at,monitoring_topic_fingerprint").in("run_id", [...periods.keys()]).not("canonical_url", "is", null);
-      if (error) throw error;
-      return (data || []).flatMap((row) => row.canonical_url && row.content_fingerprint && row.first_seen_at && row.first_seen_period_start && row.last_seen_at && row.monitoring_topic_fingerprint ? [{ canonicalUrl: row.canonical_url, contentFingerprint: row.content_fingerprint, firstSeenAt: row.first_seen_at, firstSeenPeriodStart: row.first_seen_period_start, lastSeenAt: row.last_seen_at, periodStart: periods.get(row.run_id) || "", monitoringTopicFingerprint: row.monitoring_topic_fingerprint }] : []);
+      if (error) { safePostgrestFailure("weekly_external_history_sources_select", error); throw error; }
+      return normalizeWeeklyExternalHistoryRows(data || [], periods);
     },
     async persistExternalSources({ runId, sources }) {
       if (!sources.length) return 0;
       const rows = sources.map((source: WeeklyExternalEvidence, index) => ({ run_id: runId, evidence_id: source.evidenceId, source_title: source.title, source_url: source.url, source_snippet: source.snippet, source_type: source.sourceType, source_rank: source.sourceRank ?? index + 1, monitoring_topic_fingerprint: source.monitoringTopicFingerprint, source_provider: source.sourceProvider, canonical_url: source.canonicalUrl, published_at: source.publishedAt, collected_at: source.collectedAt, first_seen_at: source.firstSeenAt, last_seen_at: source.lastSeenAt, first_seen_period_start: source.firstSeenPeriodStart, content_fingerprint: source.contentFingerprint, freshness_class: source.freshness, origin_class: source.originClass }));
       const { data, error } = await getSupabaseAdminClient().from("weekly_sources").upsert(rows, { onConflict: "run_id,evidence_id", ignoreDuplicates: true }).select("id");
-      if (error) throw error;
+      if (error) { safePostgrestFailure("weekly_external_sources_upsert", error); throw error; }
       return data?.length || 0;
     },
   };

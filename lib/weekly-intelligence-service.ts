@@ -31,6 +31,8 @@ export type WeeklyDiagnosticStage =
   | "external_sources_collected"
   | "external_sources_normalized"
   | "external_sources_deduplicated"
+  | "external_history_loading_started"
+  | "external_history_loaded"
   | "external_sources_classified"
   | "data_moat_sources_loaded"
   | "monitoring_context_selected"
@@ -54,6 +56,7 @@ export type WeeklyDiagnosticCode =
   | "weekly_current_period_reused"
   | "weekly_run_claim_failed"
   | "weekly_source_collection_failed"
+  | "weekly_external_history_read_failed"
   | "weekly_source_degraded"
   | "weekly_data_moat_read_failed"
   | "weekly_provider_not_configured"
@@ -108,6 +111,8 @@ function classifyWeeklyError(error: unknown, stage: WeeklyDiagnosticStage, weekl
   if (/Malformed|missing source evidence|without user evidence/i.test(message)) return new WeeklyDiagnosticError("weekly_response_validation_failed", "model_response_validated", "Weekly provider response failed validation.", { cause: error, weeklyExecutionId });
   if (stage === "run_claimed" || stage === "existing_run_checked") return new WeeklyDiagnosticError("weekly_run_claim_failed", stage, "Weekly run claim failed.", { cause: error, weeklyExecutionId });
   if (stage === "data_moat_sources_loaded") return new WeeklyDiagnosticError("weekly_data_moat_read_failed", stage, "Weekly Data Moat read failed.", { cause: error, weeklyExecutionId });
+  if (stage === "external_history_loading_started") return new WeeklyDiagnosticError("weekly_external_history_read_failed", stage, "Weekly external history read failed.", { cause: error, weeklyExecutionId });
+  if (stage === "sources_persisted") return new WeeklyDiagnosticError("weekly_source_persistence_failed", stage, "Weekly source persistence failed.", { cause: error, weeklyExecutionId });
   if (stage === "problems_persisted") return new WeeklyDiagnosticError("weekly_problem_persistence_failed", stage, "Weekly problem persistence failed.", { cause: error, weeklyExecutionId });
   if (stage === "completion_transitioned") return new WeeklyDiagnosticError("weekly_completion_failed", stage, "Weekly completion transition failed.", { cause: error, weeklyExecutionId });
   if (stage === "model_generation_completed") return new WeeklyDiagnosticError("weekly_provider_failed", stage, "Weekly provider request failed.", { cause: error, weeklyExecutionId });
@@ -248,14 +253,18 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     if ((collection.status === "unavailable" || collection.status === "not_configured") && userEvidence.length === 0 && monitoring.topics.length > 0) {
       throw new WeeklyDiagnosticError(collection.status === "not_configured" ? "weekly_provider_not_configured" : "weekly_source_collection_failed", "external_sources_collected", "Fresh external evidence collection is unavailable.", { weeklyExecutionId });
     }
+    logStage("external_history_loading_started");
     const history = dependencies.repository.loadExternalHistory ? await dependencies.repository.loadExternalHistory({ userId, beforePeriodStart: period.period_start }) : [];
+    logStage("external_history_loaded", { historicalSourceCount: history.length });
     const external = classifyWeeklyExternalEvidence(collection.observations, history, period);
     const eligibleExternal = external.filter((item) => item.freshness !== "unchanged");
+    const sourceCountsBeforePersistence = { externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: eligibleExternal.length, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length };
+    logStage("external_sources_classified", sourceCountsBeforePersistence);
+    currentStage = "sources_persisted";
     const persistedExternal = dependencies.repository.persistExternalSources ? await dependencies.repository.persistExternalSources({ runId, sources: external }) : 0;
     const externalEvidence: WeeklyEvidenceSource[] = eligibleExternal.map((item) => ({ type: "external", id: item.evidenceId, title: item.title || item.canonicalUrl, summary: item.snippet || item.title || "Public external observation", created_at: item.publishedAt || item.collectedAt, provenance: `raw_external:${item.sourceProvider}:${item.freshness}` }));
     const evidenceEnvelope = [...userEvidence, ...externalEvidence];
     const sourceCounts: WeeklySourceCounts = { currentPeriodInternalEvidenceCount: userEvidence.length, monitoringTopicCount: monitoring.topics.length, externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: eligibleExternal.length, externalSourcesPersisted: persistedExternal, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length, totalEvidenceUsed: evidenceEnvelope.length, sourceDegraded: collection.metrics.sourceDegraded };
-    logStage("external_sources_classified", sourceCounts);
     logStage("sources_persisted", { persistedExternalCount: persistedExternal });
     logStage("data_moat_sources_loaded", { sourceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
     const emptyEvidence = evidenceEnvelope.length === 0;

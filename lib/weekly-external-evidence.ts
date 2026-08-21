@@ -18,6 +18,7 @@ export type WeeklyExternalEvidence = Readonly<{
   contentFingerprint: string; freshness: WeeklyExternalFreshness; originClass: WeeklyExternalOriginClass; sourceRank: number | null;
 }>;
 export type WeeklyExternalHistory = Readonly<{ canonicalUrl: string; contentFingerprint: string; firstSeenAt: string; firstSeenPeriodStart: string; lastSeenAt: string; periodStart: string; monitoringTopicFingerprint: string }>;
+export type WeeklyExternalHistoryRow = Readonly<{ run_id?: unknown; canonical_url?: unknown; content_fingerprint?: unknown; first_seen_at?: unknown; first_seen_period_start?: unknown; last_seen_at?: unknown; monitoring_topic_fingerprint?: unknown }>;
 export type WeeklyExternalQuery = Readonly<{ monitoringTopicFingerprint: string; query: string }>;
 export type WeeklyExternalProvider = Readonly<{
   name: string; configured: () => boolean;
@@ -85,8 +86,9 @@ export function deduplicateWeeklyExternalEvidence(observations: readonly WeeklyE
 }
 
 export function classifyWeeklyExternalEvidence(observations: readonly WeeklyExternalEvidence[], history: readonly WeeklyExternalHistory[], period: WeeklyPeriod) {
+  const validHistory = history.filter((item) => [item.canonicalUrl, item.contentFingerprint, item.firstSeenAt, item.firstSeenPeriodStart, item.lastSeenAt, item.periodStart, item.monitoringTopicFingerprint].every((value) => typeof value === "string" && value.length > 0) && Number.isFinite(new Date(item.periodStart).getTime()));
   return observations.map((item) => {
-    const matches = history.filter((old) => old.canonicalUrl === item.canonicalUrl && old.monitoringTopicFingerprint === item.monitoringTopicFingerprint).sort((a, b) => b.periodStart.localeCompare(a.periodStart));
+    const matches = validHistory.filter((old) => old.canonicalUrl === item.canonicalUrl && old.monitoringTopicFingerprint === item.monitoringTopicFingerprint).sort((a, b) => new Date(b.periodStart).getTime() - new Date(a.periodStart).getTime());
     const latest = matches[0];
     let freshness: WeeklyExternalFreshness;
     if (!latest && !item.publishedAt) freshness = "publication_unknown";
@@ -97,6 +99,16 @@ export function classifyWeeklyExternalEvidence(observations: readonly WeeklyExte
       freshness = immediatelyPrevious ? "unchanged" : "resurfaced";
     }
     return Object.freeze({ ...item, freshness, firstSeenAt: latest?.firstSeenAt || item.firstSeenAt, firstSeenPeriodStart: latest?.firstSeenPeriodStart || item.firstSeenPeriodStart });
+  });
+}
+
+/** Converts the untrusted PostgREST boundary into classification-safe history. */
+export function normalizeWeeklyExternalHistoryRows(rows: readonly WeeklyExternalHistoryRow[], periods: ReadonlyMap<unknown, unknown>): WeeklyExternalHistory[] {
+  return rows.flatMap((row) => {
+    const periodStart = periods.get(row.run_id);
+    const values = [row.canonical_url, row.content_fingerprint, row.first_seen_at, row.first_seen_period_start, row.last_seen_at, row.monitoring_topic_fingerprint, periodStart];
+    if (!values.every((value) => typeof value === "string" && value.length > 0) || !Number.isFinite(new Date(periodStart as string).getTime())) return [];
+    return [{ canonicalUrl: row.canonical_url as string, contentFingerprint: row.content_fingerprint as string, firstSeenAt: row.first_seen_at as string, firstSeenPeriodStart: row.first_seen_period_start as string, lastSeenAt: row.last_seen_at as string, periodStart: periodStart as string, monitoringTopicFingerprint: row.monitoring_topic_fingerprint as string }];
   });
 }
 
