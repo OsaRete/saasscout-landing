@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildWeeklyExternalQueries, canonicalizeWeeklyExternalUrl, classifyWeeklyExternalEvidence, collectWeeklyExternalEvidence, deduplicateWeeklyExternalEvidence, normalizeWeeklyExternalResult, WEEKLY_EXTERNAL_LIMITS, WEEKLY_CONTENT_FINGERPRINT_VERSION, WEEKLY_EXTERNAL_SOURCE_FINGERPRINT_VERSION } from "../lib/weekly-external-evidence.ts";
+import { buildWeeklyExternalQueries, canonicalizeWeeklyExternalUrl, classifyWeeklyExternalEvidence, collectWeeklyExternalEvidence, deduplicateWeeklyExternalEvidence, normalizeWeeklyExternalHistoryRows, normalizeWeeklyExternalResult, WEEKLY_EXTERNAL_LIMITS, WEEKLY_CONTENT_FINGERPRINT_VERSION, WEEKLY_EXTERNAL_SOURCE_FINGERPRINT_VERSION } from "../lib/weekly-external-evidence.ts";
 import type { WeeklyMonitoringTopic } from "../lib/weekly-monitoring-context.ts";
 
 const period = { period_start: "2026-08-10T00:00:00.000Z", period_end: "2026-08-17T00:00:00.000Z", timezone: "UTC" as const, boundary: "[start,end)" as const };
@@ -54,6 +54,19 @@ test("cross-period freshness is deterministic and leaves history immutable", () 
   assert.equal(classifyWeeklyExternalEvidence([item], [{ ...history[0], periodStart: "2026-07-20T00:00:00.000Z" }], period)[0].freshness, "resurfaced");
   assert.equal(classifyWeeklyExternalEvidence([{ ...item, publishedAt: null }], [], period)[0].freshness, "publication_unknown");
   assert.equal(JSON.stringify(history), snapshot);
+});
+
+test("legacy NULL and malformed history rows are ignored at the PostgREST boundary", () => {
+  const item = normalized();
+  const periods = new Map<unknown, unknown>([["legacy", "2026-08-03T00:00:00.000Z"], ["malformed", null], ["valid", "2026-08-03T00:00:00.000Z"]]);
+  const rows = [
+    { run_id: "legacy", canonical_url: null, content_fingerprint: null, first_seen_at: null, first_seen_period_start: null, last_seen_at: null, monitoring_topic_fingerprint: null },
+    { run_id: "malformed", canonical_url: item.canonicalUrl, content_fingerprint: item.contentFingerprint, first_seen_at: item.firstSeenAt, first_seen_period_start: item.firstSeenPeriodStart, last_seen_at: item.lastSeenAt, monitoring_topic_fingerprint: item.monitoringTopicFingerprint },
+    { run_id: "valid", canonical_url: item.canonicalUrl, content_fingerprint: item.contentFingerprint, first_seen_at: item.firstSeenAt, first_seen_period_start: item.firstSeenPeriodStart, last_seen_at: item.lastSeenAt, monitoring_topic_fingerprint: item.monitoringTopicFingerprint },
+  ];
+  const history = normalizeWeeklyExternalHistoryRows(rows, periods);
+  assert.equal(history.length, 1);
+  assert.equal(classifyWeeklyExternalEvidence([item], [...history, { ...history[0], periodStart: null as unknown as string }], period)[0].freshness, "unchanged");
 });
 
 test("collector distinguishes healthy, degraded, unavailable, missing configuration, and result caps", async () => {
