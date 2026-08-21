@@ -400,6 +400,9 @@ Generation constraints:
 - A problem requires at least one evidence reference. Do not output a problem that cannot be traced to eligible evidence.
 - Do not assign numeric scores. SaaSScout calculates scores deterministically after validation.
 - Optional fields must be null when evidence does not support them; never use generic filler.
+- Historical_context IDs may ground fallback context, but must never be represented or cited as fresh_external evidence.
+- Return exactly one JSON object and nothing else: no Markdown, fences, commentary, prefix, or suffix.
+- The exact top-level schema is { "summary": string, "problems": array }. Every problem must have exactly the intelligence fields below; do not add provider scores.
 - Return ONLY valid JSON with { "summary": string, "problems": [{ "problem_title": string, "problem_summary": string|null, "affected_users": string|null, "affected_niches": string|null, "observed_evidence": string|null, "repeated_patterns": string|null, "business_impact": string|null, "why_existing_tools_fail": string|null, "suggested_solutions": string|null, "suggested_mvp": string|null, "monetization_angle": string|null, "recommended_validation": string|null, "recommended_deep_scan": string|null, "evidence_references": string[] }] }.`;
 }
 

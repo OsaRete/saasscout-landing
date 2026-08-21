@@ -4,7 +4,6 @@ import { recordOperationalEvent } from "./operational-events.ts";
 import {
   buildEmptyWeeklyReport,
   collectWeeklyEvidenceFromDataMoat,
-  countWeeklyEvidence,
   getWeeklyIntelligencePeriod,
   normalizeWeeklyProblemTitleKey,
   validateWeeklyModelOutput,
@@ -17,6 +16,7 @@ import {
 } from "./weekly-intelligence.ts";
 import { buildWeeklyMonitoringRecordsFromDataMoat, selectWeeklyMonitoringTopics, type WeeklyMonitoringRecord } from "./weekly-monitoring-context.ts";
 import { classifyWeeklyExternalEvidence, type WeeklyExternalCollection, type WeeklyExternalEvidence, type WeeklyExternalHistory } from "./weekly-external-evidence.ts";
+import { WeeklyModelResponseError, type WeeklyModelParserStrategy } from "./weekly-model-output.ts";
 
 export type WeeklyGenerationClaimStatus = "claimed" | "completed" | "processing" | "reclaimed";
 
@@ -39,6 +39,7 @@ export type WeeklyDiagnosticStage =
   | "monitoring_context_selected"
   | "model_generation_started"
   | "model_generation_completed"
+  | "model_response_extracted"
   | "model_response_parsed"
   | "model_response_validated"
   | "parent_persisted"
@@ -63,6 +64,7 @@ export type WeeklyDiagnosticCode =
   | "weekly_provider_not_configured"
   | "weekly_provider_failed"
   | "weekly_response_empty"
+  | "weekly_response_truncated"
   | "weekly_response_parse_failed"
   | "weekly_response_validation_failed"
   | "weekly_parent_persistence_failed"
@@ -105,6 +107,10 @@ export function getWeeklyDiagnostic(error: unknown, fallbackStage: WeeklyDiagnos
 
 function classifyWeeklyError(error: unknown, stage: WeeklyDiagnosticStage, weeklyExecutionId: string): WeeklyDiagnosticError {
   if (error instanceof WeeklyDiagnosticError) return error;
+  if (error instanceof WeeklyModelResponseError) {
+    const responseStage = error.code === "weekly_response_parse_failed" ? "model_response_parsed" : "model_generation_completed";
+    return new WeeklyDiagnosticError(error.code, responseStage, "Weekly provider response did not satisfy the model output contract.", { cause: error, weeklyExecutionId });
+  }
   const message = error instanceof Error ? error.message : "";
   if (/OPENROUTER_API_KEY/.test(message)) return new WeeklyDiagnosticError("weekly_provider_not_configured", "model_generation_started", "Weekly provider is not configured.", { cause: error, weeklyExecutionId });
   if (/No AI response/.test(message)) return new WeeklyDiagnosticError("weekly_response_empty", "model_generation_completed", "Weekly provider returned an empty response.", { cause: error, weeklyExecutionId });
@@ -141,8 +147,8 @@ export type AuthoritativeWeeklyGenerationResult = {
   reused: boolean;
 };
 
-export type WeeklySourceCounts = Readonly<{ currentPeriodInternalEvidenceCount: number; monitoringTopicCount: number; externalSourcesCollected: number; externalSourcesEligible: number; externalSourcesPersisted: number; externalSourcesNew: number; externalSourcesChanged: number; externalSourcesResurfaced: number; externalSourcesUnchanged: number; totalEvidenceUsed: number; sourceDegraded: boolean }>;
-const emptySourceCounts = (run: Record<string, unknown> = {}): WeeklySourceCounts => ({ currentPeriodInternalEvidenceCount: 0, monitoringTopicCount: 0, externalSourcesCollected: 0, externalSourcesEligible: 0, externalSourcesPersisted: Number(run.external_sources_persisted || 0), externalSourcesNew: 0, externalSourcesChanged: 0, externalSourcesResurfaced: 0, externalSourcesUnchanged: 0, totalEvidenceUsed: Number(run.total_sources_analyzed || 0), sourceDegraded: false });
+export type WeeklySourceCounts = Readonly<{ currentPeriodInternalEvidenceCount: number; eligibleExternalEvidenceCount: number; historicalContextCount: number; monitoringTopicCount: number; externalSourcesCollected: number; externalSourcesEligible: number; externalSourcesPersisted: number; externalSourcesNew: number; externalSourcesChanged: number; externalSourcesResurfaced: number; externalSourcesUnchanged: number; totalEvidenceUsed: number; sourceDegraded: boolean }>;
+const emptySourceCounts = (run: Record<string, unknown> = {}): WeeklySourceCounts => ({ currentPeriodInternalEvidenceCount: 0, eligibleExternalEvidenceCount: 0, historicalContextCount: 0, monitoringTopicCount: 0, externalSourcesCollected: 0, externalSourcesEligible: 0, externalSourcesPersisted: Number(run.external_sources_persisted || 0), externalSourcesNew: 0, externalSourcesChanged: 0, externalSourcesResurfaced: 0, externalSourcesUnchanged: 0, totalEvidenceUsed: Number(run.total_sources_analyzed || 0), sourceDegraded: false });
 
 export function deriveWeeklyExecutionMode(input: { usableFreshExternalCount: number; currentInternalCount: number; trustworthyHistoricalContextCount: number }): WeeklyExecutionMode {
   const hasFresh = input.usableFreshExternalCount > 0;
@@ -172,7 +178,7 @@ export type AuthoritativeWeeklyGenerationDependencies = {
     priorUserContext: WeeklyEvidenceSource[];
     sharedContext: WeeklySharedSource[];
     executionMode: WeeklyExecutionMode;
-  }) => Promise<WeeklyModelOutput>;
+  }) => Promise<WeeklyModelOutput | { modelOutput: WeeklyModelOutput; responseMetadata: { responseContentPresent: boolean; responseContentLength: number; finishReason: string; responseFormatRequested: boolean; parserStrategy: WeeklyModelParserStrategy; parseAttemptCount: number } }>;
   now?: Date;
   processingTtlMs?: number;
   log?: (event: string, payload: Record<string, unknown>) => void;
@@ -295,11 +301,11 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     const externalEvidence: WeeklyEvidenceSource[] = usableExternal.map((item) => ({ type: "external", id: item.evidenceId, title: item.title || item.canonicalUrl, summary: item.snippet || item.title || "Public external observation", created_at: item.publishedAt || item.collectedAt, provenance: `raw_external:${item.sourceProvider}:${item.freshness}` }));
     const executionMode = deriveWeeklyExecutionMode({ usableFreshExternalCount: externalEvidence.length, currentInternalCount: userEvidence.length, trustworthyHistoricalContextCount: historicalContext.length });
     const evidenceEnvelope = executionMode === "data_moat_fallback" ? [...userEvidence, ...historicalContext] : executionMode === "insufficient_context" ? [] : [...userEvidence, ...externalEvidence];
-    const sourceCounts: WeeklySourceCounts = { currentPeriodInternalEvidenceCount: userEvidence.length, monitoringTopicCount: monitoring.topics.length, externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: usableExternal.length, externalSourcesPersisted: persistedExternal, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length, totalEvidenceUsed: evidenceEnvelope.length, sourceDegraded: collection.metrics.sourceDegraded || persistenceDegraded };
+    const sourceCounts: WeeklySourceCounts = { currentPeriodInternalEvidenceCount: userEvidence.length, eligibleExternalEvidenceCount: externalEvidence.length, historicalContextCount: historicalContext.length, monitoringTopicCount: monitoring.topics.length, externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: usableExternal.length, externalSourcesPersisted: persistedExternal, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length, totalEvidenceUsed: evidenceEnvelope.length, sourceDegraded: collection.metrics.sourceDegraded || persistenceDegraded };
     logStage("sources_persisted", { persistedExternalCount: persistedExternal });
-    logStage("data_moat_sources_loaded", { sourceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
+    logStage("data_moat_sources_loaded", { currentPeriodInternalEvidenceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
     const emptyEvidence = evidenceEnvelope.length === 0;
-    dependencies.log?.("source_counts", { userId, period, evidenceCounts: countWeeklyEvidence(userEvidence), sharedSourceCount: sharedContext.length, emptyEvidence });
+    dependencies.log?.("source_counts", { currentPeriodInternalEvidenceCount: sourceCounts.currentPeriodInternalEvidenceCount, eligibleExternalEvidenceCount: sourceCounts.eligibleExternalEvidenceCount, historicalContextCount: sourceCounts.historicalContextCount, totalEvidenceUsed: sourceCounts.totalEvidenceUsed, sharedSourceCount: sharedContext.length, emptyEvidence });
 
     let report;
     if (emptyEvidence) {
@@ -309,6 +315,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       }
       logStage("model_generation_started", { skipped: true, reason: "empty_evidence" });
       logStage("model_generation_completed", { skipped: true });
+      logStage("model_response_extracted", { skipped: true });
       logStage("model_response_parsed", { skipped: true });
       logStage("model_response_validated", { generatedProblemCount: 0 });
     } else {
@@ -319,10 +326,12 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       } catch (error) {
         throw classifyWeeklyError(error, "model_generation_completed", weeklyExecutionId);
       }
-      logStage("model_generation_completed");
-      logStage("model_response_parsed");
+      const generated = "modelOutput" in modelOutput ? modelOutput : { modelOutput, responseMetadata: undefined };
+      logStage("model_generation_completed", generated.responseMetadata || {});
+      logStage("model_response_extracted", generated.responseMetadata || {});
+      logStage("model_response_parsed", generated.responseMetadata || {});
       try {
-        report = validateWeeklyModelOutput(modelOutput, evidenceEnvelope, priorUserContext, executionMode);
+        report = validateWeeklyModelOutput(generated.modelOutput, evidenceEnvelope, priorUserContext, executionMode);
       } catch (error) {
         throw classifyWeeklyError(error, "model_response_validated", weeklyExecutionId);
       }

@@ -9,6 +9,7 @@ import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabase
 import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
 import { collectWeeklyExternalEvidence, createWeeklySerpApiProvider, normalizeWeeklyExternalHistoryRows, type WeeklyExternalEvidence } from "@/lib/weekly-external-evidence";
+import { extractWeeklyOpenRouterResponse, parseWeeklyModelResponse } from "@/lib/weekly-model-output";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,10 +30,6 @@ function getSupabaseAdminClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL || "",
     process.env.SUPABASE_SERVICE_ROLE_KEY || ""
   );
-}
-
-function cleanJsonResponse(content: string) {
-  return content.replace(/```json/g, "").replace(/```/g, "").trim();
 }
 
 function isKnowledgeEvolutionDiagnosticsEnabled() {
@@ -281,11 +278,14 @@ async function analyzeUserScopedWeeklySignals(input: {
     ],
     temperature: 0.1,
     max_tokens: 2200,
+    response_format: { type: "json_object" },
   });
-
-  const content = completion.choices[0]?.message?.content;
-  if (!content) throw new Error("No AI response generated.");
-  return JSON.parse(cleanJsonResponse(content));
+  const { content, finishReason } = extractWeeklyOpenRouterResponse(completion);
+  const parsed = parseWeeklyModelResponse(content);
+  return {
+    modelOutput: parsed.output,
+    responseMetadata: { responseContentPresent: true, responseContentLength: content.length, finishReason, responseFormatRequested: true, parserStrategy: parsed.parserStrategy, parseAttemptCount: parsed.parseAttemptCount },
+  };
 }
 
 export async function POST(req: Request) {

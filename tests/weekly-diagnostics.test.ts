@@ -102,18 +102,21 @@ test("fresh external evidence can generate without current activity and reports 
   assert.equal(result.sourceCounts.externalSourcesPersisted, 1); assert.equal(result.sourceCounts.currentPeriodInternalEvidenceCount, 0); assert.equal(result.sourceCounts.totalEvidenceUsed, 1);
 });
 
-test("35 deduplicated observations classify and persist after an empty history lookup", async () => {
+test("38 deduplicated observations reach the model envelope and report independent counts", async () => {
   const order: string[] = [];
-  const observations = Array.from({ length: 35 }, (_, index) => ({ evidenceId: `weekly_external_${index}`, runId: "run-1", monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: `https://example.com/${index}`, canonicalUrl: `https://example.com/${index}`, title: `Invoice pain ${index}`, snippet: "Manual errors", publishedAt: index === 0 ? null : "2026-08-04T00:00:00.000Z", collectedAt: "2026-08-05T12:00:00.000Z", firstSeenAt: "2026-08-05T12:00:00.000Z", lastSeenAt: "2026-08-05T12:00:00.000Z", firstSeenPeriodStart: period.period_start, contentFingerprint: `wec_${index}`, freshness: "new" as const, originClass: "raw_external" as const, sourceRank: index + 1 }));
+  const observations = Array.from({ length: 38 }, (_, index) => ({ evidenceId: `weekly_external_${index}`, runId: "run-1", monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: `https://example.com/${index}`, canonicalUrl: `https://example.com/${index}`, title: `Invoice pain ${index}`, snippet: "Manual errors", publishedAt: index === 0 ? null : "2026-08-04T00:00:00.000Z", collectedAt: "2026-08-05T12:00:00.000Z", firstSeenAt: "2026-08-05T12:00:00.000Z", lastSeenAt: "2026-08-05T12:00:00.000Z", firstSeenPeriodStart: period.period_start, contentFingerprint: `wec_${index}`, freshness: "new" as const, originClass: "raw_external" as const, sourceRank: index + 1 }));
   const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
     repository: repository({ async loadExternalHistory() { order.push("history"); return []; }, async persistExternalSources({ sources }: { sources: unknown[] }) { order.push("persist"); return sources.length; } }),
     aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old", ownerId: "user-1", title: "Agency invoicing", summary: "Historical only", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
-    collectExternal: async () => ({ status: "healthy" as const, observations, metrics: { providerAttemptCount: 12, providerSuccessCount: 9, providerFailureCount: 3, providerNotConfiguredCount: 0, rawExternalResultCount: 36, normalizedExternalResultCount: 36, deduplicatedExternalCount: 35, sourceDegraded: true } }),
+    collectExternal: async () => ({ status: "healthy" as const, observations, metrics: { providerAttemptCount: 12, providerSuccessCount: 9, providerFailureCount: 3, providerNotConfiguredCount: 0, rawExternalResultCount: 40, normalizedExternalResultCount: 40, deduplicatedExternalCount: 38, sourceDegraded: true } }),
     analyze: async () => ({ summary: "Fresh evidence found", problems: [] }),
   }) });
   assert.deepEqual(order, ["history", "persist"]);
-  assert.equal(result.sourceCounts.externalSourcesNew, 35);
-  assert.equal(result.sourceCounts.externalSourcesPersisted, 35);
+  assert.equal(result.sourceCounts.externalSourcesNew, 38);
+  assert.equal(result.sourceCounts.externalSourcesPersisted, 38);
+  assert.equal(result.sourceCounts.eligibleExternalEvidenceCount, 38);
+  assert.equal(result.sourceCounts.historicalContextCount, 1);
+  assert.equal(result.sourceCounts.totalEvidenceUsed, 38);
 });
 
 test("history and persistence failures expose precise safe stages without leaking evidence", async () => {
