@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
-import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, type WeeklyEvidenceSource, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
+import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, WEEKLY_EXECUTION_CONTRACT_VERSION, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
@@ -105,10 +105,10 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
       return parseWeeklyClaimRpcResponse(data);
     },
     getProblemsForRun,
-    async completeRun({ runId, userId, period, totalSourcesAnalyzed, summary }) {
+    async completeRun({ runId, userId, period, totalSourcesAnalyzed, summary, executionMode, providerState, externalSourcesPersisted, sourceDegraded }) {
       const { data, error } = await getSupabaseAdminClient()
         .from("weekly_intelligence_runs")
-        .update({ user_id: userId, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: totalSourcesAnalyzed, summary })
+        .update({ user_id: userId, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: totalSourcesAnalyzed, summary, execution_contract_version: WEEKLY_EXECUTION_CONTRACT_VERSION, execution_mode: executionMode, external_provider_state: providerState, external_sources_persisted: externalSourcesPersisted, source_degraded: sourceDegraded })
         .eq("id", runId)
         .eq("user_id", userId)
         .neq("status", "completed")
@@ -153,9 +153,12 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
     async persistExternalSources({ runId, sources }) {
       if (!sources.length) return 0;
       const rows = sources.map((source: WeeklyExternalEvidence, index) => ({ run_id: runId, evidence_id: source.evidenceId, source_title: source.title, source_url: source.url, source_snippet: source.snippet, source_type: source.sourceType, source_rank: source.sourceRank ?? index + 1, monitoring_topic_fingerprint: source.monitoringTopicFingerprint, source_provider: source.sourceProvider, canonical_url: source.canonicalUrl, published_at: source.publishedAt, collected_at: source.collectedAt, first_seen_at: source.firstSeenAt, last_seen_at: source.lastSeenAt, first_seen_period_start: source.firstSeenPeriodStart, content_fingerprint: source.contentFingerprint, freshness_class: source.freshness, origin_class: source.originClass }));
-      const { data, error } = await getSupabaseAdminClient().from("weekly_sources").upsert(rows, { onConflict: "run_id,evidence_id", ignoreDuplicates: true }).select("id");
+      const client = getSupabaseAdminClient();
+      const { error } = await client.from("weekly_sources").upsert(rows, { onConflict: "run_id,evidence_id", ignoreDuplicates: true });
       if (error) { safePostgrestFailure("weekly_external_sources_upsert", error); throw error; }
-      return data?.length || 0;
+      const { data, error: countError } = await client.from("weekly_sources").select("evidence_id").eq("run_id", runId).in("evidence_id", sources.map((source) => source.evidenceId));
+      if (countError) { safePostgrestFailure("weekly_external_sources_verify", countError); throw countError; }
+      return new Set((data || []).map((row) => row.evidence_id)).size;
     },
   };
 }
@@ -265,6 +268,7 @@ async function analyzeUserScopedWeeklySignals(input: {
   userEvidence: WeeklyEvidenceSource[];
   priorUserContext: WeeklyEvidenceSource[];
   sharedContext: WeeklySharedSource[];
+  executionMode: WeeklyExecutionMode;
 }) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is missing.");
 
@@ -316,7 +320,7 @@ export async function POST(req: Request) {
     logWeeklyDiagnostic("period_resolved", { weeklyExecutionId, entryPath: "button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}` });
 
     const result = await runWeeklyGenerationForUser(user.id, period, { weeklyExecutionId, entryPath: "button" });
-    logWeeklyDiagnostic("button_generation_result", { weeklyExecutionId, entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, generatedProblems: result.problems.length, sourcesSaved: result.sources_saved, code: result.code, stage: result.stage });
+    logWeeklyDiagnostic("button_generation_result", { weeklyExecutionId, entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, executionMode: result.executionMode, providerState: result.providerState, sourceDegraded: result.sourceCounts.sourceDegraded, generatedProblems: result.problems.length, externalSourcesPersisted: result.sourceCounts.externalSourcesPersisted, code: result.code, stage: result.stage });
     const statusCode = result.status === "processing" ? 202 : 200;
     return NextResponse.json(result, { status: statusCode });
   } catch (error) {
@@ -334,7 +338,7 @@ export async function POST(req: Request) {
   }
 }
 
-const SAFE_WEEKLY_RUN_FIELDS = "id,status,total_sources_analyzed,summary,period_start,period_end,created_at";
+const SAFE_WEEKLY_RUN_FIELDS = "id,status,total_sources_analyzed,summary,period_start,period_end,created_at,execution_contract_version,execution_mode,external_provider_state,external_sources_persisted,source_degraded";
 const SAFE_WEEKLY_PROBLEM_FIELDS = "id,run_id,problem_title,problem_summary,affected_users,affected_niches,observed_evidence,repeated_patterns,business_impact,why_existing_tools_fail,suggested_solutions,suggested_mvp,monetization_angle,recommended_validation,recommended_deep_scan,evidence_references,pain_score,revenue_score,urgency_score,trend_score,intelligence_score,confidence_score,evidence_strength,source_evidence,created_at";
 const SAFE_WEEKLY_SOURCE_FIELDS = "id,evidence_id,run_id,source_title,source_url,source_snippet,source_type,source_provider,canonical_url,published_at,collected_at,first_seen_at,last_seen_at,first_seen_period_start,content_fingerprint,freshness_class,origin_class,source_rank,category,created_at";
 

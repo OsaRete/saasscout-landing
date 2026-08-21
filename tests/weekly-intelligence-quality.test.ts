@@ -17,6 +17,14 @@ test("Weekly scores are deterministic, evidence-derived, and reduce confidence w
   assert.notEqual(strong.pain_score, 5);
 });
 
+test("fallback validation rejects fabricated freshness and accepts historical references only as context", () => {
+  const historical: WeeklyEvidenceSource[] = [{ type: "historical_context", id: "weekly_context_wmt_safe", title: "Recurring handoff", summary: "Previously grounded owner evidence.", created_at: "2026-07-01T00:00:00Z", provenance: "owner_scoped_historical_context" }];
+  assert.throws(() => validateWeeklyModelOutput({ summary: "This week the market is increasing.", problems: [] }, historical, [], "data_moat_fallback"), /unsupported fresh-market claim/);
+  const report = validateWeeklyModelOutput({ summary: "Based on your accumulated SaaSScout evidence, validate the recurring workflow.", problems: [{ problem_title: "Recurring handoff", evidence_references: ["weekly_context_wmt_safe"] }] }, historical, [], "data_moat_fallback");
+  assert.equal(report.problems[0]?.evidence_references?.[0], "weekly_context_wmt_safe");
+  assert.throws(() => validateWeeklyModelOutput({ summary: "Historical", problems: [{ problem_title: "Bad ref", evidence_references: ["wmt_safe"] }] }, historical, [], "data_moat_fallback"), /invalid evidence references/);
+});
+
 test("validation rejects placeholders, ungrounded references, and provider scores", () => {
   assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded", problems: [{ problem_title: "", evidence_references: ["scan-1"] }] }, evidence), /missing a title/);
   assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded", problems: [{ problem_title: "Specific", evidence_references: ["not-owned"] }] }, evidence), /invalid evidence references/);
@@ -32,6 +40,16 @@ test("browser uses authenticated server projection and never reads weekly_source
   assert.match(page, /fetch\("\/api\/weekly-intelligence"/);
   assert.match(route, /export async function GET/);
   assert.match(route, /\.eq\("user_id", user\.id\)/);
+});
+
+test("Beta stabilization supplies an inferable conflict target and server-owned mode fields", () => {
+  const migration = readFileSync("supabase/migrations/20260821000000_weekly_beta_stabilization.sql", "utf8");
+  const route = readFileSync("app/api/weekly-intelligence/route.ts", "utf8");
+  assert.match(migration, /unique index[^;]+on public\.weekly_sources\(run_id, evidence_id\)/s);
+  assert.doesNotMatch(migration, /weekly_sources\(run_id, evidence_id\)\s+where/i);
+  assert.match(migration, /execution_mode.*external_provider_state.*external_sources_persisted.*source_degraded/s);
+  assert.match(route, /onConflict: "run_id,evidence_id"/);
+  assert.match(route, /execution_contract_version: WEEKLY_EXECUTION_CONTRACT_VERSION/);
 });
 
 test("Deep Scan projection preserves Weekly identity and provenance without placeholder values", () => {

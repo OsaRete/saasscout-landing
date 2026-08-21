@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { getWeeklyIntelligencePeriod } from "../lib/weekly-intelligence.ts";
-import { createWeeklyExecutionId, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError } from "../lib/weekly-intelligence-service.ts";
+import { createWeeklyExecutionId, deriveWeeklyExecutionMode, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError } from "../lib/weekly-intelligence-service.ts";
 
 const period = getWeeklyIntelligencePeriod(new Date("2026-08-05T12:00:00.000Z"));
 
@@ -60,7 +60,7 @@ test("provider missing configuration is classified without exposing raw error", 
   );
 });
 
-test("historical monitoring context is diagnosed but cannot bypass the no-current-evidence gate", async () => {
+test("provider outage uses trustworthy historical monitoring context without calling it fresh", async () => {
   const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
   let analyzeCalls = 0;
   const result = await runAuthoritativeWeeklyGenerationForUser({
@@ -68,17 +68,26 @@ test("historical monitoring context is diagnosed but cannot bypass the no-curren
     period,
     dependencies: deps({
       aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old-scan", ownerId: "user-1", title: "Agency invoicing", summary: "Manual invoice workflows", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
-      analyze: async () => { analyzeCalls += 1; return { summary: "must not run", problems: [] }; },
+      collectExternal: async () => ({ status: "unavailable" as const, observations: [], metrics: { providerAttemptCount: 1, providerSuccessCount: 0, providerFailureCount: 1, providerNotConfiguredCount: 0, rawExternalResultCount: 0, normalizedExternalResultCount: 0, deduplicatedExternalCount: 0, sourceDegraded: true } }),
+      analyze: async ({ userEvidence }: { userEvidence: Array<{ id: string; type: string }> }) => { analyzeCalls += 1; assert.equal(userEvidence[0]?.type, "historical_context"); assert.match(userEvidence[0]?.id || "", /^weekly_context_wmt_/); return { summary: "Based on your accumulated SaaSScout evidence, validate this recurring problem next.", problems: [] }; },
       log: (event: string, payload: Record<string, unknown>) => events.push({ event, payload }),
     }),
   });
-  assert.equal(analyzeCalls, 0);
+  assert.equal(analyzeCalls, 1);
+  assert.equal(result.executionMode, "data_moat_fallback");
   assert.equal(result.problems.length, 0);
   const diagnostic = events.find((entry) => entry.event === "monitoring_context_selected")?.payload;
   assert.equal(diagnostic?.currentPeriodEvidenceCount, 0);
   assert.equal(diagnostic?.monitoringTopicCount, 1);
   assert.equal(diagnostic?.historicalContextAvailable, true);
   assert.equal(JSON.stringify(diagnostic).includes("Manual invoice workflows"), false);
+});
+
+test("execution modes are deterministic and server owned", () => {
+  assert.equal(deriveWeeklyExecutionMode({ usableFreshExternalCount: 2, currentInternalCount: 0, trustworthyHistoricalContextCount: 0 }), "fresh_market");
+  assert.equal(deriveWeeklyExecutionMode({ usableFreshExternalCount: 2, currentInternalCount: 1, trustworthyHistoricalContextCount: 0 }), "mixed");
+  assert.equal(deriveWeeklyExecutionMode({ usableFreshExternalCount: 0, currentInternalCount: 0, trustworthyHistoricalContextCount: 1 }), "data_moat_fallback");
+  assert.equal(deriveWeeklyExecutionMode({ usableFreshExternalCount: 0, currentInternalCount: 0, trustworthyHistoricalContextCount: 0 }), "insufficient_context");
 });
 
 test("fresh external evidence can generate without current activity and reports truthful counts", async () => {
@@ -113,6 +122,21 @@ test("history and persistence failures expose precise safe stages without leakin
 
   const observation = { evidenceId: "weekly_external_1", runId: "run-1", monitoringTopicFingerprint: "wmt_1", sourceProvider: "serpapi", sourceType: "google_search", url: "https://example.com/1", canonicalUrl: "https://example.com/1", title: "Pain", snippet: "Evidence", publishedAt: null, collectedAt: period.period_start, firstSeenAt: period.period_start, lastSeenAt: period.period_start, firstSeenPeriodStart: period.period_start, contentFingerprint: "wec_1", freshness: "new" as const, originClass: "raw_external" as const, sourceRank: 1 };
   await assert.rejects(runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({ ...base, repository: repository({ async loadExternalHistory() { return []; }, async persistExternalSources() { throw new Error("PRIVATE snippet"); } }), collectExternal: async () => ({ status: "healthy" as const, observations: [observation], metrics: { providerAttemptCount: 1, providerSuccessCount: 1, providerFailureCount: 0, providerNotConfiguredCount: 0, rawExternalResultCount: 1, normalizedExternalResultCount: 1, deduplicatedExternalCount: 1, sourceDegraded: false } }) }) }), (error) => error instanceof WeeklyDiagnosticError && error.code === "weekly_source_persistence_failed" && error.stage === "sources_persisted" && !error.message.includes("PRIVATE"));
+});
+
+test("external persistence failure falls back without exposing unpersisted evidence to the model", async () => {
+  const observation = { evidenceId: "weekly_external_unpersisted", runId: "run-1", monitoringTopicFingerprint: "wmt_1", sourceProvider: "serpapi", sourceType: "google_search", url: "https://example.com/1", canonicalUrl: "https://example.com/1", title: "Fresh pain", snippet: "Fresh evidence", publishedAt: null, collectedAt: period.period_start, firstSeenAt: period.period_start, lastSeenAt: period.period_start, firstSeenPeriodStart: period.period_start, contentFingerprint: "wec_1", freshness: "new" as const, originClass: "raw_external" as const, sourceRank: 1 };
+  let analyzedIds: string[] = [];
+  const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
+    repository: repository({ async loadExternalHistory() { return []; }, async persistExternalSources() { throw new Error("42P10"); } }),
+    aggregate: async () => ({ items: [{ kind: "scan", source: "scan", id: "scan-current", ownerId: "user-1", title: "Grounded scan", summary: "Current internal evidence", occurredAt: "2026-08-04T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
+    collectExternal: async () => ({ status: "healthy" as const, observations: [observation], metrics: { providerAttemptCount: 1, providerSuccessCount: 1, providerFailureCount: 0, providerNotConfiguredCount: 0, rawExternalResultCount: 1, normalizedExternalResultCount: 1, deduplicatedExternalCount: 1, sourceDegraded: false } }),
+    analyze: async ({ userEvidence }: { userEvidence: Array<{ id: string }> }) => { analyzedIds = userEvidence.map((item) => item.id); return { summary: "Based on your accumulated SaaSScout evidence, validate the current problem.", problems: [] }; },
+  }) });
+  assert.equal(result.executionMode, "data_moat_fallback");
+  assert.equal(result.sourceCounts.sourceDegraded, true);
+  assert.deepEqual(analyzedIds, ["scan-current"]);
+  assert.equal(analyzedIds.includes("weekly_external_unpersisted"), false);
 });
 
 test("completed reuse performs no collection, source persistence, or model work", async () => {

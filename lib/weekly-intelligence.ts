@@ -5,7 +5,10 @@ export type WeeklyPeriod = {
   boundary: "[start,end)";
 };
 
-export type WeeklyEvidenceSourceType = "scan" | "discover" | "saved_idea" | "conversion" | "external";
+export type WeeklyEvidenceSourceType = "scan" | "discover" | "saved_idea" | "conversion" | "external" | "historical_context";
+
+export type WeeklyExecutionMode = "fresh_market" | "mixed" | "data_moat_fallback" | "insufficient_context";
+export const WEEKLY_EXECUTION_CONTRACT_VERSION = "weekly-execution@1" as const;
 
 export type WeeklyEvidenceSource = {
   type: WeeklyEvidenceSourceType;
@@ -343,8 +346,8 @@ export async function collectWeeklyEvidenceFromDataMoat(input: {
   return { aggregation, ...buildWeeklyEvidenceFromAggregation(aggregation, input.period) };
 }
 
-export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<WeeklyEvidenceSourceType, number> {
-  return sources.reduce<Record<WeeklyEvidenceSourceType, number>>(
+export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<Exclude<WeeklyEvidenceSourceType, "historical_context">, number> {
+  return sources.filter((source): source is WeeklyEvidenceSource & { type: Exclude<WeeklyEvidenceSourceType, "historical_context"> } => source.type !== "historical_context").reduce<Record<Exclude<WeeklyEvidenceSourceType, "historical_context">, number>>(
     (counts, source) => ({ ...counts, [source.type]: counts[source.type] + 1 }),
     { scan: 0, discover: 0, saved_idea: 0, conversion: 0, external: 0 }
   );
@@ -366,6 +369,7 @@ export function buildWeeklyIntelligencePrompt(input: {
   userEvidence: WeeklyEvidenceSource[];
   priorUserContext: WeeklyEvidenceSource[];
   sharedContext: WeeklySharedSource[];
+  executionMode?: WeeklyExecutionMode;
 }) {
   return `You are SaaSScout's Weekly Intelligence engine.
 
@@ -373,9 +377,10 @@ Reporting period:
 - period_start inclusive: ${input.period.period_start}
 - period_end exclusive: ${input.period.period_end}
 - timezone: ${input.period.timezone}
+- server-owned execution mode: ${input.executionMode || "mixed"}
 
 User-owned evidence for this period:
-${input.userEvidence.map((source, index) => `${index + 1}. ID: ${source.id}\nClass: ${source.type === "external" ? "raw_external" : "internal_user_activity"}\n[${source.type}] ${source.title}\nObserved/published: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
+${input.userEvidence.map((source, index) => `${index + 1}. ID: ${source.id}\nClass: ${source.type === "external" ? "fresh_external" : source.type === "historical_context" ? "historical_context" : "current_internal"}\n[${source.type}] ${source.title}\nObserved/known: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
 
 Prior user context, outside the reporting period, for continuity only:
 ${input.priorUserContext.map((source, index) => `${index + 1}. [${source.type}] ${source.title}\nCreated: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
@@ -389,6 +394,8 @@ Generation constraints:
 - Do not claim week-over-week change unless prior user context supports it.
 - Do not present shared aggregate context as the user's own activity.
 - Do not fabricate metrics or sources.
+- Historical context is not fresh evidence. In data_moat_fallback mode, explicitly say live collection was unavailable and phrase conclusions as accumulated evidence or recommended validation steps.
+- Never claim "this week" market growth, a new external signal, fresh demand, or fresh-source corroboration unless a fresh_external item supports that claim.
 - Every problem must include a specific title and evidence_references containing only IDs shown above.
 - A problem requires at least one evidence reference. Do not output a problem that cannot be traced to eligible evidence.
 - Do not assign numeric scores. SaaSScout calculates scores deterministically after validation.
@@ -396,11 +403,14 @@ Generation constraints:
 - Return ONLY valid JSON with { "summary": string, "problems": [{ "problem_title": string, "problem_summary": string|null, "affected_users": string|null, "affected_niches": string|null, "observed_evidence": string|null, "repeated_patterns": string|null, "business_impact": string|null, "why_existing_tools_fail": string|null, "suggested_solutions": string|null, "suggested_mvp": string|null, "monetization_angle": string|null, "recommended_validation": string|null, "recommended_deep_scan": string|null, "evidence_references": string[] }] }.`;
 }
 
-export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = []) {
+export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = [], executionMode?: WeeklyExecutionMode) {
   if (!output || typeof output !== "object") throw new Error("Malformed weekly intelligence output.");
   const summary = safeText(output.summary);
   if (!summary) throw new Error("Weekly intelligence output is missing a summary.");
   if (!Array.isArray(output.problems)) throw new Error("Malformed weekly intelligence output.");
+  if ((executionMode === "data_moat_fallback" || executionMode === "insufficient_context") && /(?:this week|new external|fresh (?:market|source|demand|evidence)|market (?:is )?(?:increasing|growing)|multiple fresh sources)/i.test(summary + " " + JSON.stringify(output.problems))) {
+    throw new Error("Weekly fallback output made an unsupported fresh-market claim.");
+  }
 
   const hasEvidence = hasMeaningfulWeeklyEvidence(evidence);
   if (!hasEvidence && output.problems.length > 0) {
