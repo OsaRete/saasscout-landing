@@ -17,7 +17,34 @@ export type WeeklyEvidenceSource = {
   summary: string;
   created_at: string;
   provenance?: string;
+  monitoring_topic?: string;
+  source_type?: string;
+  freshness?: string;
+  published_at?: string | null;
 };
+
+export const WEEKLY_MODEL_ENVELOPE_LIMITS = Object.freeze({ externalEvidence: 20, currentInternalEvidence: 8, historicalContext: 4, titleCharacters: 140, excerptCharacters: 360, topicCharacters: 100, historicalTitleCharacters: 100, historicalSummaryCharacters: 240, sharedContext: 2, sharedTitleCharacters: 100, sharedSummaryCharacters: 180, problems: 3, reportSummaryCharacters: 500, problemTitleCharacters: 100, problemFieldCharacters: 360, evidenceReferences: 8, maxOutputTokens: 3000 } as const);
+
+function boundedPromptText(value: unknown, maximum: number) {
+  const normalized = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return normalized.length <= maximum ? normalized : normalized.slice(0, Math.max(0, maximum - 1)).trimEnd() + "…";
+}
+
+const freshnessRank: Readonly<Record<string, number>> = { changed: 0, new: 1, publication_unknown: 1, resurfaced: 2 };
+
+/** Stable round-robin selection represents every available topic before adding corroboration. */
+export function selectWeeklyModelEvidence(evidence: readonly WeeklyEvidenceSource[], limit = WEEKLY_MODEL_ENVELOPE_LIMITS.externalEvidence) {
+  const historical = evidence.filter((item) => item.type === "historical_context").sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)).slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalContext);
+  const internal = evidence.filter((item) => item.type !== "external" && item.type !== "historical_context").sort((a, b) => b.created_at.localeCompare(a.created_at) || a.type.localeCompare(b.type) || a.id.localeCompare(b.id)).slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.currentInternalEvidence);
+  const external = evidence.filter((item) => item.type === "external");
+  const compare = (a: WeeklyEvidenceSource, b: WeeklyEvidenceSource) => (freshnessRank[a.freshness || ""] ?? 9) - (freshnessRank[b.freshness || ""] ?? 9) || (b.published_at || b.created_at).localeCompare(a.published_at || a.created_at) || a.id.localeCompare(b.id);
+  const groups = new Map<string, WeeklyEvidenceSource[]>();
+  for (const item of external.slice().sort(compare)) { const topic = item.monitoring_topic || "unassigned"; groups.set(topic, [...(groups.get(topic) || []), item]); }
+  const topics = [...groups.keys()].sort();
+  const selected: WeeklyEvidenceSource[] = [];
+  while (selected.length < limit && topics.some((topic) => (groups.get(topic)?.length || 0) > 0)) for (const topic of topics) { const item = groups.get(topic)?.shift(); if (item) selected.push(item); if (selected.length === limit) break; }
+  return [...internal, ...historical, ...selected];
+}
 
 export type WeeklySharedSource = {
   type: "problem_intelligence" | "data_moat";
@@ -371,6 +398,8 @@ export function buildWeeklyIntelligencePrompt(input: {
   sharedContext: WeeklySharedSource[];
   executionMode?: WeeklyExecutionMode;
 }) {
+  const historical = input.priorUserContext.slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalContext);
+  const shared = input.sharedContext.slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedContext);
   return `You are SaaSScout's Weekly Intelligence engine.
 
 Reporting period:
@@ -380,13 +409,13 @@ Reporting period:
 - server-owned execution mode: ${input.executionMode || "mixed"}
 
 User-owned evidence for this period:
-${input.userEvidence.map((source, index) => `${index + 1}. ID: ${source.id}\nClass: ${source.type === "external" ? "fresh_external" : source.type === "historical_context" ? "historical_context" : "current_internal"}\n[${source.type}] ${source.title}\nObserved/known: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
+${input.userEvidence.map((source) => JSON.stringify({ evidenceId: source.id, evidenceClass: source.type === "external" ? "fresh_external" : source.type === "historical_context" ? "historical_context" : "current_internal", topic: boundedPromptText(source.monitoring_topic || source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.topicCharacters), title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.titleCharacters), excerpt: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.excerptCharacters), sourceType: boundedPromptText(source.source_type || source.type, 40), freshness: source.freshness || (source.type === "external" ? "unknown" : undefined), ...(source.published_at ? { publicationDate: source.published_at.slice(0, 10) } : {}) })).join("\n") || "None"}
 
 Prior user context, outside the reporting period, for continuity only:
-${input.priorUserContext.map((source, index) => `${index + 1}. [${source.type}] ${source.title}\nCreated: ${source.created_at}\nSummary: ${source.summary}`).join("\n") || "None"}
+${historical.map((source) => JSON.stringify({ contextClass: "historical_context_non_citable", title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalTitleCharacters), theme: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalSummaryCharacters) })).join("\n") || "None"}
 
 Optional shared aggregate context. This is supplementary only and must never be presented as private user activity:
-${input.sharedContext.map((source, index) => `${index + 1}. [${source.type}] ${source.title}\nSummary: ${source.summary}`).join("\n") || "None"}
+${shared.map((source) => JSON.stringify({ contextClass: "shared_context_non_citable", title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedTitleCharacters), theme: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedSummaryCharacters) })).join("\n") || "None"}
 
 Generation constraints:
 - Ground primary conclusions in user-owned evidence.
@@ -402,6 +431,10 @@ Generation constraints:
 - Optional fields must be null when evidence does not support them; never use generic filler.
 - Historical_context IDs may ground fallback context, but must never be represented or cited as fresh_external evidence.
 - Return exactly one JSON object and nothing else: no Markdown, fences, commentary, prefix, or suffix.
+- Return at most ${WEEKLY_MODEL_ENVELOPE_LIMITS.problems} high-value problems. Synthesize corroborating sources; do not restate sources or repeat prose across fields.
+- Keep summary <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters} characters, problem_title <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters}, and every other prose field <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters} characters.
+- Use only supplied evidenceId values. Prior/shared context is continuity context only and is never citable evidence.
+- Do not make unsupported fresh-market or trend claims, and do not return numeric/provider-owned scores.
 - The exact top-level schema is { "summary": string, "problems": array }. Every problem must have exactly the intelligence fields below; do not add provider scores.
 - Return ONLY valid JSON with { "summary": string, "problems": [{ "problem_title": string, "problem_summary": string|null, "affected_users": string|null, "affected_niches": string|null, "observed_evidence": string|null, "repeated_patterns": string|null, "business_impact": string|null, "why_existing_tools_fail": string|null, "suggested_solutions": string|null, "suggested_mvp": string|null, "monetization_angle": string|null, "recommended_validation": string|null, "recommended_deep_scan": string|null, "evidence_references": string[] }] }.`;
 }
@@ -411,6 +444,8 @@ export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: W
   const summary = safeText(output.summary);
   if (!summary) throw new Error("Weekly intelligence output is missing a summary.");
   if (!Array.isArray(output.problems)) throw new Error("Malformed weekly intelligence output.");
+  if (summary.length > WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters) throw new Error("Weekly intelligence summary exceeds the output bound.");
+  if (output.problems.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problems) throw new Error("Weekly intelligence output exceeds the problem limit.");
   if ((executionMode === "data_moat_fallback" || executionMode === "insufficient_context") && /(?:this week|new external|fresh (?:market|source|demand|evidence)|market (?:is )?(?:increasing|growing)|multiple fresh sources)/i.test(summary + " " + JSON.stringify(output.problems))) {
     throw new Error("Weekly fallback output made an unsupported fresh-market claim.");
   }
@@ -420,18 +455,20 @@ export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: W
     throw new Error("Weekly intelligence output included personalized problems without user evidence.");
   }
 
-  const problems = output.problems.slice(0, 5).map((raw) => {
+  const problems = output.problems.map((raw) => {
     if (!raw || typeof raw !== "object") throw new Error("Malformed weekly intelligence problem.");
     const row = raw as Record<string, unknown>;
     const title = safeText(row.problem_title);
     if (!title) throw new Error("Weekly intelligence problem is missing a title.");
+    if (title.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters) throw new Error("Weekly intelligence problem title exceeds the output bound.");
     const references = Array.isArray(row.evidence_references) ? [...new Set(row.evidence_references.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))] : [];
     const eligibleIds = new Set(evidence.map((item) => item.id));
     if (references.length === 0 || references.some((id) => !eligibleIds.has(id))) throw new Error("Weekly intelligence problem has invalid evidence references.");
     const matchedEvidence = evidence.filter((item) => references.includes(item.id));
     const sourceEvidence = matchedEvidence.map((item) => item.summary).filter(Boolean).join(" ");
     const scores = calculateWeeklyProblemScores(references, evidence, priorUserContext);
-    const optionalText = (key: string) => safeText(row[key]) || null;
+    if (references.length > WEEKLY_MODEL_ENVELOPE_LIMITS.evidenceReferences) throw new Error("Weekly intelligence problem has too many evidence references.");
+    const optionalText = (key: string) => { const value = safeText(row[key]) || null; if (value && value.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) throw new Error(`Weekly intelligence ${key} exceeds the output bound.`); return value; };
 
     return {
       problem_title: title,

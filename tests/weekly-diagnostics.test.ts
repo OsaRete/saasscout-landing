@@ -102,7 +102,7 @@ test("fresh external evidence can generate without current activity and reports 
   assert.equal(result.sourceCounts.externalSourcesPersisted, 1); assert.equal(result.sourceCounts.currentPeriodInternalEvidenceCount, 0); assert.equal(result.sourceCounts.totalEvidenceUsed, 1);
 });
 
-test("38 deduplicated observations reach the model envelope and report independent counts", async () => {
+test("38 deduplicated observations remain persisted while the model envelope is bounded", async () => {
   const order: string[] = [];
   const observations = Array.from({ length: 38 }, (_, index) => ({ evidenceId: `weekly_external_${index}`, runId: "run-1", monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: `https://example.com/${index}`, canonicalUrl: `https://example.com/${index}`, title: `Invoice pain ${index}`, snippet: "Manual errors", publishedAt: index === 0 ? null : "2026-08-04T00:00:00.000Z", collectedAt: "2026-08-05T12:00:00.000Z", firstSeenAt: "2026-08-05T12:00:00.000Z", lastSeenAt: "2026-08-05T12:00:00.000Z", firstSeenPeriodStart: period.period_start, contentFingerprint: `wec_${index}`, freshness: "new" as const, originClass: "raw_external" as const, sourceRank: index + 1 }));
   const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
@@ -116,7 +116,7 @@ test("38 deduplicated observations reach the model envelope and report independe
   assert.equal(result.sourceCounts.externalSourcesPersisted, 38);
   assert.equal(result.sourceCounts.eligibleExternalEvidenceCount, 38);
   assert.equal(result.sourceCounts.historicalContextCount, 1);
-  assert.equal(result.sourceCounts.totalEvidenceUsed, 38);
+  assert.equal(result.sourceCounts.totalEvidenceUsed, 20);
 });
 
 test("history and persistence failures expose precise safe stages without leaking evidence", async () => {
