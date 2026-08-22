@@ -6,6 +6,7 @@ import {
   collectWeeklyEvidenceFromDataMoat,
   getWeeklyIntelligencePeriod,
   normalizeWeeklyProblemTitleKey,
+  selectWeeklyModelEvidence,
   validateWeeklyModelOutput,
   type WeeklyEvidenceSource,
   type WeeklyExecutionMode,
@@ -178,7 +179,7 @@ export type AuthoritativeWeeklyGenerationDependencies = {
     priorUserContext: WeeklyEvidenceSource[];
     sharedContext: WeeklySharedSource[];
     executionMode: WeeklyExecutionMode;
-  }) => Promise<WeeklyModelOutput | { modelOutput: WeeklyModelOutput; responseMetadata: { responseContentPresent: boolean; responseContentLength: number; finishReason: string; responseFormatRequested: boolean; parserStrategy: WeeklyModelParserStrategy; parseAttemptCount: number } }>;
+  }) => Promise<WeeklyModelOutput | { modelOutput: WeeklyModelOutput; responseMetadata: { responseContentPresent: boolean; responseContentLength: number; finishReason: string; responseFormatRequested: boolean; parserStrategy: WeeklyModelParserStrategy; parseAttemptCount: number; promptCharacterCount?: number; promptApproxTokenCount?: number; maxOutputTokens?: number; requestedProblemCount?: number } }>;
   now?: Date;
   processingTtlMs?: number;
   log?: (event: string, payload: Record<string, unknown>) => void;
@@ -298,14 +299,18 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       persistenceDegraded = true;
       dependencies.log?.("external_persistence_fallback", { weeklyExecutionId, runId, periodKey: `${period.period_start}/${period.period_end}`, attemptedRowCount: external.length, persistedRowCount: persistedExternal, operation: "weekly_external_sources_upsert", conflictTarget: "run_id,evidence_id" });
     }
-    const externalEvidence: WeeklyEvidenceSource[] = usableExternal.map((item) => ({ type: "external", id: item.evidenceId, title: item.title || item.canonicalUrl, summary: item.snippet || item.title || "Public external observation", created_at: item.publishedAt || item.collectedAt, provenance: `raw_external:${item.sourceProvider}:${item.freshness}` }));
+    const monitoringTopicLabels = new Map(monitoring.topics.map((topic) => [topic.fingerprint, [topic.title, topic.market, topic.niche].filter(Boolean).join(" / ")]));
+    const externalEvidence: WeeklyEvidenceSource[] = usableExternal.map((item) => ({ type: "external", id: item.evidenceId, title: item.title || "Public external observation", summary: item.snippet || item.title || "Public external observation", created_at: item.publishedAt || item.collectedAt, provenance: `raw_external:${item.sourceProvider}:${item.freshness}`, monitoring_topic: monitoringTopicLabels.get(item.monitoringTopicFingerprint) || item.monitoringTopicFingerprint, source_type: item.sourceType, freshness: item.freshness, published_at: item.publishedAt }));
     const executionMode = deriveWeeklyExecutionMode({ usableFreshExternalCount: externalEvidence.length, currentInternalCount: userEvidence.length, trustworthyHistoricalContextCount: historicalContext.length });
-    const evidenceEnvelope = executionMode === "data_moat_fallback" ? [...userEvidence, ...historicalContext] : executionMode === "insufficient_context" ? [] : [...userEvidence, ...externalEvidence];
+    const availableEvidenceEnvelope = executionMode === "data_moat_fallback" ? [...userEvidence, ...historicalContext] : executionMode === "insufficient_context" ? [] : [...userEvidence, ...externalEvidence];
+    const evidenceEnvelope = selectWeeklyModelEvidence(availableEvidenceEnvelope);
     const sourceCounts: WeeklySourceCounts = { currentPeriodInternalEvidenceCount: userEvidence.length, eligibleExternalEvidenceCount: externalEvidence.length, historicalContextCount: historicalContext.length, monitoringTopicCount: monitoring.topics.length, externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: usableExternal.length, externalSourcesPersisted: persistedExternal, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length, totalEvidenceUsed: evidenceEnvelope.length, sourceDegraded: collection.metrics.sourceDegraded || persistenceDegraded };
     logStage("sources_persisted", { persistedExternalCount: persistedExternal });
     logStage("data_moat_sources_loaded", { currentPeriodInternalEvidenceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
     const emptyEvidence = evidenceEnvelope.length === 0;
     dependencies.log?.("source_counts", { currentPeriodInternalEvidenceCount: sourceCounts.currentPeriodInternalEvidenceCount, eligibleExternalEvidenceCount: sourceCounts.eligibleExternalEvidenceCount, historicalContextCount: sourceCounts.historicalContextCount, totalEvidenceUsed: sourceCounts.totalEvidenceUsed, sharedSourceCount: sharedContext.length, emptyEvidence });
+    const selectedExternalEvidenceCount = evidenceEnvelope.filter((item) => item.type === "external").length;
+    dependencies.log?.("model_evidence_selected", { modelEvidenceAvailableCount: availableEvidenceEnvelope.length, modelEvidenceSelectedCount: evidenceEnvelope.length, modelEvidenceOmittedCount: availableEvidenceEnvelope.length - evidenceEnvelope.length, availableExternalEvidenceCount: externalEvidence.length, selectedExternalEvidenceCount, omittedExternalEvidenceCount: externalEvidence.length - selectedExternalEvidenceCount, selectedMonitoringTopicCount: new Set(evidenceEnvelope.filter((item) => item.type === "external").map((item) => item.monitoring_topic)).size, historicalContextSelectedCount: evidenceEnvelope.filter((item) => item.type === "historical_context").length, totalEvidenceUsed: evidenceEnvelope.length });
 
     let report;
     if (emptyEvidence) {
