@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateWeeklyProblemScores, validateWeeklyModelOutput, type WeeklyEvidenceSource } from "../lib/weekly-intelligence.ts";
+import { buildWeeklyIntelligencePrompt, calculateWeeklyProblemScores, validateWeeklyModelOutput, WEEKLY_SOLUTION_TYPES, type WeeklyEvidenceSource } from "../lib/weekly-intelligence.ts";
+import { weeklyCoverageLabel, weeklySourceCountLabels } from "../lib/weekly-presentation.ts";
 import { readFileSync } from "node:fs";
 
 const evidence: WeeklyEvidenceSource[] = [
@@ -65,4 +66,71 @@ test("quality migration remains additive and keeps Weekly sources server-owned",
   assert.match(migration, /revoke all on table public\.weekly_sources from public, anon, authenticated/);
   assert.doesNotMatch(migration, /grant select[^;]+authenticated/);
   assert.doesNotMatch(migration, /update public\.|delete from public\./);
+});
+
+const qualityProblem = (overrides: Record<string, unknown> = {}) => ({
+  problem_title: "Proof-of-work trust breaks at agency handoffs",
+  problem_summary: "Agencies struggle to show clients progress without invasive activity tracking.",
+  underlying_cause: "Billing accountability is coupled to surveillance rather than delivery milestones.",
+  affected_users: "Small agencies and their clients", affected_niches: "Client services",
+  business_impact: "Manual evidence preparation delays invoices and client approvals.",
+  existing_workaround: "Teams assemble screenshots and time logs before invoicing.",
+  why_existing_solutions_fail: "Time trackers prove activity but create surveillance friction.",
+  observed_evidence: "Multiple current signals describe manual proof and client visibility needs.",
+  repeated_pattern: "Visibility is reconstructed at billing time.",
+  commercial_signal: { type: "indirect_commercial_signal", rationale: "Invoice delays and manual preparation indicate an economic cost; direct buying evidence is absent." },
+  novelty: "new_angle_on_known_problem",
+  best_opportunity: { solution_type: "productized_service", title: "Milestone evidence setup", short_description: "Configure a proof-of-work process around client milestones.", why_it_fits: "The gap includes process design and trust, not only software.", monetization_model: "Fixed setup fee", rationale: "Combines visibility demand with surveillance resistance.", evidence_basis: "inferred" },
+  alternative_opportunities: [{ solution_type: "plugin", title: "Delivery proof plugin", short_description: "Attach approved work artifacts to invoices.", why_it_fits: "Works inside an existing billing workflow.", monetization_model: "Per-team subscription", rationale: "Reduces the handoff without replacing core tools.", evidence_basis: "inferred" }],
+  monetization_angle: "Charge the agency for faster approvals; validate pricing because no direct buying signal is present.",
+  recommended_validation: "Interview agency owners about delayed invoice approvals.", recommended_deep_scan: "Test milestone proof workflows and buyer objections.",
+  evidence_references: ["scan-1", "discover-1"], ...overrides,
+});
+
+test("quality contract keeps symptom, non-generic root cause, workaround, gap, and inferred non-SaaS opportunity distinct", () => {
+  const report = validateWeeklyModelOutput({ summary: "Grounded opportunity synthesis.", problems: [qualityProblem()] }, evidence, [], "mixed");
+  const problem = report.problems[0];
+  assert.match(problem.repeated_patterns || "", /Root cause: Billing accountability/);
+  assert.match(problem.why_existing_tools_fail || "", /Current workaround: Teams assemble/);
+  assert.match(problem.why_existing_tools_fail || "", /Solution gap: Time trackers/);
+  assert.match(problem.suggested_mvp || "", /^productized_service:/);
+  assert.match(problem.suggested_solutions || "", /^plugin:/);
+});
+
+test("quality contract permits every controlled solution class and does not force software", () => {
+  assert.ok(WEEKLY_SOLUTION_TYPES.includes("productized_service"));
+  for (const solution_type of ["plugin", "api", "marketplace", "physical_product"] as const) {
+    const problem = qualityProblem({ best_opportunity: { ...(qualityProblem().best_opportunity as object), solution_type } });
+    assert.equal(validateWeeklyModelOutput({ summary: "Grounded.", problems: [problem] }, evidence, [], "mixed").problems.length, 1);
+  }
+});
+
+test("quality contract rejects generic/duplicate problems, unsupported buying claims, and single-reference inference", () => {
+  assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem({ problem_title: "Businesses have workflow inefficiencies." })] }, evidence, [], "mixed"), /too generic/);
+  assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem(), qualityProblem({ problem_title: "Agency handoff proof breaks client trust" })] }, evidence, [], "mixed"), /duplicate/);
+  assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem({ commercial_signal: { type: "direct_buying_signal", rationale: "They will pay." } })] }, evidence.map((item) => ({ ...item, summary: "Manual handoff friction before deadlines." })), [], "mixed"), /unsupported willingness-to-pay/);
+  assert.throws(() => validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem({ evidence_references: ["scan-1"] })] }, evidence, [], "mixed"), /multiple evidence/);
+});
+
+test("unsupported solution gaps remain omitted and history can frame novelty without becoming fresh evidence", () => {
+  const report = validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem({ existing_workaround: null, why_existing_solutions_fail: null })] }, evidence, [], "mixed");
+  assert.equal(report.problems[0].why_existing_tools_fail, null);
+  const prompt = buildWeeklyIntelligencePrompt({ period: { period_start: "2026-08-17T00:00:00.000Z", period_end: "2026-08-24T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" }, userEvidence: evidence, priorUserContext: [{ ...evidence[0], id: "history-private" }], sharedContext: [], executionMode: "mixed" });
+  assert.match(prompt, /new angle on a known problem/);
+  assert.doesNotMatch(prompt, /"evidenceId":"history-private"/);
+});
+
+test("current source counts and final-run coverage labels are unambiguous", () => {
+  const current = { execution_contract_version: "weekly-execution@1", external_provider_state: "healthy", source_degraded: true, external_sources_persisted: 40, total_sources_analyzed: 20 };
+  assert.equal(weeklyCoverageLabel(current), "Healthy");
+  assert.deepEqual(weeklySourceCountLabels(current), { history: "40 collected · 20 used", collected: "40 external sources collected", used: "20 strongest signals used for this report" });
+  assert.equal(weeklyCoverageLabel({ ...current, external_provider_state: "degraded" }), "Degraded");
+  assert.equal(weeklyCoverageLabel({ execution_contract_version: "weekly-execution@1", execution_mode: "data_moat_fallback", external_provider_state: "unavailable" }), "Data Moat fallback");
+  assert.equal(weeklyCoverageLabel({ total_sources_analyzed: 9 }), "Legacy / unknown");
+});
+
+test("completed reuse copy is explicit and avoids a reload that implies new work", () => {
+  const page = readFileSync("app/weekly/page.tsx", "utf8");
+  assert.match(page, /already up to date\. You're viewing the completed report for this week; no new analysis was required/);
+  assert.match(page, /weekly_current_period_reused" \|\| result\.reused\) return/);
 });
