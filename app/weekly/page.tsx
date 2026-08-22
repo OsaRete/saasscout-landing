@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../supabase";
+import { weeklyCoverageLabel, weeklySourceCountLabels } from "@/lib/weekly-presentation";
 
 type WeeklyRun = {
   id: string;
@@ -16,6 +17,7 @@ type WeeklyRun = {
   external_provider_state: "healthy" | "degraded" | "unavailable" | "not_configured" | "no_results" | null;
   external_sources_persisted: number | null;
   source_degraded: boolean | null;
+  execution_contract_version: string | null;
 };
 
 type WeeklyProblem = {
@@ -57,7 +59,7 @@ type WeeklySource = {
   created_at: string;
 };
 
-function splitByPipe(value: string | null) {
+function splitByPipe(value: string | null | undefined) {
   return String(value || "")
     .split("|")
     .map((item) => item.trim())
@@ -105,7 +107,7 @@ function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
   const diagnosticSuffix = result.weeklyExecutionId ? ` Diagnostic ID: ${result.weeklyExecutionId}.` : "";
 
   if (responseOk && result.code === "weekly_current_period_reused") {
-    return `This week's intelligence is already up to date.${diagnosticSuffix}`;
+    return `Weekly Intelligence is already up to date. You're viewing the completed report for this week; no new analysis was required.${diagnosticSuffix}`;
   }
 
   if (responseOk && result.code === "weekly_source_degraded") {
@@ -213,6 +215,7 @@ export default function WeeklyPage() {
       }
 
       setMessage(getWeeklyRunMessage(result, true));
+      if (result.code === "weekly_current_period_reused" || result.reused) return;
       window.location.reload();
     } catch (error) {
       console.error(error);
@@ -361,8 +364,7 @@ export default function WeeklyPage() {
                         : "border-white/10 bg-white/[0.03] text-gray-400 hover:bg-white/[0.06]"
                     }`}
                   >
-                    {formatDate(run.created_at)} ·{" "}
-                    {run.total_sources_analyzed || 0} sources
+                    {formatDate(run.created_at)} · {weeklySourceCountLabels(run).history}
                   </button>
                 ))}
               </div>
@@ -384,7 +386,7 @@ export default function WeeklyPage() {
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                     <p className="text-sm text-gray-400">Live market coverage</p>
-                    <h2 className="mt-3 text-lg font-bold capitalize">{selectedRun.source_degraded ? "Degraded" : (selectedRun.external_provider_state || "Legacy / unknown").replace("_", " ")}</h2>
+                    <h2 className="mt-3 text-lg font-bold">{weeklyCoverageLabel(selectedRun)}</h2>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
@@ -395,10 +397,11 @@ export default function WeeklyPage() {
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-                    <p className="text-sm text-gray-400">External evidence</p>
+                    <p className="text-sm text-gray-400">External sources collected</p>
                     <h2 className="mt-3 text-4xl font-bold">
                       {selectedRun.external_sources_persisted ?? selectedSources.length}
                     </h2>
+                    {weeklySourceCountLabels(selectedRun).used && <p className="mt-1 text-xs text-gray-500">{weeklySourceCountLabels(selectedRun).used}</p>}
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
@@ -459,6 +462,8 @@ export default function WeeklyPage() {
                   {selectedProblems.map((problem, index) => {
                     const niches = splitByPipe(problem.affected_niches);
                     const solutions = splitByPipe(problem.suggested_solutions);
+                    const rootCause = splitByPipe(problem.repeated_patterns).find((item) => item.startsWith("Root cause:"));
+                    const solutionGap = splitByPipe(problem.why_existing_tools_fail);
                     const problemScore = getProblemScore(problem);
 
                     const sourcesEvidence = buildSourcesEvidence(selectedSources);
@@ -470,7 +475,16 @@ ${problem.problem_summary || ""}
 Affected niches:
 ${problem.affected_niches || ""}
 
-Suggested solutions:
+Underlying cause and novelty:
+${problem.repeated_patterns || ""}
+
+Existing solution gap:
+${problem.why_existing_tools_fail || ""}
+
+Selected opportunity direction:
+${problem.suggested_mvp || ""}
+
+Alternative opportunities:
 ${problem.suggested_solutions || ""}
 
 Scores:
@@ -488,6 +502,7 @@ Evidence summary:
 ${problem.source_evidence || ""}
 Evidence references: ${(problem.evidence_references || []).join(", ")}
 Recommended investigation: ${problem.recommended_deep_scan || problem.recommended_validation || ""}
+Recommended validation angle: ${problem.recommended_validation || ""}
 Relevant Data Moat context: ${problem.observed_evidence || problem.repeated_patterns || ""}
 
 External sources:
@@ -550,6 +565,16 @@ ${sourcesEvidence}`;
                         </div>
 
                         <div className="mt-6 grid gap-4 lg:grid-cols-3">
+                          {rootCause && <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[0.06] p-5">
+                            <h4 className="font-semibold">Underlying cause</h4>
+                            <p className="mt-4 text-sm leading-relaxed text-gray-300">{rootCause.replace(/^Root cause:\s*/, "")}</p>
+                          </div>}
+
+                          {solutionGap.length > 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                            <h4 className="font-semibold">Workaround and solution gap</h4>
+                            <div className="mt-4 space-y-3">{solutionGap.map((item) => <p key={item} className="text-sm leading-relaxed text-gray-300">{item}</p>)}</div>
+                          </div>}
+
                           {niches.length > 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                             <h4 className="font-semibold">Affected niches</h4>
 
@@ -565,12 +590,13 @@ ${sourcesEvidence}`;
                             </div>
                           </div>}
 
-                          {solutions.length > 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                          {(problem.suggested_mvp || solutions.length > 0) && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                             <h4 className="font-semibold">
-                              Suggested opportunities
+                              Monetizable opportunity directions
                             </h4>
 
                             <div className="mt-4 space-y-3">
+                              {problem.suggested_mvp && <p className="rounded-xl border border-violet-500/20 bg-violet-500/10 px-4 py-3 text-sm text-gray-200">Best: {problem.suggested_mvp}</p>}
                               {solutions.map((item) => (
                                 <p
                                   key={item}

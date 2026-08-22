@@ -84,6 +84,10 @@ export type WeeklyReportProblem = {
   source_quality_score: number;
 };
 
+export const WEEKLY_SOLUTION_TYPES = ["saas", "software_product", "startup", "plugin", "extension", "api", "marketplace", "productized_service", "digital_product", "data_product", "ai_agent", "automation", "infrastructure", "mobile_app", "physical_product", "hybrid", "other"] as const;
+export type WeeklySolutionType = (typeof WEEKLY_SOLUTION_TYPES)[number];
+type WeeklyOpportunityDirection = { solution_type: WeeklySolutionType; title: string; short_description: string; why_it_fits: string; monetization_model: string | null; rationale: string; evidence_basis: "observed" | "inferred" };
+
 
 export type AuthoritativeWeeklyRun = {
   id: string;
@@ -418,25 +422,37 @@ Optional shared aggregate context. This is supplementary only and must never be 
 ${shared.map((source) => JSON.stringify({ contextClass: "shared_context_non_citable", title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedTitleCharacters), theme: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedSummaryCharacters) })).join("\n") || "None"}
 
 Generation constraints:
-- Ground primary conclusions in user-owned evidence.
-- Clearly distinguish observed user evidence from inference.
-- Do not claim week-over-week change unless prior user context supports it.
-- Do not present shared aggregate context as the user's own activity.
-- Do not fabricate metrics or sources.
-- Historical context is not fresh evidence. In data_moat_fallback mode, explicitly say live collection was unavailable and phrase conclusions as accumulated evidence or recommended validation steps.
-- Never claim "this week" market growth, a new external signal, fresh demand, or fresh-source corroboration unless a fresh_external item supports that claim.
-- Every problem must include a specific title and evidence_references containing only IDs shown above.
-- A problem requires at least one evidence reference. Do not output a problem that cannot be traced to eligible evidence.
-- Do not assign numeric scores. SaaSScout calculates scores deterministically after validation.
-- Optional fields must be null when evidence does not support them; never use generic filler.
-- Historical_context IDs may ground fallback context, but must never be represented or cited as fresh_external evidence.
-- Return exactly one JSON object and nothing else: no Markdown, fences, commentary, prefix, or suffix.
-- Return at most ${WEEKLY_MODEL_ENVELOPE_LIMITS.problems} high-value problems. Synthesize corroborating sources; do not restate sources or repeat prose across fields.
+- Synthesize across evidence to find non-obvious connections; do not merely restate snippets or broad pain.
+- Separate symptom, root cause, workaround, solution failure, and commercial gap. Seek structural, trust, coordination, integration, incentive, visibility, switching-cost, usability, compliance, pricing, or distribution friction.
+- Ground observations in eligible evidence. An inferred direction needs a concise connection and 2+ cited IDs; inference is never raw evidence.
+- Ask "what is the best monetizable way to solve this problem?" Consider non-software; never default to SaaS.
+- Where supported, identify sufferer, payer, impact, workaround spend, pricing, and adoption barrier. Classify commercial_signal as direct_buying_signal, indirect_commercial_signal, or no_monetization_evidence_yet; never invent willingness to pay.
+- Do not invent named competitors. If workaround or solution-gap evidence is absent, return null.
+- Prefer a new cause, subproblem, or wedge over broad repetition. Non-citable history may frame "a new angle on a known problem", never fresh evidence.
+- Shared context is not user activity. Do not fabricate metrics or sources.
+- In data_moat_fallback, say live collection was unavailable and frame conclusions as accumulated evidence or validation.
+- Never claim current growth, signal, demand, or corroboration without fresh_external support.
+- Every specific problem needs 1+ evidence_references containing only IDs shown above.
+- Return no scores; SaaSScout scores deterministically. Unsupported optional fields are null, never filler.
+- Return one JSON object only, no Markdown/commentary. Return at most ${WEEKLY_MODEL_ENVELOPE_LIMITS.problems} high-value, distinct problems; synthesize rather than restate/repeat.
 - Keep summary <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters} characters, problem_title <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters}, and every other prose field <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters} characters.
-- Use only supplied evidenceId values. Prior/shared context is continuity context only and is never citable evidence.
-- Do not make unsupported fresh-market or trend claims, and do not return numeric/provider-owned scores.
-- The exact top-level schema is { "summary": string, "problems": array }. Every problem must have exactly the intelligence fields below; do not add provider scores.
-- Return ONLY valid JSON with { "summary": string, "problems": [{ "problem_title": string, "problem_summary": string|null, "affected_users": string|null, "affected_niches": string|null, "observed_evidence": string|null, "repeated_patterns": string|null, "business_impact": string|null, "why_existing_tools_fail": string|null, "suggested_solutions": string|null, "suggested_mvp": string|null, "monetization_angle": string|null, "recommended_validation": string|null, "recommended_deep_scan": string|null, "evidence_references": string[] }] }.`;
+- Prior/shared context is non-citable. Do not return unsupported market/trend claims or scores. Top level is { "summary": string, "problems": array }.
+- Problem keys/types: problem_title:string; problem_summary:string; underlying_cause:string; affected_users,affected_niches,business_impact,existing_workaround,why_existing_solutions_fail,repeated_pattern,monetization_angle,recommended_deep_scan:string|null; observed_evidence,recommended_validation:string; evidence_references:string[]; novelty:new_problem|new_angle_on_known_problem|stronger_evidence|recurring_problem|null; commercial_signal:{type:direct_buying_signal|indirect_commercial_signal|no_monetization_evidence_yet,rationale:string}; best_opportunity:Opportunity; alternative_opportunities:Opportunity[0..2].
+- Opportunity keys/types: solution_type:${WEEKLY_SOLUTION_TYPES.join("|")}; title,short_description,why_it_fits,rationale:string; monetization_model:string|null; evidence_basis:observed|inferred.`;
+}
+
+const GENERIC_PROBLEM = /^(?:businesses?|users?|teams?) (?:have|face|experience) (?:workflow )?(?:inefficienc(?:y|ies)|challenges?|problems?|issues?)\.?$/i;
+const BUYING_TERMS = /\b(?:pay|paid|price|pricing|budget|purchase|spend|cost|revenue|subscription|invoice|contract)\b/i;
+
+function normalizedProblemWords(value: string) {
+  return new Set(value.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((word) => word.length > 3));
+}
+
+function materiallyDuplicates(left: string, right: string) {
+  const a = normalizedProblemWords(left); const b = normalizedProblemWords(right);
+  if (!a.size || !b.size) return false;
+  const overlap = [...a].filter((word) => b.has(word)).length;
+  return overlap / Math.min(a.size, b.size) >= 0.8;
 }
 
 export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = [], executionMode?: WeeklyExecutionMode) {
@@ -455,11 +471,13 @@ export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: W
     throw new Error("Weekly intelligence output included personalized problems without user evidence.");
   }
 
+  const seenProblems: string[] = [];
   const problems = output.problems.map((raw) => {
     if (!raw || typeof raw !== "object") throw new Error("Malformed weekly intelligence problem.");
     const row = raw as Record<string, unknown>;
     const title = safeText(row.problem_title);
     if (!title) throw new Error("Weekly intelligence problem is missing a title.");
+    if (GENERIC_PROBLEM.test(title)) throw new Error("Weekly intelligence problem is too generic.");
     if (title.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters) throw new Error("Weekly intelligence problem title exceeds the output bound.");
     const references = Array.isArray(row.evidence_references) ? [...new Set(row.evidence_references.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))] : [];
     const eligibleIds = new Set(evidence.map((item) => item.id));
@@ -470,12 +488,47 @@ export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: W
     if (references.length > WEEKLY_MODEL_ENVELOPE_LIMITS.evidenceReferences) throw new Error("Weekly intelligence problem has too many evidence references.");
     const optionalText = (key: string) => { const value = safeText(row[key]) || null; if (value && value.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) throw new Error(`Weekly intelligence ${key} exceeds the output bound.`); return value; };
 
+    const qualityContract = executionMode === "fresh_market" || executionMode === "mixed";
+    const summaryText = optionalText("problem_summary");
+    const underlyingCause = optionalText("underlying_cause");
+    if (qualityContract && (!summaryText || !underlyingCause || materiallyDuplicates(summaryText, underlyingCause))) throw new Error("Weekly intelligence problem must distinguish the symptom from a specific root cause.");
+    const duplicateIdentity = `${title} ${summaryText || ""}`;
+    if (seenProblems.some((candidate) => materiallyDuplicates(candidate, duplicateIdentity))) throw new Error("Weekly intelligence output contains materially duplicate problems.");
+    seenProblems.push(duplicateIdentity);
+
+    const commercial = row.commercial_signal && typeof row.commercial_signal === "object" ? row.commercial_signal as Record<string, unknown> : null;
+    const commercialType = safeText(commercial?.type);
+    const commercialRationale = safeText(commercial?.rationale);
+    if (qualityContract && (!commercial || !["direct_buying_signal", "indirect_commercial_signal", "no_monetization_evidence_yet"].includes(commercialType) || !commercialRationale)) throw new Error("Weekly intelligence problem is missing a bounded commercial interpretation.");
+    if (commercialType === "direct_buying_signal" && !matchedEvidence.some((item) => BUYING_TERMS.test(`${item.title} ${item.summary}`))) throw new Error("Weekly intelligence problem contains an unsupported willingness-to-pay statement.");
+
+    const optionalOpportunityText = (value: unknown) => { const text = safeText(value) || null; if (text && text.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) throw new Error("Weekly intelligence opportunity exceeds the output bound."); return text; };
+    const parseOpportunity = (value: unknown, required: boolean): WeeklyOpportunityDirection | null => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) { if (required) throw new Error("Weekly intelligence problem is missing its best opportunity."); return null; }
+      const opportunity = value as Record<string, unknown>;
+      const solutionType = safeText(opportunity.solution_type) as WeeklySolutionType;
+      if (!WEEKLY_SOLUTION_TYPES.includes(solutionType)) throw new Error("Weekly intelligence opportunity has an invalid solution type.");
+      const direction = { solution_type: solutionType, title: safeText(opportunity.title), short_description: safeText(opportunity.short_description), why_it_fits: safeText(opportunity.why_it_fits), monetization_model: optionalOpportunityText(opportunity.monetization_model), rationale: safeText(opportunity.rationale), evidence_basis: safeText(opportunity.evidence_basis) as "observed" | "inferred" };
+      if (!direction.title || !direction.short_description || !direction.why_it_fits || !direction.rationale || !["observed", "inferred"].includes(direction.evidence_basis)) throw new Error("Weekly intelligence opportunity is incomplete.");
+      if (direction.evidence_basis === "inferred" && references.length < 2) throw new Error("Weekly intelligence inferred opportunity requires multiple evidence references.");
+      return direction;
+    };
+    const bestOpportunity = parseOpportunity(row.best_opportunity, qualityContract);
+    const alternativesRaw = row.alternative_opportunities == null ? [] : row.alternative_opportunities;
+    if (!Array.isArray(alternativesRaw) || alternativesRaw.length > 2) throw new Error("Weekly intelligence opportunity alternatives exceed the limit.");
+    const alternatives = alternativesRaw.map((item) => parseOpportunity(item, true)!);
+    const opportunityLine = (item: WeeklyOpportunityDirection) => boundedPromptText(`${item.solution_type}: ${item.title} — ${item.short_description} (${item.evidence_basis}; fit: ${item.why_it_fits}; rationale: ${item.rationale}${item.monetization_model ? `; monetization: ${item.monetization_model}` : ""})`, WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters);
+    const workaround = optionalText("existing_workaround");
+    const solutionGap = optionalText("why_existing_solutions_fail");
+    const novelty = optionalText("novelty");
+
     return {
       problem_title: title,
-      problem_summary: optionalText("problem_summary"), affected_users: optionalText("affected_users"), affected_niches: optionalText("affected_niches"),
-      observed_evidence: optionalText("observed_evidence"), repeated_patterns: optionalText("repeated_patterns"), business_impact: optionalText("business_impact"),
-      why_existing_tools_fail: optionalText("why_existing_tools_fail"), suggested_solutions: optionalText("suggested_solutions"), suggested_mvp: optionalText("suggested_mvp"),
-      monetization_angle: optionalText("monetization_angle"), recommended_validation: optionalText("recommended_validation"), recommended_deep_scan: optionalText("recommended_deep_scan"),
+      problem_summary: summaryText, affected_users: optionalText("affected_users"), affected_niches: optionalText("affected_niches"),
+      observed_evidence: optionalText("observed_evidence"), repeated_patterns: [underlyingCause && `Root cause: ${underlyingCause}`, optionalText("repeated_pattern"), novelty && `Novelty: ${novelty}`].filter(Boolean).join(" | ") || null, business_impact: optionalText("business_impact"),
+      why_existing_tools_fail: [workaround && `Current workaround: ${workaround}`, solutionGap && `Solution gap: ${solutionGap}`].filter(Boolean).join(" | ") || null,
+      suggested_solutions: alternatives.length ? alternatives.map(opportunityLine).join(" | ") : null, suggested_mvp: bestOpportunity ? opportunityLine(bestOpportunity) : null,
+      monetization_angle: boundedPromptText([commercialType && `Commercial signal: ${commercialType} — ${commercialRationale}`, optionalText("monetization_angle")].filter(Boolean).join(" | "), WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) || null, recommended_validation: optionalText("recommended_validation"), recommended_deep_scan: optionalText("recommended_deep_scan"),
       evidence_references: references, ...scores, source_evidence: sourceEvidence,
       buying_signal_score: 0, frequency_score: clamp(matchedEvidence.length * 2, 0) || 0, opportunity_score: scores.intelligence_score || 0,
       problem_cluster: normalizeWeeklyProblemTitleKey(title), source_quality_score: scores.confidence_score,
