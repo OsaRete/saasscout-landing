@@ -266,6 +266,7 @@ async function analyzeUserScopedWeeklySignals(input: {
   priorUserContext: WeeklyEvidenceSource[];
   sharedContext: WeeklySharedSource[];
   executionMode: WeeklyExecutionMode;
+  correctiveInstruction?: string;
 }) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is missing.");
 
@@ -274,7 +275,7 @@ async function analyzeUserScopedWeeklySignals(input: {
     model: "openai/gpt-4.1-mini",
     messages: [
       { role: "system", content: "Return valid JSON only. Never fabricate user evidence." },
-      { role: "user", content: prompt },
+      { role: "user", content: input.correctiveInstruction ? `${prompt}\n\nCorrective regeneration instruction:\n${input.correctiveInstruction}` : prompt },
     ],
     temperature: 0.1,
     max_tokens: WEEKLY_MODEL_ENVELOPE_LIMITS.maxOutputTokens,
@@ -325,16 +326,16 @@ export async function POST(req: Request) {
     return NextResponse.json(result, { status: statusCode });
   } catch (error) {
     const diagnostic = error instanceof AuthError
-      ? { code: "weekly_authentication_failed" as const, stage: "authenticated" as const, weeklyExecutionId }
+      ? { code: "weekly_authentication_failed" as const, stage: "authenticated" as const, weeklyExecutionId, validationReason: undefined }
       : getWeeklyDiagnostic(error, "response_completed", weeklyExecutionId);
-    console.error("Weekly intelligence error", { weeklyExecutionId, code: diagnostic.code, stage: diagnostic.stage, errorName: error instanceof Error ? error.name : "UnknownError" });
+    console.error("Weekly intelligence error", { weeklyExecutionId, code: diagnostic.code, stage: diagnostic.stage, validationReason: diagnostic.validationReason, errorName: error instanceof Error ? error.name : "UnknownError" });
 
     if (error instanceof AuthError) {
       return NextResponse.json({ success: false, error: "Please sign in again to run Weekly Intelligence.", code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId }, { status: error.status });
     }
 
     const status = diagnostic.code === "weekly_capability_denied" ? 403 : 500;
-    return NextResponse.json({ success: false, error: sanitizeWeeklyError(), code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId }, { status });
+    return NextResponse.json({ success: false, error: sanitizeWeeklyError(), code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId, ...(diagnostic.validationReason ? { validationReason: diagnostic.validationReason } : {}) }, { status });
   }
 }
 
