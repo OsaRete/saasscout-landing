@@ -55,6 +55,10 @@ type WeeklyReport = {
   summary: string | null;
   strongest_trend: string | null;
   total_sources_analyzed: number | null;
+  external_sources_persisted: number | null;
+  execution_mode: "fresh_market" | "mixed" | "data_moat_fallback" | "insufficient_context" | null;
+  external_provider_state: string | null;
+  execution_contract_version: string | null;
   average_trend_score: number | null;
   average_pain_intensity: number | null;
 };
@@ -126,7 +130,7 @@ export default function DashboardPage() {
 
       const { data: latestWeeklyRun } = await supabase
         .from("weekly_intelligence_runs")
-        .select("id,period_start,period_end,summary,total_sources_analyzed")
+        .select("id,period_start,period_end,summary,total_sources_analyzed,external_sources_persisted,execution_mode,external_provider_state,execution_contract_version")
         .eq("user_id", user.id)
         .eq("status", "completed")
         .order("period_start", { ascending: false })
@@ -188,8 +192,8 @@ export default function DashboardPage() {
     <AppShell active="/dashboard">
       <PageHeader
         eyebrow="SaaSScout control center"
-        title="Dashboard"
-        description="Monitor scan activity, review opportunity intelligence, and keep your strongest market signals moving toward validation."
+        title="SaaSScout Intelligence Control Center"
+        description="A grounded view of the markets, problems, and persisted evidence already observed across your workspace."
         actions={
           <>
             <Button
@@ -267,8 +271,8 @@ export default function DashboardPage() {
 
               <h2 className="mt-4 max-w-4xl text-3xl font-bold tracking-tight md:text-4xl">
                 {weeklyReport?.strongest_trend
-                  ? `Strongest trend: ${weeklyReport.strongest_trend}`
-                  : "Market trend report"}
+                  ? `Top monitored problem: ${weeklyReport.strongest_trend}`
+                  : "Latest market intelligence"}
               </h2>
 
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-gray-300">
@@ -296,9 +300,9 @@ export default function DashboardPage() {
         </div>
 
         {weeklyReport && weeklyNiches.length > 0 && (
-          <div className="grid gap-4 px-6 pt-6 md:px-8 lg:grid-cols-3">
+          <div className="grid gap-4 px-6 pt-6 md:px-8 lg:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
-              <p className="text-sm text-gray-400">Avg trend score</p>
+              <p className="text-sm text-gray-400">Average Weekly signal score</p>
               <h3 className="mt-2 text-3xl font-bold">
                 {weeklyReport.average_trend_score || 0}
               </h3>
@@ -310,6 +314,20 @@ export default function DashboardPage() {
                   }}
                 />
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
+              <p className="text-sm text-gray-400">External sources collected</p>
+              <h3 className="mt-2 text-3xl font-bold">
+                {weeklyReport.execution_contract_version === "weekly-execution@1"
+                  ? weeklyReport.external_sources_persisted ?? "Unavailable"
+                  : "Legacy"}
+              </h3>
+              <p className="mt-4 text-sm text-gray-500">
+                {weeklyReport.execution_contract_version === "weekly-execution@1"
+                  ? `${weeklyReport.execution_mode?.replaceAll("_", " ") || "Unknown mode"} · ${weeklyReport.external_provider_state || "Unknown coverage"}`
+                  : "Collection semantics were not stored for this report"}
+              </p>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
@@ -328,12 +346,12 @@ export default function DashboardPage() {
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10">
-              <p className="text-sm text-gray-400">Sources analyzed</p>
+              <p className="text-sm text-gray-400">Strongest signals used</p>
               <h3 className="mt-2 text-3xl font-bold">
                 {weeklyReport.total_sources_analyzed || 0}
               </h3>
               <p className="mt-4 text-sm text-cyan-300">
-                User-owned evidence analyzed this week
+                Selected from the persisted Weekly evidence envelope
               </p>
             </div>
           </div>
@@ -343,13 +361,13 @@ export default function DashboardPage() {
           <div className="mx-6 mb-6 mt-6 rounded-2xl border border-white/10 bg-black/25 p-5 shadow-lg shadow-black/10 md:mx-8">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h3 className="font-semibold">Top weekly niches</h3>
+                <h3 className="font-semibold">Problems under monitoring</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  Mini trend chart based on latest weekly report.
+                  Latest persisted Weekly problem scores. High scores do not imply growth.
                 </p>
               </div>
 
-              <p className="text-xs text-gray-500">Trend / Pain</p>
+              <p className="text-xs text-gray-500">Signal / Pain</p>
             </div>
 
             <div className="space-y-4">
@@ -360,7 +378,7 @@ export default function DashboardPage() {
                       {item.niche}
                     </span>
                     <span className="text-gray-500">
-                      {item.movement || "Stable"}
+                      Observed problem
                     </span>
                   </div>
 

@@ -95,6 +95,10 @@ export type AuthoritativeWeeklyRun = {
   period_end: string;
   summary: string | null;
   total_sources_analyzed: number | null;
+  external_sources_persisted?: number | null;
+  execution_mode?: WeeklyExecutionMode | null;
+  external_provider_state?: string | null;
+  execution_contract_version?: string | null;
 };
 
 export type AuthoritativeWeeklyProblem = {
@@ -113,6 +117,10 @@ export type DashboardWeeklyReport = {
   summary: string | null;
   strongest_trend: string | null;
   total_sources_analyzed: number | null;
+  external_sources_persisted: number | null;
+  execution_mode: WeeklyExecutionMode | null;
+  external_provider_state: string | null;
+  execution_contract_version: string | null;
   average_trend_score: number | null;
   average_pain_intensity: number | null;
 };
@@ -147,6 +155,10 @@ export function mapAuthoritativeWeeklyToDashboard(run: AuthoritativeWeeklyRun | 
     summary: run.summary,
     strongest_trend: orderedProblems[0]?.problem_title || null,
     total_sources_analyzed: run.total_sources_analyzed,
+    external_sources_persisted: run.external_sources_persisted ?? null,
+    execution_mode: run.execution_mode ?? null,
+    external_provider_state: run.external_provider_state ?? null,
+    execution_contract_version: run.execution_contract_version ?? null,
     average_trend_score: averageScore(problems.map((problem) => problem.trend_score)),
     average_pain_intensity: averageScore(problems.map((problem) => problem.pain_score)),
   };
@@ -158,7 +170,7 @@ export function mapAuthoritativeWeeklyToDashboard(run: AuthoritativeWeeklyRun | 
     trend_score: problem.trend_score,
     pain_intensity: problem.pain_score,
     source_volume: 1,
-    movement: "Stable",
+    movement: null,
   }));
 
   return { weeklyReport, weeklyNiches };
