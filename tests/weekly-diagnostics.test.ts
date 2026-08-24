@@ -94,7 +94,7 @@ test("fresh external evidence can generate without current activity and reports 
   let persisted = 0; let analyzedIds: string[] = [];
   const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
     repository: repository({ async loadExternalHistory() { return []; }, async persistExternalSources({ sources }: { sources: unknown[] }) { persisted += sources.length; return sources.length; } }),
-    aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old", ownerId: "user-1", title: "Agency invoicing", summary: "Historical only", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
+    aggregate: async () => ({ items: [], sharedContext: [], bySource: {} }),
     collectExternal: async ({ runId, period: currentPeriod, collectedAt }: { runId: string; period: typeof period; collectedAt: string }) => ({ status: "healthy" as const, observations: [{ evidenceId: "weekly_external_abc", runId, monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: "https://example.com/a", canonicalUrl: "https://example.com/a", title: "Invoice pain", snippet: "Manual errors", publishedAt: "2026-08-04T00:00:00.000Z", collectedAt, firstSeenAt: collectedAt, lastSeenAt: collectedAt, firstSeenPeriodStart: currentPeriod.period_start, contentFingerprint: "wec_1", freshness: "new" as const, originClass: "raw_external" as const, sourceRank: 1 }], metrics: { providerAttemptCount: 1, providerSuccessCount: 1, providerFailureCount: 0, providerNotConfiguredCount: 0, rawExternalResultCount: 1, normalizedExternalResultCount: 1, deduplicatedExternalCount: 1, sourceDegraded: false } }),
     analyze: async ({ userEvidence }: { userEvidence: Array<{ id: string }> }) => { analyzedIds = userEvidence.map((item) => item.id); return { summary: "Fresh evidence found", problems: [] }; },
   }) });
@@ -102,21 +102,25 @@ test("fresh external evidence can generate without current activity and reports 
   assert.equal(result.sourceCounts.externalSourcesPersisted, 1); assert.equal(result.sourceCounts.currentPeriodInternalEvidenceCount, 0); assert.equal(result.sourceCounts.totalEvidenceUsed, 1);
 });
 
-test("38 deduplicated observations remain persisted while the model envelope is bounded", async () => {
+test("production-shaped 39-source run persists once, selects 20 across four topics, and retries synthesis only", async () => {
   const order: string[] = [];
-  const observations = Array.from({ length: 38 }, (_, index) => ({ evidenceId: `weekly_external_${index}`, runId: "run-1", monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: `https://example.com/${index}`, canonicalUrl: `https://example.com/${index}`, title: `Invoice pain ${index}`, snippet: "Manual errors", publishedAt: index === 0 ? null : "2026-08-04T00:00:00.000Z", collectedAt: "2026-08-05T12:00:00.000Z", firstSeenAt: "2026-08-05T12:00:00.000Z", lastSeenAt: "2026-08-05T12:00:00.000Z", firstSeenPeriodStart: period.period_start, contentFingerprint: `wec_${index}`, freshness: "new" as const, originClass: "raw_external" as const, sourceRank: index + 1 }));
+  const observations = Array.from({ length: 39 }, (_, index) => ({ evidenceId: `weekly_external_${index}`, runId: "run-1", monitoringTopicFingerprint: `wmt_topic_${index % 4}`, sourceProvider: "serpapi", sourceType: "google_search", url: `https://example.com/${index}`, canonicalUrl: `https://example.com/${index}`, title: `Invoice pain ${index}`, snippet: "Manual errors", publishedAt: index === 0 ? null : "2026-08-04T00:00:00.000Z", collectedAt: "2026-08-05T12:00:00.000Z", firstSeenAt: "2026-08-05T12:00:00.000Z", lastSeenAt: "2026-08-05T12:00:00.000Z", firstSeenPeriodStart: period.period_start, contentFingerprint: `wec_${index}`, freshness: "new" as const, originClass: "raw_external" as const, sourceRank: index + 1 }));
+  const modelEvidence: string[][] = [];
   const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
     repository: repository({ async loadExternalHistory() { order.push("history"); return []; }, async persistExternalSources({ sources }: { sources: unknown[] }) { order.push("persist"); return sources.length; } }),
-    aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old", ownerId: "user-1", title: "Agency invoicing", summary: "Historical only", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
-    collectExternal: async () => ({ status: "healthy" as const, observations, metrics: { providerAttemptCount: 12, providerSuccessCount: 9, providerFailureCount: 3, providerNotConfiguredCount: 0, rawExternalResultCount: 40, normalizedExternalResultCount: 40, deduplicatedExternalCount: 38, sourceDegraded: true } }),
-    analyze: async () => ({ summary: "Fresh evidence found", problems: [] }),
+    aggregate: async () => ({ items: [], sharedContext: [], bySource: {} }),
+    loadPriorWeeklyMonitoringRecords: async () => Array.from({ length: 4 }, (_, index) => ({ id: `prior-${index}`, ownerId: "user-1", kind: "prior_weekly_problem" as const, occurredAt: "2026-07-01T00:00:00.000Z", title: `Topic ${index}`, niche: `Niche ${index}`, problemSummary: `Problem ${index}`, evidenceReferenceCount: 2, sourceCount: 3 })),
+    collectExternal: async () => ({ status: "healthy" as const, observations, metrics: { providerAttemptCount: 12, providerSuccessCount: 9, providerFailureCount: 3, providerNotConfiguredCount: 0, rawExternalResultCount: 40, normalizedExternalResultCount: 40, deduplicatedExternalCount: 39, sourceDegraded: true } }),
+    analyze: async ({ userEvidence }: { userEvidence: Array<{ id: string }> }) => { modelEvidence.push(userEvidence.map((item) => item.id)); return modelEvidence.length === 1 ? { summary: "Fresh evidence found", problems: [{ problem_title: "Businesses have workflow inefficiencies.", evidence_references: [userEvidence[0].id] }] } : { summary: "Fresh evidence found", problems: [] }; },
   }) });
   assert.deepEqual(order, ["history", "persist"]);
-  assert.equal(result.sourceCounts.externalSourcesNew, 38);
-  assert.equal(result.sourceCounts.externalSourcesPersisted, 38);
-  assert.equal(result.sourceCounts.eligibleExternalEvidenceCount, 38);
-  assert.equal(result.sourceCounts.historicalContextCount, 1);
+  assert.equal(result.sourceCounts.externalSourcesNew, 39);
+  assert.equal(result.sourceCounts.externalSourcesPersisted, 39);
+  assert.equal(result.sourceCounts.eligibleExternalEvidenceCount, 39);
+  assert.equal(result.sourceCounts.monitoringTopicCount, 4);
   assert.equal(result.sourceCounts.totalEvidenceUsed, 20);
+  assert.equal(modelEvidence.length, 2);
+  assert.deepEqual(modelEvidence[0], modelEvidence[1]);
 });
 
 test("history and persistence failures expose precise safe stages without leaking evidence", async () => {
@@ -146,6 +150,61 @@ test("completed reuse performs no collection, source persistence, or model work"
   let work = 0;
   await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({ repository: repository({ async claimRun() { return { status: "completed" as const, run: { id: "run-1", total_sources_analyzed: 2 } }; }, async loadExternalHistory() { work += 1; return []; }, async persistExternalSources() { work += 1; return 0; } }), collectExternal: async () => { work += 1; throw new Error("must not collect"); }, analyze: async () => { work += 1; return { summary: "bad", problems: [] }; } }) });
   assert.equal(work, 0);
+});
+
+test("one quality retry reuses the selected evidence and persists only the validated attempt", async () => {
+  const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  const analyzedIds: string[][] = [];
+  let collectionCalls = 0; let sourceWrites = 0; let problemWrites = 0; let completeCalls = 0;
+  const result = await runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
+    repository: repository({
+      async loadExternalHistory() { return []; },
+      async persistExternalSources({ sources }: { sources: unknown[] }) { sourceWrites += 1; return sources.length; },
+      async replaceProblems({ problems }: { problems: unknown[] }) { problemWrites += 1; assert.equal(analyzedIds.length, 2); return problems.map((problem, index) => ({ ...(problem as object), id: `problem-${index}` })); },
+      async completeRun() { completeCalls += 1; return { id: "run-1", status: "completed", plan: "pro" }; },
+    }),
+    aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "old", ownerId: "user-1", title: "Agency invoicing", summary: "Historical context", occurredAt: "2026-07-01T00:00:00.000Z", metadata: { status: "completed" } }], sharedContext: [], bySource: {} }),
+    collectExternal: async ({ runId, period: currentPeriod, collectedAt }: { runId: string; period: typeof period; collectedAt: string }) => { collectionCalls += 1; return { status: "healthy" as const, observations: [{ evidenceId: "weekly_external_1", runId, monitoringTopicFingerprint: "wmt_8bcf0b53f483032e", sourceProvider: "serpapi", sourceType: "google_search", url: "https://example.com/private", canonicalUrl: "https://example.com/private", title: "Invoice handoff failures", snippet: "Agencies repeatedly lose approval context during invoice handoffs.", publishedAt: "2026-08-04T00:00:00.000Z", collectedAt, firstSeenAt: collectedAt, lastSeenAt: collectedAt, firstSeenPeriodStart: currentPeriod.period_start, contentFingerprint: "wec_1", freshness: "new" as const, originClass: "raw_external" as const, sourceRank: 1 }], metrics: { providerAttemptCount: 1, providerSuccessCount: 1, providerFailureCount: 0, providerNotConfiguredCount: 0, rawExternalResultCount: 1, normalizedExternalResultCount: 1, deduplicatedExternalCount: 1, sourceDegraded: false } }; },
+    analyze: async ({ userEvidence, correctiveInstruction }: { userEvidence: Array<{ id: string }>; correctiveInstruction?: string }) => {
+      analyzedIds.push(userEvidence.map((item) => item.id));
+      if (!correctiveInstruction) return { summary: "Grounded", problems: [{ problem_title: "Businesses have workflow inefficiencies.", evidence_references: ["weekly_external_1"] }] };
+      assert.match(correctiveInstruction, /problem title was too generic/);
+      return { summary: "Grounded", problems: [] };
+    },
+    log: (event: string, payload: Record<string, unknown>) => events.push({ event, payload }),
+  }) });
+  assert.equal(result.run.status, "completed");
+  assert.equal(collectionCalls, 1); assert.equal(sourceWrites, 1); assert.equal(problemWrites, 1); assert.equal(completeCalls, 1);
+  assert.equal(analyzedIds.length, 2); assert.deepEqual(analyzedIds[0], analyzedIds[1]);
+  assert.equal(events.find((entry) => entry.event === "model_validation_failed")?.payload.validationReason, "generic_problem_title");
+  assert.equal(events.find((entry) => entry.event === "model_retry_started")?.payload.attemptNumber, 2);
+  const diagnosticText = JSON.stringify(events);
+  assert.equal(diagnosticText.includes("example.com/private"), false);
+  assert.equal(diagnosticText.includes("Businesses have workflow inefficiencies"), false);
+  assert.equal(diagnosticText.includes("Corrective regeneration instruction"), false);
+});
+
+test("two validation failures fail closed after two attempts with a stable reason", async () => {
+  const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  let modelCalls = 0; let problemWrites = 0;
+  await assert.rejects(runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
+    repository: repository({ async replaceProblems() { problemWrites += 1; return []; } }),
+    aggregate: async () => ({ items: [{ kind: "scan", source: "scan", id: "scan-1", title: "Evidence", summary: "Grounded evidence", occurredAt: "2026-08-04T00:00:00.000Z" }], sharedContext: [], bySource: {} }),
+    analyze: async () => { modelCalls += 1; return { summary: "Grounded", problems: [{ problem_title: "Businesses have workflow inefficiencies.", evidence_references: ["scan-1"] }] }; },
+    log: (event: string, payload: Record<string, unknown>) => events.push({ event, payload }),
+  }) }), (error) => error instanceof WeeklyDiagnosticError && error.code === "weekly_model_quality_validation_failed" && error.validationReason === "generic_problem_title");
+  assert.equal(modelCalls, 2); assert.equal(problemWrites, 0);
+  assert.equal(events.filter((entry) => entry.event === "model_retry_started").length, 1);
+  assert.equal(events.filter((entry) => entry.event === "model_retry_exhausted").length, 1);
+});
+
+test("invalid evidence references are diagnosed but never retried", async () => {
+  let modelCalls = 0;
+  await assert.rejects(runAuthoritativeWeeklyGenerationForUser({ userId: "user-1", period, dependencies: deps({
+    aggregate: async () => ({ items: [{ kind: "scan", source: "scan", id: "scan-1", title: "Evidence", summary: "Grounded evidence", occurredAt: "2026-08-04T00:00:00.000Z" }], sharedContext: [], bySource: {} }),
+    analyze: async () => { modelCalls += 1; return { summary: "Grounded", problems: [{ problem_title: "Specific handoff issue", evidence_references: ["unknown"] }] }; },
+  }) }), (error) => error instanceof WeeklyDiagnosticError && error.validationReason === "invalid_evidence_reference");
+  assert.equal(modelCalls, 1);
 });
 
 test("safe diagnostics contract is wired through button, cron, UI, and Vercel schedule", () => {

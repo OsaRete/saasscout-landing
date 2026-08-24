@@ -169,6 +169,41 @@ export type WeeklyModelOutput = {
   problems?: unknown;
 };
 
+export type WeeklyModelValidationReason =
+  | "malformed_output"
+  | "missing_summary"
+  | "field_limit_exceeded"
+  | "problem_limit_exceeded"
+  | "unsupported_fresh_market_claim"
+  | "problem_without_evidence"
+  | "missing_problem_title"
+  | "generic_problem_title"
+  | "invalid_evidence_reference"
+  | "evidence_reference_limit_exceeded"
+  | "missing_or_indistinct_root_cause"
+  | "duplicate_problem"
+  | "missing_commercial_interpretation"
+  | "unsupported_direct_buying_signal"
+  | "missing_best_opportunity"
+  | "invalid_solution_type"
+  | "incomplete_opportunity"
+  | "inferred_opportunity_insufficient_evidence"
+  | "opportunity_alternative_limit_exceeded";
+
+export class WeeklyModelValidationError extends Error {
+  readonly reason: WeeklyModelValidationReason;
+
+  constructor(reason: WeeklyModelValidationReason, message: string) {
+    super(message);
+    this.name = "WeeklyModelValidationError";
+    this.reason = reason;
+  }
+}
+
+const validationFailure = (reason: WeeklyModelValidationReason, message: string): never => {
+  throw new WeeklyModelValidationError(reason, message);
+};
+
 export type WeeklyDiagnostics = {
   period: WeeklyPeriod;
   userEvidenceCounts: Record<WeeklyEvidenceSourceType, number>;
@@ -456,66 +491,67 @@ function materiallyDuplicates(left: string, right: string) {
 }
 
 export function validateWeeklyModelOutput(output: WeeklyModelOutput, evidence: WeeklyEvidenceSource[], priorUserContext: WeeklyEvidenceSource[] = [], executionMode?: WeeklyExecutionMode) {
-  if (!output || typeof output !== "object") throw new Error("Malformed weekly intelligence output.");
+  if (!output || typeof output !== "object") validationFailure("malformed_output", "Malformed weekly intelligence output.");
   const summary = safeText(output.summary);
-  if (!summary) throw new Error("Weekly intelligence output is missing a summary.");
-  if (!Array.isArray(output.problems)) throw new Error("Malformed weekly intelligence output.");
-  if (summary.length > WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters) throw new Error("Weekly intelligence summary exceeds the output bound.");
-  if (output.problems.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problems) throw new Error("Weekly intelligence output exceeds the problem limit.");
+  if (!summary) validationFailure("missing_summary", "Weekly intelligence output is missing a summary.");
+  const outputProblems = Array.isArray(output.problems) ? output.problems : validationFailure("malformed_output", "Malformed weekly intelligence output.");
+  if (summary.length > WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters) validationFailure("field_limit_exceeded", "Weekly intelligence summary exceeds the output bound.");
+  if (outputProblems.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problems) validationFailure("problem_limit_exceeded", "Weekly intelligence output exceeds the problem limit.");
   if ((executionMode === "data_moat_fallback" || executionMode === "insufficient_context") && /(?:this week|new external|fresh (?:market|source|demand|evidence)|market (?:is )?(?:increasing|growing)|multiple fresh sources)/i.test(summary + " " + JSON.stringify(output.problems))) {
-    throw new Error("Weekly fallback output made an unsupported fresh-market claim.");
+    validationFailure("unsupported_fresh_market_claim", "Weekly fallback output made an unsupported fresh-market claim.");
   }
 
   const hasEvidence = hasMeaningfulWeeklyEvidence(evidence);
-  if (!hasEvidence && output.problems.length > 0) {
-    throw new Error("Weekly intelligence output included personalized problems without user evidence.");
+  if (!hasEvidence && outputProblems.length > 0) {
+    validationFailure("problem_without_evidence", "Weekly intelligence output included personalized problems without user evidence.");
   }
 
   const seenProblems: string[] = [];
-  const problems = output.problems.map((raw) => {
-    if (!raw || typeof raw !== "object") throw new Error("Malformed weekly intelligence problem.");
+  const problems = outputProblems.map((raw) => {
+    if (!raw || typeof raw !== "object") validationFailure("malformed_output", "Malformed weekly intelligence problem.");
     const row = raw as Record<string, unknown>;
     const title = safeText(row.problem_title);
-    if (!title) throw new Error("Weekly intelligence problem is missing a title.");
-    if (GENERIC_PROBLEM.test(title)) throw new Error("Weekly intelligence problem is too generic.");
-    if (title.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters) throw new Error("Weekly intelligence problem title exceeds the output bound.");
+    if (!title) validationFailure("missing_problem_title", "Weekly intelligence problem is missing a title.");
+    if (GENERIC_PROBLEM.test(title)) validationFailure("generic_problem_title", "Weekly intelligence problem is too generic.");
+    if (title.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters) validationFailure("field_limit_exceeded", "Weekly intelligence problem title exceeds the output bound.");
     const references = Array.isArray(row.evidence_references) ? [...new Set(row.evidence_references.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))] : [];
     const eligibleIds = new Set(evidence.map((item) => item.id));
-    if (references.length === 0 || references.some((id) => !eligibleIds.has(id))) throw new Error("Weekly intelligence problem has invalid evidence references.");
+    if (references.length === 0 || references.some((id) => !eligibleIds.has(id))) validationFailure("invalid_evidence_reference", "Weekly intelligence problem has invalid evidence references.");
     const matchedEvidence = evidence.filter((item) => references.includes(item.id));
     const sourceEvidence = matchedEvidence.map((item) => item.summary).filter(Boolean).join(" ");
     const scores = calculateWeeklyProblemScores(references, evidence, priorUserContext);
-    if (references.length > WEEKLY_MODEL_ENVELOPE_LIMITS.evidenceReferences) throw new Error("Weekly intelligence problem has too many evidence references.");
-    const optionalText = (key: string) => { const value = safeText(row[key]) || null; if (value && value.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) throw new Error(`Weekly intelligence ${key} exceeds the output bound.`); return value; };
+    if (references.length > WEEKLY_MODEL_ENVELOPE_LIMITS.evidenceReferences) validationFailure("evidence_reference_limit_exceeded", "Weekly intelligence problem has too many evidence references.");
+    const optionalText = (key: string) => { const value = safeText(row[key]) || null; if (value && value.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) validationFailure("field_limit_exceeded", `Weekly intelligence ${key} exceeds the output bound.`); return value; };
 
     const qualityContract = executionMode === "fresh_market" || executionMode === "mixed";
     const summaryText = optionalText("problem_summary");
     const underlyingCause = optionalText("underlying_cause");
-    if (qualityContract && (!summaryText || !underlyingCause || materiallyDuplicates(summaryText, underlyingCause))) throw new Error("Weekly intelligence problem must distinguish the symptom from a specific root cause.");
+    if (qualityContract && (!summaryText || !underlyingCause || materiallyDuplicates(summaryText, underlyingCause))) validationFailure("missing_or_indistinct_root_cause", "Weekly intelligence problem must distinguish the symptom from a specific root cause.");
     const duplicateIdentity = `${title} ${summaryText || ""}`;
-    if (seenProblems.some((candidate) => materiallyDuplicates(candidate, duplicateIdentity))) throw new Error("Weekly intelligence output contains materially duplicate problems.");
+    if (seenProblems.some((candidate) => materiallyDuplicates(candidate, duplicateIdentity))) validationFailure("duplicate_problem", "Weekly intelligence output contains materially duplicate problems.");
     seenProblems.push(duplicateIdentity);
 
     const commercial = row.commercial_signal && typeof row.commercial_signal === "object" ? row.commercial_signal as Record<string, unknown> : null;
     const commercialType = safeText(commercial?.type);
     const commercialRationale = safeText(commercial?.rationale);
-    if (qualityContract && (!commercial || !["direct_buying_signal", "indirect_commercial_signal", "no_monetization_evidence_yet"].includes(commercialType) || !commercialRationale)) throw new Error("Weekly intelligence problem is missing a bounded commercial interpretation.");
-    if (commercialType === "direct_buying_signal" && !matchedEvidence.some((item) => BUYING_TERMS.test(`${item.title} ${item.summary}`))) throw new Error("Weekly intelligence problem contains an unsupported willingness-to-pay statement.");
+    if (qualityContract && (!commercial || !["direct_buying_signal", "indirect_commercial_signal", "no_monetization_evidence_yet"].includes(commercialType) || !commercialRationale)) validationFailure("missing_commercial_interpretation", "Weekly intelligence problem is missing a bounded commercial interpretation.");
+    if (commercialType === "direct_buying_signal" && !matchedEvidence.some((item) => BUYING_TERMS.test(`${item.title} ${item.summary}`))) validationFailure("unsupported_direct_buying_signal", "Weekly intelligence problem contains an unsupported willingness-to-pay statement.");
 
-    const optionalOpportunityText = (value: unknown) => { const text = safeText(value) || null; if (text && text.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) throw new Error("Weekly intelligence opportunity exceeds the output bound."); return text; };
+    const optionalOpportunityText = (value: unknown) => { const text = safeText(value) || null; if (text && text.length > WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters) validationFailure("field_limit_exceeded", "Weekly intelligence opportunity exceeds the output bound."); return text; };
     const parseOpportunity = (value: unknown, required: boolean): WeeklyOpportunityDirection | null => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) { if (required) throw new Error("Weekly intelligence problem is missing its best opportunity."); return null; }
+      if (!value || typeof value !== "object" || Array.isArray(value)) { if (required) validationFailure("missing_best_opportunity", "Weekly intelligence problem is missing its best opportunity."); return null; }
       const opportunity = value as Record<string, unknown>;
       const solutionType = safeText(opportunity.solution_type) as WeeklySolutionType;
-      if (!WEEKLY_SOLUTION_TYPES.includes(solutionType)) throw new Error("Weekly intelligence opportunity has an invalid solution type.");
+      if (!WEEKLY_SOLUTION_TYPES.includes(solutionType)) validationFailure("invalid_solution_type", "Weekly intelligence opportunity has an invalid solution type.");
       const direction = { solution_type: solutionType, title: safeText(opportunity.title), short_description: safeText(opportunity.short_description), why_it_fits: safeText(opportunity.why_it_fits), monetization_model: optionalOpportunityText(opportunity.monetization_model), rationale: safeText(opportunity.rationale), evidence_basis: safeText(opportunity.evidence_basis) as "observed" | "inferred" };
-      if (!direction.title || !direction.short_description || !direction.why_it_fits || !direction.rationale || !["observed", "inferred"].includes(direction.evidence_basis)) throw new Error("Weekly intelligence opportunity is incomplete.");
-      if (direction.evidence_basis === "inferred" && references.length < 2) throw new Error("Weekly intelligence inferred opportunity requires multiple evidence references.");
+      if (!direction.title || !direction.short_description || !direction.why_it_fits || !direction.rationale || !["observed", "inferred"].includes(direction.evidence_basis)) validationFailure("incomplete_opportunity", "Weekly intelligence opportunity is incomplete.");
+      if (direction.evidence_basis === "inferred" && references.length < 2) validationFailure("inferred_opportunity_insufficient_evidence", "Weekly intelligence inferred opportunity requires multiple evidence references.");
       return direction;
     };
     const bestOpportunity = parseOpportunity(row.best_opportunity, qualityContract);
-    const alternativesRaw = row.alternative_opportunities == null ? [] : row.alternative_opportunities;
-    if (!Array.isArray(alternativesRaw) || alternativesRaw.length > 2) throw new Error("Weekly intelligence opportunity alternatives exceed the limit.");
+    const alternativesValue = row.alternative_opportunities == null ? [] : row.alternative_opportunities;
+    const alternativesRaw = Array.isArray(alternativesValue) ? alternativesValue : validationFailure("opportunity_alternative_limit_exceeded", "Weekly intelligence opportunity alternatives exceed the limit.");
+    if (alternativesRaw.length > 2) validationFailure("opportunity_alternative_limit_exceeded", "Weekly intelligence opportunity alternatives exceed the limit.");
     const alternatives = alternativesRaw.map((item) => parseOpportunity(item, true)!);
     const opportunityLine = (item: WeeklyOpportunityDirection) => boundedPromptText(`${item.solution_type}: ${item.title} — ${item.short_description} (${item.evidence_basis}; fit: ${item.why_it_fits}; rationale: ${item.rationale}${item.monetization_model ? `; monetization: ${item.monetization_model}` : ""})`, WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters);
     const workaround = optionalText("existing_workaround");

@@ -11,6 +11,8 @@ import {
   type WeeklyEvidenceSource,
   type WeeklyExecutionMode,
   type WeeklyModelOutput,
+  WeeklyModelValidationError,
+  type WeeklyModelValidationReason,
   type WeeklyPeriod,
   type WeeklyReportProblem,
   type WeeklySharedSource,
@@ -43,6 +45,9 @@ export type WeeklyDiagnosticStage =
   | "model_response_extracted"
   | "model_response_parsed"
   | "model_response_validated"
+  | "model_retry_generation_completed"
+  | "model_retry_response_parsed"
+  | "model_retry_response_validated"
   | "parent_persisted"
   | "sources_persisted"
   | "problems_persisted"
@@ -68,6 +73,7 @@ export type WeeklyDiagnosticCode =
   | "weekly_response_truncated"
   | "weekly_response_parse_failed"
   | "weekly_response_validation_failed"
+  | "weekly_model_quality_validation_failed"
   | "weekly_parent_persistence_failed"
   | "weekly_source_persistence_failed"
   | "weekly_problem_persistence_failed"
@@ -84,13 +90,15 @@ export class WeeklyDiagnosticError extends Error {
   stage: WeeklyDiagnosticStage;
   weeklyExecutionId?: string;
   cause?: unknown;
+  validationReason?: WeeklyModelValidationReason;
 
-  constructor(code: WeeklyDiagnosticCode, stage: WeeklyDiagnosticStage, message: string, options?: { cause?: unknown; weeklyExecutionId?: string }) {
+  constructor(code: WeeklyDiagnosticCode, stage: WeeklyDiagnosticStage, message: string, options?: { cause?: unknown; weeklyExecutionId?: string; validationReason?: WeeklyModelValidationReason }) {
     super(message);
     this.name = "WeeklyDiagnosticError";
     this.code = code;
     this.stage = stage;
     this.weeklyExecutionId = options?.weeklyExecutionId;
+    this.validationReason = options?.validationReason;
     if (options?.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -101,13 +109,14 @@ export function createWeeklyExecutionId() {
 
 export function getWeeklyDiagnostic(error: unknown, fallbackStage: WeeklyDiagnosticStage, weeklyExecutionId?: string) {
   if (error instanceof WeeklyDiagnosticError) {
-    return { code: error.code, stage: error.stage, weeklyExecutionId: error.weeklyExecutionId || weeklyExecutionId };
+    return { code: error.code, stage: error.stage, weeklyExecutionId: error.weeklyExecutionId || weeklyExecutionId, validationReason: error.validationReason };
   }
   return { code: "weekly_unexpected_failure" as const, stage: fallbackStage, weeklyExecutionId };
 }
 
 function classifyWeeklyError(error: unknown, stage: WeeklyDiagnosticStage, weeklyExecutionId: string): WeeklyDiagnosticError {
   if (error instanceof WeeklyDiagnosticError) return error;
+  if (error instanceof WeeklyModelValidationError) return new WeeklyDiagnosticError("weekly_model_quality_validation_failed", "model_response_validated", "Weekly provider response failed deterministic quality validation.", { cause: error, weeklyExecutionId, validationReason: error.reason });
   if (error instanceof WeeklyModelResponseError) {
     const responseStage = error.code === "weekly_response_parse_failed" ? "model_response_parsed" : "model_generation_completed";
     return new WeeklyDiagnosticError(error.code, responseStage, "Weekly provider response did not satisfy the model output contract.", { cause: error, weeklyExecutionId });
@@ -179,6 +188,7 @@ export type AuthoritativeWeeklyGenerationDependencies = {
     priorUserContext: WeeklyEvidenceSource[];
     sharedContext: WeeklySharedSource[];
     executionMode: WeeklyExecutionMode;
+    correctiveInstruction?: string;
   }) => Promise<WeeklyModelOutput | { modelOutput: WeeklyModelOutput; responseMetadata: { responseContentPresent: boolean; responseContentLength: number; finishReason: string; responseFormatRequested: boolean; parserStrategy: WeeklyModelParserStrategy; parseAttemptCount: number; promptCharacterCount?: number; promptApproxTokenCount?: number; maxOutputTokens?: number; requestedProblemCount?: number } }>;
   now?: Date;
   processingTtlMs?: number;
@@ -186,6 +196,37 @@ export type AuthoritativeWeeklyGenerationDependencies = {
   weeklyExecutionId?: string;
   entryPath?: WeeklyEntryPath;
 };
+
+const NON_RETRYABLE_VALIDATION_REASONS = new Set<WeeklyModelValidationReason>(["invalid_evidence_reference", "problem_without_evidence"]);
+
+export function isRetryableWeeklyValidationReason(reason: WeeklyModelValidationReason) {
+  return !NON_RETRYABLE_VALIDATION_REASONS.has(reason);
+}
+
+export function weeklyValidationCorrectiveInstruction(reason: WeeklyModelValidationReason) {
+  const corrections: Record<WeeklyModelValidationReason, string> = {
+    malformed_output: "the output structure did not match the required schema",
+    missing_summary: "the report summary was missing",
+    field_limit_exceeded: "one or more fields exceeded their stated bounds",
+    problem_limit_exceeded: "too many problems were returned",
+    unsupported_fresh_market_claim: "fresh-market language was unsupported",
+    problem_without_evidence: "a problem was returned without eligible evidence",
+    missing_problem_title: "a problem title was missing",
+    generic_problem_title: "a problem title was too generic",
+    invalid_evidence_reference: "an evidence reference was invalid",
+    evidence_reference_limit_exceeded: "a problem cited too many evidence references",
+    missing_or_indistinct_root_cause: "a root cause was missing or not sufficiently distinct from the symptom",
+    duplicate_problem: "the generated problems were materially duplicative",
+    missing_commercial_interpretation: "a bounded commercial interpretation was missing",
+    unsupported_direct_buying_signal: "a direct-buying classification was unsupported",
+    missing_best_opportunity: "the best opportunity was missing",
+    invalid_solution_type: "an opportunity used an invalid solution type",
+    incomplete_opportunity: "an opportunity object was incomplete",
+    inferred_opportunity_insufficient_evidence: "an inferred opportunity lacked sufficient evidence references",
+    opportunity_alternative_limit_exceeded: "too many alternative opportunities were returned",
+  };
+  return `Your previous output did not satisfy the Weekly quality contract because ${corrections[reason]}. Regenerate the complete JSON object using the same supplied evidence. Preserve valid evidence IDs. Follow the Weekly schema exactly.`;
+}
 
 export function normalizeWeeklyProblemsForPersistence(problems: WeeklyReportProblem[]) {
   const byTitleKey = new Map<string, WeeklyReportProblem>();
@@ -324,23 +365,39 @@ export async function runAuthoritativeWeeklyGenerationForUser({
       logStage("model_response_parsed", { skipped: true });
       logStage("model_response_validated", { generatedProblemCount: 0 });
     } else {
-      logStage("model_generation_started");
-      let modelOutput;
-      try {
-        modelOutput = await dependencies.analyze({ period, userEvidence: evidenceEnvelope, priorUserContext, sharedContext, executionMode });
-      } catch (error) {
-        throw classifyWeeklyError(error, "model_generation_completed", weeklyExecutionId);
+      const maxAttempts = 2;
+      let correctiveInstruction: string | undefined;
+      for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
+        logStage("model_generation_started", { attemptNumber, maxAttempts });
+        let modelOutput;
+        try {
+          modelOutput = await dependencies.analyze({ period, userEvidence: evidenceEnvelope, priorUserContext, sharedContext, executionMode, correctiveInstruction });
+        } catch (error) {
+          throw classifyWeeklyError(error, "model_generation_completed", weeklyExecutionId);
+        }
+        const generated = "modelOutput" in modelOutput ? modelOutput : { modelOutput, responseMetadata: undefined };
+        const attemptMetadata = { ...(generated.responseMetadata || {}), attemptNumber, maxAttempts };
+        logStage(attemptNumber === 1 ? "model_generation_completed" : "model_retry_generation_completed", attemptMetadata);
+        logStage("model_response_extracted", attemptMetadata);
+        logStage(attemptNumber === 1 ? "model_response_parsed" : "model_retry_response_parsed", attemptMetadata);
+        try {
+          report = validateWeeklyModelOutput(generated.modelOutput, evidenceEnvelope, priorUserContext, executionMode);
+          if (attemptNumber === 2) logStage("model_retry_response_validated", { attemptNumber, maxAttempts, generatedProblemCount: report.problems.length });
+          logStage("model_response_validated", { attemptNumber, maxAttempts, generatedProblemCount: report.problems.length });
+          break;
+        } catch (error) {
+          if (!(error instanceof WeeklyModelValidationError)) throw classifyWeeklyError(error, "model_response_validated", weeklyExecutionId);
+          const retryEligible = isRetryableWeeklyValidationReason(error.reason);
+          dependencies.log?.("model_validation_failed", { weeklyExecutionId, attemptNumber, maxAttempts, validationReason: error.reason, retryEligible });
+          if (!retryEligible || attemptNumber === maxAttempts) {
+            if (retryEligible) dependencies.log?.("model_retry_exhausted", { weeklyExecutionId, attemptNumber, maxAttempts, validationReason: error.reason, retryEligible });
+            throw classifyWeeklyError(error, "model_response_validated", weeklyExecutionId);
+          }
+          correctiveInstruction = weeklyValidationCorrectiveInstruction(error.reason);
+          dependencies.log?.("model_retry_started", { weeklyExecutionId, attemptNumber: attemptNumber + 1, maxAttempts, validationReason: error.reason, retryEligible: true });
+        }
       }
-      const generated = "modelOutput" in modelOutput ? modelOutput : { modelOutput, responseMetadata: undefined };
-      logStage("model_generation_completed", generated.responseMetadata || {});
-      logStage("model_response_extracted", generated.responseMetadata || {});
-      logStage("model_response_parsed", generated.responseMetadata || {});
-      try {
-        report = validateWeeklyModelOutput(generated.modelOutput, evidenceEnvelope, priorUserContext, executionMode);
-      } catch (error) {
-        throw classifyWeeklyError(error, "model_response_validated", weeklyExecutionId);
-      }
-      logStage("model_response_validated", { generatedProblemCount: report.problems.length });
+      if (!report) throw new WeeklyDiagnosticError("weekly_model_quality_validation_failed", "model_response_validated", "Weekly provider response failed deterministic quality validation.", { weeklyExecutionId });
     }
     const normalizedProblems = normalizeWeeklyProblemsForPersistence(report.problems);
     currentStage = "problems_persisted";
@@ -357,8 +414,8 @@ export async function runAuthoritativeWeeklyGenerationForUser({
   } catch (error) {
     const diagnostic = classifyWeeklyError(error, currentStage, weeklyExecutionId);
     await dependencies.repository.markRunFailed({ runId, errorMessage: diagnostic.code });
-    await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: diagnostic.stage, status: "failed", userId, requestId: weeklyExecutionId, durationMs: Date.now() - workflowStartedAt, failureCategory: diagnostic.code, safeMetadata: { runId, plan: claim.run.plan, weeklyExecutionId, entryPath, stage: diagnostic.stage, code: diagnostic.code } });
-    dependencies.log?.("weekly_failed", { weeklyExecutionId, entryPath, userId, periodKey: `${period.period_start}/${period.period_end}`, existingRunId: runId, failureStage: diagnostic.stage, code: diagnostic.code, durationMs: Date.now() - workflowStartedAt });
+    await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: diagnostic.stage, status: "failed", userId, requestId: weeklyExecutionId, durationMs: Date.now() - workflowStartedAt, failureCategory: diagnostic.code, safeMetadata: { runId, plan: claim.run.plan, weeklyExecutionId, entryPath, stage: diagnostic.stage, code: diagnostic.code, validationReason: diagnostic.validationReason } });
+    dependencies.log?.("weekly_failed", { weeklyExecutionId, entryPath, userId, periodKey: `${period.period_start}/${period.period_end}`, existingRunId: runId, failureStage: diagnostic.stage, code: diagnostic.code, validationReason: diagnostic.validationReason, durationMs: Date.now() - workflowStartedAt });
     throw diagnostic;
   }
 }
