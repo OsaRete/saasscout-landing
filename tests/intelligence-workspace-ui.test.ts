@@ -7,17 +7,46 @@ const shell = readFileSync(new URL("../components/app-shell.tsx", import.meta.ur
 const dashboard = readFileSync(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8");
 const rootLayout = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
 
-test("persistent workspace exposes expanded, collapsed, active, and mobile navigation semantics", () => {
+test("persistent workspace exposes exactly three desktop display modes", () => {
   for (const label of ["Dashboard", "New Scan", "Discover Opportunities", "Scan History", "Opportunities", "Saved Ideas", "Weekly Intelligence"]) assert.match(shell, new RegExp(label));
   assert.match(rootLayout, /<AppShell>\{children\}<\/AppShell>/);
-  assert.match(shell, /data-collapsed=\{collapsed\}/);
-  assert.match(shell, /aria-current=\{active \? "page"/);
-  assert.match(shell, /title=\{collapsed \? item\.label/);
-  assert.match(shell, /aria-label=\{collapsed \? item\.label/);
+  assert.match(shell, /type SidebarDisplayMode = "expanded" \| "collapsed" \| "hover"/);
+  assert.deepEqual([...shell.matchAll(/value: "(expanded|collapsed|hover)"/g)].map((match) => match[1]), ["expanded", "collapsed", "hover"]);
+  assert.match(shell, /data-sidebar-mode=\{sidebarMode\}/);
+  assert.match(shell, /data-sidebar-layout=\{sidebarMode === "expanded" \? "expanded" : "compact"\}/);
+  assert.match(shell, /aria-current=\{routeActive \? "page"/);
+  assert.match(shell, /title=\{!expanded \? item\.label/);
+  assert.match(shell, /aria-label=\{!expanded \? item\.label/);
+});
+
+test("sidebar modes persist locally and safely migrate the legacy boolean", () => {
+  assert.match(shell, /saasscout-sidebar-mode/);
   assert.match(shell, /saasscout-sidebar-collapsed/);
+  assert.match(shell, /legacyCollapsed === "true" \? "collapsed" : "expanded"/);
+  assert.match(shell, /window\.localStorage\.setItem\(SIDEBAR_MODE_KEY, mode\)/);
+  assert.doesNotMatch(shell, /fetch\(|supabase|service[_-]?role|generate-weekly-report|auth\./i);
+});
+
+test("hover mode expands temporarily without changing its compact content layout", () => {
+  assert.match(shell, /sidebarMode === "hover" && hoverExpanded/);
+  assert.match(shell, /expanded \? 160 : 200/);
+  assert.match(shell, /onPointerEnter=\{\(\) => scheduleHoverExpansion\(true\)\}/);
+  assert.match(shell, /onFocusCapture=\{\(\) => scheduleHoverExpansion\(true\)\}/);
+  assert.match(shell, /data-temporarily-expanded=\{temporarilyExpanded\}/);
+  assert.match(shell, /sidebarMode === "expanded" \? "lg:ml-64" : "lg:ml-\[76px\]"/);
+  assert.doesNotMatch(shell, /setSidebarMode\("expanded"\)/);
+});
+
+test("sidebar behavior control and mobile drawer preserve accessible navigation", () => {
+  assert.match(shell, /aria-label="Sidebar behavior" aria-haspopup="menu" aria-expanded=\{modeMenuOpen\}/);
+  assert.match(shell, /role="menu" aria-label="Sidebar behavior"/);
+  assert.match(shell, /role="menuitemradio"/);
+  assert.match(shell, /aria-checked=\{sidebarMode === mode\.value\}/);
+  assert.match(shell, /event\.key === "Escape"/);
   assert.match(shell, /Open product navigation/);
   assert.match(shell, /Close product navigation/);
   assert.match(shell, /href=\{item\.href\}/);
+  assert.match(shell, /\{renderNavigation\(true\)\}/);
 });
 
 test("dashboard has truthful empty and partial intelligence states", () => {
