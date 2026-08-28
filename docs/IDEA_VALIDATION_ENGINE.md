@@ -1,70 +1,75 @@
-# Server-Owned Idea Validation Engine
+# Evidence Alignment Engine (compatibility path: Idea Validation)
 
-## Investigation findings
+> **Product contract:** the active system documented at this legacy file path is **Evidence Alignment**, not real-world Idea Validation. The `docs/IDEA_VALIDATION_ENGINE.md` path, `lib/idea-validation/` modules, internal types and functions, and `POST /api/results/idea-validation` route are retained only for compatibility. New product-facing copy must call the active system **Evidence Alignment**.
 
-### Current opportunity representations
+## Terminology boundary
 
-- Results represents opportunities from completed Scan output and generated `opportunities` rows. Existing display logic uses legacy score fields and scan evidence, but it does not own a reusable validation contract.
-- Discover represents opportunities as accepted `discovered_problems`, discovery runs, Problem Intelligence summaries, and founder matches. It includes product-facing heuristic scores such as pain, revenue, urgency, buying signal, frequency, source quality, and opportunity score.
-- Saved ideas represent user intent through `saved_ideas` rows linked to an opportunity identifier. They are a user-owned signal but are not evidence by themselves unless connected to Scan, Discover, Weekly, or opportunity context.
-- Weekly Intelligence represents opportunities as weekly detected problems and source evidence derived from the Data Moat Aggregation Layer. Weekly interpretation and persistence remain outside aggregation.
-- Problem Intelligence is shared market knowledge. It may be read as supplementary shared context through aggregation, but it must not become private user evidence or be modified by validation.
+**Evidence Alignment** answers:
 
-### Duplicated evaluation logic and heuristics
+> What does SaaSScout already know that supports or contradicts this idea?
 
-- Results, Discover, and Weekly each compute or present confidence-like labels independently.
-- Discover combines persisted score fields and founder-fit weighting for presentation ranking.
-- Scan and Discover normalize legacy opportunity scores separately from engine confidence scoring.
-- The reusable gap was an objective, server-owned read-side validation engine that consumes normalized user-owned evidence before any LLM explanation.
+It measures how strongly an idea aligns with market intelligence SaaSScout already has. It is internal, deterministic corroboration against existing user-owned SaaSScout and Data Moat records. **Evidence Alignment is not real-world customer validation**, and it does not answer whether real customers will want an idea.
 
-### Aggregated evidence available today
+**Idea Validation** is reserved for the future real-world Validation domain. That system will answer:
 
-`aggregateUserDataMoat()` already exposes completed scans, generated opportunities, Discover history, accepted Discover problems, saved ideas, Weekly reports, snapshots, and historical user evidence as normalized user-owned items. It also returns shared Problem Intelligence separately as supplementary context with server diagnostics.
+> What do real people and observable behavior tell us about this idea?
 
-### Conservative metadata extensions
+The future domain may include explicit hypotheses, experiment lifecycles, customer interviews, surveys, landing-page or waitlist behavior, social validation responses, positive and negative human evidence, participant relevance, provenance, multidimensional results, and controlled Data Moat promotion. None of those capabilities are implemented by this V0 semantic reframe.
 
-The aggregation item metadata now preserves bounded scalar Discover score fields and `problemCluster` for accepted Discover problems. These fields are reusable evidence metadata and do not change ownership, persistence, learning, or UI contracts.
+The architectural flows are distinct:
 
-## Validation architecture before
+- Evidence Alignment: `existing intelligence -> deterministic corroboration`
+- Future Idea Validation: `hypothesis -> experiment -> real human/behavioral evidence`
 
-Idea validation was implicit and distributed across UI/workflow-specific score presentation. No reusable server-owned engine evaluated a proposed idea against the user's normalized evidence corpus.
+## Presentation mapping
 
-## Validation architecture after
+Internal status values and the API contract remain unchanged. Results maps them at the presentation boundary so internal corroboration is not overstated:
 
-The Beta validation engine is a read-only server module. It calls the Data Moat Aggregation Layer, filters normalized user-owned evidence, calculates supporting and contradictory signals deterministically, derives confidence from measurable inputs, and returns a normalized validation result. Internal diagnostics are available to server callers and can be stripped before public exposure.
+| Internal status | Product-facing Evidence Alignment label |
+| --- | --- |
+| `validated` | Strong alignment |
+| `promising` | Moderate alignment |
+| `weak` | Weak alignment |
+| `contradicted` | Contradictory evidence |
+| `insufficient_evidence` | Insufficient internal evidence |
 
-## Evidence model
+The internal recommendation `prioritize_beta_validation` is likewise presented as **Prioritize customer research**. It does not assert that customer validation has occurred.
 
-The engine evaluates:
+## Evidence sources and exclusions
 
-- independent related mentions;
-- diversity across normalized Data Moat sources;
-- recurrence across UTC month windows;
-- supporting Scan, Discover, opportunity, saved idea, Weekly, snapshot, and user activity signals;
-- contradictory language or rejected status signals;
-- freshness from the latest related evidence timestamp;
-- bounded signal strength derived from source weight, textual overlap, and normalized score metadata.
+Evidence Alignment reads normalized, existing user-owned records exposed by `aggregateUserDataMoat()`, including completed Scan output, generated opportunities, Discover history and accepted problems, saved ideas, Weekly reports, snapshots, and historical user evidence. Shared Problem Intelligence can be supplementary server context where explicitly requested, but the Results integration excludes it and remains user-scoped.
 
-## Confidence calculation
+Its result is derived/internal intelligence. Renaming the presentation does not turn the result into a new evidence origin. In particular, the engine receives no new evidence from:
 
-Confidence is deterministic. Supporting evidence count, source diversity, recurrence, freshness, and signal strength increase confidence. Contradictory signal count and contradictory strength reduce confidence. Empty evidence returns `insufficient_evidence` with zero confidence.
+- customer interviews;
+- surveys;
+- waitlist or landing-page behavior;
+- social responses;
+- real-world experiment participants.
 
-## Read-only boundary
+Evidence Alignment may later provide hypothesis context, experiment-prioritization context, and supporting or contradictory internal context to Idea Validation. It must never be counted as human validation, behavioral validation, willingness to pay, or direct market-validation evidence.
 
-The engine does not insert, update, delete, upsert, call LLMs, compute embeddings, activate Data Moat learning, persist validation outcomes, or modify Problem Intelligence.
+## Active architecture
 
-## Compatibility
+Results builds a bounded batch of existing opportunities and calls `POST /api/results/idea-validation`. The authenticated route validates the complete request envelope, performs exactly one request-local `aggregateUserDataMoat(userId)` call, builds an immutable context with `buildIdeaValidationDataMoatContext()`, and evaluates accepted ideas with `validateIdeaAgainstDataMoatContext()`.
 
-This implementation does not redesign Dashboard, Results, Discover, Weekly UI, saved ideas UI, Scan workflow, or Data Moat learning. Existing consumers can migrate incrementally in future PRs.
+The deterministic engine evaluates related mentions, normalized source diversity, recurrence across UTC month windows, freshness, bounded signal strength, supporting evidence, and contradictory or rejected evidence. Confidence weights, thresholds, matching, contradiction logic, recommendations, and response fields are unchanged by the Evidence Alignment terminology decision.
 
-## Results batch validation update — 2026-07-22
+The route limit remains `RESULTS_IDEA_VALIDATION_MAX_IDEAS = 30`. Oversized input is rejected, malformed or empty accepted input avoids aggregation, and duplicate stable IDs reuse their first deterministic result. Public results remain `{ validations: Record<string, PublicIdeaValidationResponse> }`; internal aggregation and evaluation diagnostics are stripped.
 
-Results validation now separates evidence acquisition from deterministic idea evaluation. `POST /api/results/idea-validation` remains the public browser contract and accepts `{ ideas: [...] }`, but the server authenticates first, validates the full batch envelope, performs exactly one request-local `aggregateUserDataMoat(userId)` call, builds an immutable internal Data Moat validation context, and evaluates each accepted idea against that shared context.
+## Read-only AI and Data Moat boundary
 
-The reusable deterministic core is `validateIdeaAgainstDataMoatContext()`. It does not read databases, call models, persist outcomes, or invoke `aggregateUserDataMoat()`. `validateIdeasAgainstDataMoatContext()` is a sequential batch helper over the same immutable context. `validateIdea()` remains the single-idea convenience wrapper for legitimate callers and aggregates once for one idea.
+The engine is a read-side deterministic module. It does not insert, update, delete, upsert, persist outcomes, modify Problem Intelligence, activate Data Moat learning, compute embeddings, or call an LLM/model/provider. Request-local reuse preserves user isolation and evidence freshness; no global or cross-request cache is added.
 
-The Results route enforces `RESULTS_IDEA_VALIDATION_MAX_IDEAS = 30`. Oversized batches are rejected with a controlled error instead of being silently truncated. The Results UI sends at most that supported maximum. Empty or malformed accepted input returns no validations before aggregation. Duplicate idea IDs are handled deterministically by validating the first accepted occurrence for that stable ID and reusing that public result for later duplicate positions; the response remains the existing object map keyed by idea/opportunity ID, so duplicate keys collapse in the same way JavaScript object responses historically expose them.
+Evidence Alignment therefore makes no Data Moat write and introduces no schema, migration, RLS, grant, authentication, or authorization change.
 
-Internal aggregation diagnostics and validation diagnostics remain server-only. Public responses still return only stripped validation results under `{ validations: Record<string, PublicIdeaValidationResponse> }`. The route logs only aggregate counts and durations: ideas requested, ideas accepted, unique ideas validated, one aggregation duration, validation duration, total duration, and controlled failure category. It does not log raw evidence, descriptions, user content, tokens, secrets, or provider credentials.
+## Compatibility and non-goals
 
-This PR does not add global or cross-request caching. Reuse is request-local only, preserving user isolation and evidence freshness. Complexity changes from the previous Results loop risk of `O(N × aggregation sources)` to `O(aggregation sources + N × deterministic validation)` for each authenticated request. Confidence scoring, supporting-signal rules, contradictory-signal rules, recommendations, and UI labels are intentionally unchanged.
+The legacy/internal names below remain stable to avoid breaking callers:
+
+- `POST /api/results/idea-validation`;
+- `lib/idea-validation/`;
+- `lib/results/idea-validation-*`;
+- existing `IdeaValidation*` exported identifiers, status enums, recommendation enums, and response fields.
+
+No duplicate endpoint is introduced. No future Validation route, workspace, sidebar item, hypothesis/experiment/respondent model, or database table exists as part of V0. Scan, Discover, Weekly, Saved Ideas, Opportunities persistence, Results business logic, Data Moat aggregation, Knowledge Evolution, authentication, authorization, RLS, grants, and database behavior remain outside this semantic/presentation change.

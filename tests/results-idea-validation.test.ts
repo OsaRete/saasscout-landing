@@ -6,8 +6,9 @@ import type { PublicIdeaValidationResponse } from "../lib/idea-validation/engine
 
 const resultsPage = () => readFileSync(new URL("../app/results/page.tsx", import.meta.url), "utf8");
 const route = () => readFileSync(new URL("../app/api/results/idea-validation/route.ts", import.meta.url), "utf8");
+const appShell = () => readFileSync(new URL("../components/app-shell.tsx", import.meta.url), "utf8");
 
-test("Results consumes the server-owned Idea Validation Engine through its API boundary", () => {
+test("Results consumes Evidence Alignment through the compatible Idea Validation API boundary", () => {
   assert.match(resultsPage(), /\/api\/results\/idea-validation/);
   assert.match(route(), /aggregateUserDataMoat\(/);
   assert.match(route(), /validateIdeaAgainstDataMoatContext\(/);
@@ -22,12 +23,23 @@ test("Results no longer presents legacy confidence_score as opportunity validati
   assert.match(source, /Engine Confidence/);
 });
 
-test("Results renders supporting and contradictory evidence from the engine response", () => {
+test("Results presents internal engine output as Evidence Alignment", () => {
   const source = resultsPage();
   assert.match(source, /validation\.supportingSignals/);
   assert.match(source, /validation\.contradictorySignals/);
-  assert.match(source, /Supporting evidence/);
-  assert.match(source, /Contradictory evidence/);
+  assert.match(source, /Evidence Alignment/);
+  assert.match(source, /Supporting signals/);
+  assert.match(source, /Contradictory signals/);
+  assert.doesNotMatch(source, /Idea Validation Engine/);
+  assert.doesNotMatch(source, /label="Validation"/);
+  assert.doesNotMatch(source, /Validated opportunity intelligence/);
+});
+
+test("Results explicitly distinguishes internal alignment from real-world customer validation", () => {
+  const source = resultsPage();
+  assert.match(source, /Evidence Alignment measures how strongly an idea aligns with market intelligence SaaSScout already has\./);
+  assert.match(source, /This is internal evidence alignment, not real-world customer validation\./);
+  assert.doesNotMatch(source, /href=["']\/validation/);
 });
 
 test("Results validation endpoint keeps diagnostics internal and uses user-scoped read-only evidence", () => {
@@ -58,11 +70,49 @@ test("Results validation presentation is deterministic and compatible with exist
   assert.deepEqual(buildResultsIdeaValidationView(validation), buildResultsIdeaValidationView(validation));
   assert.deepEqual(buildResultsIdeaValidationView(validation), {
     confidenceLabel: "62.3%",
-    statusLabel: "Promising",
+    statusLabel: "Moderate alignment",
     recommendationLabel: "Run deep scan",
-    recommendationText: "The evidence is promising but not conclusive. Run a deeper scan to strengthen or falsify the opportunity.",
+    recommendationText: "Internal evidence is moderately aligned but not conclusive. Run a deeper scan to strengthen or challenge the opportunity.",
     tone: "cyan",
   });
+});
+
+test("internal statuses map to non-overstated Evidence Alignment labels", () => {
+  const base: PublicIdeaValidationResponse = {
+    status: "validated",
+    confidence: 80,
+    evidenceSummary: "Internal evidence only.",
+    supportingSignals: [],
+    contradictorySignals: [],
+    explanation: "Deterministic engine output.",
+    freshness: { latestEvidenceAt: null, ageDays: null, level: "none" },
+    recommendation: "prioritize_beta_validation",
+  };
+  const labels = Object.fromEntries(
+    (["validated", "promising", "weak", "contradicted", "insufficient_evidence"] as const)
+      .map((status) => [status, buildResultsIdeaValidationView({ ...base, status }).statusLabel]),
+  );
+
+  assert.deepEqual(labels, {
+    validated: "Strong alignment",
+    promising: "Moderate alignment",
+    weak: "Weak alignment",
+    contradicted: "Contradictory evidence",
+    insufficient_evidence: "Insufficient internal evidence",
+  });
+  assert.equal(buildResultsIdeaValidationView(base).recommendationLabel, "Prioritize customer research");
+});
+
+test("V0 adds neither a future Validation route nor a sidebar destination", () => {
+  assert.doesNotMatch(appShell(), /href=["']\/validation/);
+  assert.doesNotMatch(appShell(), />\s*Idea Validation\s*</);
+});
+
+test("compatible endpoint remains deterministic, read-only, and provider-independent", () => {
+  const source = route();
+  assert.doesNotMatch(source, /openai|anthropic|generateText|streamText/i);
+  assert.doesNotMatch(source, /\.insert\(|\.update\(|\.upsert\(|\.delete\(/);
+  assert.match(source, /POST\(req: Request\)/);
 });
 
 

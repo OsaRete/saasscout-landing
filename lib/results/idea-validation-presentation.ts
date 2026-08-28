@@ -11,25 +11,25 @@ export type ResultsIdeaValidationView = Readonly<{
 }>;
 
 const STATUS_LABELS: Record<PublicIdeaValidationResponse["status"], string> = {
-  insufficient_evidence: "Needs evidence",
-  weak: "Weak signal",
-  promising: "Promising",
-  validated: "Validated",
-  contradicted: "Contradicted",
+  insufficient_evidence: "Insufficient internal evidence",
+  weak: "Weak alignment",
+  promising: "Moderate alignment",
+  validated: "Strong alignment",
+  contradicted: "Contradictory evidence",
 };
 
 const RECOMMENDATION_LABELS: Record<PublicIdeaValidationResponse["recommendation"], string> = {
   do_not_prioritize: "Do not prioritize",
   collect_more_evidence: "Collect more evidence",
   run_deep_scan: "Run deep scan",
-  prioritize_beta_validation: "Prioritize beta validation",
+  prioritize_beta_validation: "Prioritize customer research",
 };
 
 const RECOMMENDATION_TEXT: Record<PublicIdeaValidationResponse["recommendation"], string> = {
   do_not_prioritize: "Related evidence contains stronger contradiction than support. Treat this as a low-priority idea until new evidence changes the signal.",
-  collect_more_evidence: "The engine did not find enough related user-owned evidence. Collect more market signals before prioritizing execution.",
-  run_deep_scan: "The evidence is promising but not conclusive. Run a deeper scan to strengthen or falsify the opportunity.",
-  prioritize_beta_validation: "The evidence base is strong enough to prioritize beta validation with real users.",
+  collect_more_evidence: "SaaSScout did not find enough related internal evidence. Collect more market intelligence before prioritizing execution.",
+  run_deep_scan: "Internal evidence is moderately aligned but not conclusive. Run a deeper scan to strengthen or challenge the opportunity.",
+  prioritize_beta_validation: "Internal evidence is strongly aligned. Use this context to prioritize real-world customer research, not as a substitute for it.",
 };
 
 export function buildResultsIdeaValidationView(
