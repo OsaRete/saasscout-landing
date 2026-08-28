@@ -710,7 +710,7 @@ export default function ResultsPage() {
                                   <div className="max-w-4xl">
                                     <div className="flex flex-wrap gap-2.5">
                                       <InfoBadge
-                                        label="Validation"
+                                        label="Evidence alignment"
                                         value={validationView?.statusLabel ?? "Pending"}
                                         tone={validationView?.tone ?? "cyan"}
                                       />
@@ -740,7 +740,7 @@ export default function ResultsPage() {
                                     </div>
 
                                     <p className="mt-6 text-sm font-semibold uppercase tracking-[0.28em] text-cyan-300">
-                                      Validated opportunity intelligence
+                                      Evidence-backed opportunity intelligence
                                     </p>
 
                                     <h3 className="mt-3 text-3xl font-bold tracking-tight text-white md:text-4xl">
@@ -772,10 +772,13 @@ export default function ResultsPage() {
                               {validation && validationView && (
                                 <section className="border-b border-white/10 bg-black/20 p-6 md:p-8">
                                   <p className="text-xs font-semibold uppercase tracking-[0.26em] text-violet-200">
-                                    Idea Validation Engine
+                                    Evidence Alignment
+                                  </p>
+                                  <p className="mt-3 max-w-5xl text-sm leading-7 text-gray-300">
+                                    Evidence Alignment measures how strongly an idea aligns with market intelligence SaaSScout already has.
                                   </p>
                                   <h4 className="mt-3 text-xl font-semibold text-white">
-                                    {validationView.recommendationLabel}
+                                    {validationView.statusLabel}
                                   </h4>
                                   <p className="mt-3 max-w-5xl text-sm leading-7 text-gray-300">
                                     {validation.evidenceSummary}
@@ -783,14 +786,17 @@ export default function ResultsPage() {
                                   <p className="mt-3 max-w-5xl text-sm leading-7 text-gray-400">
                                     {validationView.recommendationText}
                                   </p>
+                                  <p className="mt-3 max-w-5xl rounded-xl border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3 text-sm leading-6 text-amber-100">
+                                    This is internal evidence alignment, not real-world customer validation.
+                                  </p>
 
                                   <div className="mt-5 grid gap-4 lg:grid-cols-2">
                                     <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.06] p-5">
-                                      <h5 className="font-semibold text-cyan-100">Supporting evidence</h5>
+                                      <h5 className="font-semibold text-cyan-100">Supporting signals</h5>
                                       <div className="mt-3 space-y-3">
                                         {(validation.supportingSignals.length > 0
                                           ? validation.supportingSignals.slice(0, 3)
-                                          : [{ itemId: "none", title: "No supporting signals found.", reason: "Collect more evidence before treating this as validated." }]
+                                          : [{ itemId: "none", title: "No supporting signals found.", reason: "Collect more evidence before treating this as aligned." }]
                                         ).map((signal) => (
                                           <p key={signal.itemId} className="text-sm leading-6 text-gray-300">
                                             {signal.title} — {signal.reason}
@@ -799,7 +805,7 @@ export default function ResultsPage() {
                                       </div>
                                     </div>
                                     <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-5">
-                                      <h5 className="font-semibold text-amber-100">Contradictory evidence</h5>
+                                      <h5 className="font-semibold text-amber-100">Contradictory signals</h5>
                                       <div className="mt-3 space-y-3">
                                         {(validation.contradictorySignals.length > 0
                                           ? validation.contradictorySignals.slice(0, 3)
