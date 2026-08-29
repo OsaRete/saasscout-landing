@@ -380,6 +380,13 @@ export default function SavedIdeasPage() {
                       View Details
                     </Link>
 
+                    <Link
+                      href={`/validation/new?sourceType=saved_idea&sourceId=${encodeURIComponent(savedIdea.id)}&label=${encodeURIComponent(opportunity.title)}&description=${encodeURIComponent(opportunity.pain || "")}`}
+                      className="rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-5 py-3 text-center font-semibold text-cyan-100 hover:bg-cyan-400/20"
+                    >
+                      Validate idea
+                    </Link>
+
                     <button
                       onClick={() => handleRemoveSavedIdea(savedIdea.id)}
                       disabled={removingId === savedIdea.id}

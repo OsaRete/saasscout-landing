@@ -8,8 +8,36 @@ const safe = (error: { code?: string } | null, fallback: ValidationServerError):
 export class ValidationRepository {
   constructor(private readonly db: SupabaseAdminClient) {}
   private async owned(table: string, ownerId: string, id: string, columns = "*"): Promise<Row> { const { data, error } = await this.db.from(table).select(columns).eq("id", id).eq("owner_id", ownerId).maybeSingle(); if (error || !data) throw new ValidationServerError(404, "not_found", "Validation resource not found."); return data as unknown as Row; }
-  async listSubjects(ownerId: string) { const { data, error } = await this.db.from("validation_subjects").select("id,creation_origin,label,context_snapshot,status,created_at").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(100); if (error) safe(error, new ValidationServerError(500, "constraint_conflict", "Could not read validation subjects.")); return data ?? []; }
-  getSubject(ownerId: string, id: string) { return this.owned("validation_subjects", ownerId, id, "id,creation_origin,label,context_snapshot,status,created_at"); }
+  async listSubjects(ownerId: string) {
+    const { data, error } = await this.db.from("validation_subjects").select("id,creation_origin,label,context_snapshot,status,created_at").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(100);
+    if (error) safe(error, new ValidationServerError(500, "constraint_conflict", "Could not read validation subjects."));
+    return Promise.all((data ?? []).map(async subject => {
+      const id=String(subject.id); const [hypotheses, experiments, observations]=await Promise.all([
+        this.db.from("validation_hypothesis_versions").select("version_number,problem_claim").eq("owner_id",ownerId).eq("subject_id",id).order("version_number",{ascending:false}).limit(1),
+        this.db.from("validation_experiment_versions").select("experiment_id,lifecycle,version_number").eq("owner_id",ownerId).eq("subject_id",id),
+        this.db.from("validation_evidence_observations").select("id",{count:"exact",head:true}).eq("owner_id",ownerId).eq("subject_id",id),
+      ]); if(hypotheses.error||experiments.error||observations.error) throw new ValidationServerError(500,"constraint_conflict","Could not read validation subjects.");
+      const latestVersions=new Map<string,Row>(); for(const row of experiments.data??[]){const prior=latestVersions.get(String(row.experiment_id));if(!prior||Number(row.version_number)>Number(prior.version_number))latestVersions.set(String(row.experiment_id),row as Row)}
+      return {...subject,latest_hypothesis:hypotheses.data?.[0]??null,experiment_count:latestVersions.size,experiment_lifecycles:[...latestVersions.values()].map(row=>String(row.lifecycle)),observation_count:observations.count??0};
+    }));
+  }
+  async getSubject(ownerId: string, id: string) {
+    const subject=await this.owned("validation_subjects",ownerId,id,"id,creation_origin,label,context_snapshot,status,created_at");
+    const [links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications]=await Promise.all([
+      this.db.from("validation_subject_links").select("id,source_type,source_row_id,source_version,link_role,context_snapshot,created_at").eq("owner_id",ownerId).eq("subject_id",id),
+      this.db.from("validation_hypotheses").select("id,status,created_at").eq("owner_id",ownerId).eq("subject_id",id),
+      this.db.from("validation_hypothesis_versions").select("id,hypothesis_id,version_number,target_segment,problem_claim,expected_observable_behavior,commercial_assumption,support_criteria,contradiction_criteria,inconclusive_criteria,scope_included,scope_excluded,supersedes_version_id,created_at").eq("owner_id",ownerId).eq("subject_id",id).order("version_number",{ascending:false}),
+      this.db.from("validation_experiments").select("id,visibility,created_at").eq("owner_id",ownerId).eq("subject_id",id),
+      this.db.from("validation_experiment_versions").select("id,experiment_id,hypothesis_version_id,version_number,family,target_audience,collection_method,design_snapshot,screening_criteria,consent_privacy_mode,lifecycle,started_at,completed_at,cancelled_at,supersedes_version_id,created_at").eq("owner_id",ownerId).eq("subject_id",id).order("version_number",{ascending:false}),
+      this.db.from("validation_participants").select("id",{count:"exact",head:true}).eq("owner_id",ownerId),
+      this.db.from("validation_evidence_observations").select("id,experiment_version_id,origin,modality,observed_at,collected_at").eq("owner_id",ownerId).eq("subject_id",id).order("collected_at",{ascending:false}),
+      this.db.from("validation_evidence_classifications").select("id,observation_id,polarity,classification_source,authority_status,rationale,classified_at").eq("owner_id",ownerId),
+    ]); if([links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications].some(x=>x.error)) throw new ValidationServerError(500,"constraint_conflict","Could not read validation workspace.");
+    const hypothesisRows=(hypotheses.data??[]).map(h=>({...h,versions:(versions.data??[]).filter(v=>v.hypothesis_id===h.id)}));
+    const experimentRows=(experiments.data??[]).map(e=>({...e,versions:(experimentVersions.data??[]).filter(v=>v.experiment_id===e.id)}));
+    const observationIds=new Set((observations.data??[]).map(o=>o.id));
+    return {subject,links:links.data??[],hypotheses:hypothesisRows,experiments:experimentRows,participant_count:participants.count??0,observations:observations.data??[],classifications:(classifications.data??[]).filter(c=>observationIds.has(c.observation_id))};
+  }
   async verifyUpstream(ownerId: string, type: string, id: string) { const map: Record<string, [string,string]> = { saved_idea:["saved_ideas","user_id"], opportunity:["opportunities","user_id"], discover:["discovered_problems","user_id"], scan:["scan","user_id"], weekly:["weekly_intelligence_runs","user_id"] }; const target = map[type]; if (!target) throw new ValidationServerError(400,"invalid_request","Unsupported provenance type."); const { data, error } = await this.db.from(target[0]).select("id").eq("id",id).eq(target[1],ownerId).maybeSingle(); if (error || !data) throw new ValidationServerError(404,"not_found","Upstream resource not found."); }
   async createSubject(ownerId: string, row: Row, link?: Row) { if (link) await this.verifyUpstream(ownerId, String(link.source_type), String(link.source_row_id)); const { data, error } = await this.db.rpc("validation_create_subject", { p_owner_id: ownerId, p_creation_origin: row.creation_origin, p_label: row.label, p_context_snapshot: row.context_snapshot, p_source_type: link?.source_type ?? null, p_source_row_id: link?.source_row_id ?? null, p_source_version: link?.source_version ?? null, p_link_context_snapshot: link?.context_snapshot ?? {} }); if (error || !data) safe(error, new ValidationServerError(409,"constraint_conflict","Could not create validation subject.")); return data as Row; }
   async addSubjectLink(ownerId: string, subjectId: string, row: Row) { await this.owned("validation_subjects",ownerId,subjectId,"id"); await this.verifyUpstream(ownerId,String(row.source_type),String(row.source_row_id)); const { data,error }=await this.db.from("validation_subject_links").upsert([{...row,owner_id:ownerId,subject_id:subjectId}],{onConflict:"owner_id,subject_id,source_type,source_row_id,link_role",ignoreDuplicates:true}).select("id,subject_id,source_type,source_row_id,source_version,link_role,context_snapshot,created_at").single(); if(error||!data) safe(error,new ValidationServerError(409,"constraint_conflict","Could not add subject link.")); return data; }
