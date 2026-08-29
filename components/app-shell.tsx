@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 
-const workspaceRoutes = ["/dashboard", "/scan", "/scans", "/discover", "/results", "/saved", "/weekly", "/opportunity", "/sources", "/founder-profile"];
+const workspaceRoutes = ["/dashboard", "/scan", "/scans", "/discover", "/results", "/saved", "/weekly", "/validation", "/opportunity", "/sources", "/founder-profile"];
 const SIDEBAR_MODE_KEY = "saasscout-sidebar-mode";
 const LEGACY_COLLAPSED_KEY = "saasscout-sidebar-collapsed";
 
@@ -25,6 +25,7 @@ const navItems = [
   { href: "/results", label: "Opportunities", icon: "signal", separated: false },
   { href: "/saved", label: "Saved Ideas", icon: "bookmark", separated: false },
   { href: "/weekly", label: "Weekly Intelligence", icon: "pulse", separated: true },
+  { href: "/validation", label: "Idea Validation", icon: "validation", separated: false },
 ] as const;
 
 function NavIcon({ name }: { name: (typeof navItems)[number]["icon"] }) {
@@ -36,6 +37,7 @@ function NavIcon({ name }: { name: (typeof navItems)[number]["icon"] }) {
     signal: <><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></>,
     bookmark: <path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4V4Z"/>,
     pulse: <><path d="M3 12h4l2.2-6 4.2 12 2.1-6H21"/><path d="M4 4h16v16H4z" opacity=".25"/></>,
+    validation: <><path d="M9 3h6l1 2h3v16H5V5h3l1-2Z"/><path d="m8.5 13 2.2 2.2 4.8-5.2"/></>,
   };
   return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
