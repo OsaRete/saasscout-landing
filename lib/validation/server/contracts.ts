@@ -11,7 +11,7 @@ export type ExperimentVersionInput = { hypothesisVersionId: string; family: "cus
 
 export type ValidationSubjectSummary = { id: string; creationOrigin: string; label: string; contextSnapshot: Record<string, unknown>; status: string; createdAt: string };
 export type ValidationSubjectListItem = ValidationSubjectSummary & { latestHypothesis: { versionNumber: number; problemClaim: string } | null; experimentCount: number; experimentLifecycles: string[]; observationCount: number };
-export type ValidationWorkspaceView = { subject: ValidationSubjectSummary; links: unknown[]; hypotheses: unknown[]; experiments: unknown[]; participantCount: number; observations: unknown[]; classifications: unknown[] };
+export type ValidationWorkspaceView = { subject: ValidationSubjectSummary; links: unknown[]; hypotheses: unknown[]; experiments: unknown[]; participantCount: number; observations: unknown[]; classifications: unknown[]; interviewPlans: unknown[]; interviewSessions: unknown[]; participants: unknown[] };
 export type ValidationHypothesisView = { id: string; subjectId: string; status: string; createdAt: string; versions: unknown[] };
 export type ValidationExperimentView = { id: string; subjectId: string; visibility: string; createdAt: string; versions: unknown[] };
 
