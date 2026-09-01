@@ -1,10 +1,16 @@
 import Link from "next/link";
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from "react";
 
 type Tone = "violet" | "cyan" | "green" | "neutral" | "red";
 
 type ButtonProps = {
   children: ReactNode;
+  "aria-label"?: string;
   className?: string;
   href?: string;
   onClick?: () => void;
@@ -19,14 +25,14 @@ const buttonVariants = {
   secondary:
     "border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.07] hover:text-white",
   ghost: "text-violet-300 hover:bg-violet-500/10 hover:text-violet-200",
-  cyan:
-    "border border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20",
+  cyan: "border border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20",
   destructive:
     "border border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20",
 };
 
 export function Button({
   children,
+  "aria-label": ariaLabel,
   className = "",
   href,
   onClick,
@@ -45,7 +51,13 @@ export function Button({
   }
 
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={classes}>
+    <button
+      aria-label={ariaLabel}
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={classes}
+    >
       {children}
     </button>
   );
@@ -55,15 +67,27 @@ export const fieldClasses =
   "w-full rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-60";
 
 export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+  return (
+    <input {...props} className={`${fieldClasses} ${props.className || ""}`} />
+  );
 }
 
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+  return (
+    <textarea
+      {...props}
+      className={`${fieldClasses} ${props.className || ""}`}
+    />
+  );
 }
 
 export function SelectInput(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...props} className={`${fieldClasses} ${props.className || ""}`} />;
+  return (
+    <select
+      {...props}
+      className={`${fieldClasses} [color-scheme:dark] [&>option]:bg-[#0b1020] [&>option]:text-white ${props.className || ""}`}
+    />
+  );
 }
 
 export function Field({
@@ -79,7 +103,9 @@ export function Field({
     <label className="grid gap-2 text-sm font-medium text-gray-300">
       <span>{label}</span>
       {children}
-      {helper && <span className="text-xs leading-relaxed text-gray-500">{helper}</span>}
+      {helper && (
+        <span className="text-xs leading-relaxed text-gray-500">{helper}</span>
+      )}
     </label>
   );
 }
@@ -157,9 +183,7 @@ export function MetricCard({
       <h2 className="mt-3 text-4xl font-bold tracking-tight text-white">
         {value}
       </h2>
-      {helper && (
-        <p className={`mt-2 text-sm ${helperTone[tone]}`}>{helper}</p>
-      )}
+      {helper && <p className={`mt-2 text-sm ${helperTone[tone]}`}>{helper}</p>}
     </div>
   );
 }
@@ -211,8 +235,12 @@ export function LoadingState({
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-violet-400/30 bg-violet-500/10">
           <span className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
         </div>
-        <h1 className="mt-5 text-xl font-bold tracking-tight text-white">{title}</h1>
-        <p className="mt-2 text-sm leading-relaxed text-gray-400">{description}</p>
+        <h1 className="mt-5 text-xl font-bold tracking-tight text-white">
+          {title}
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-gray-400">
+          {description}
+        </p>
       </div>
     </div>
   );
@@ -251,12 +279,16 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={`rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(124,58,237,0.14),transparent_38%),#0B1020] p-10 text-center shadow-2xl shadow-black/20 ${className}`}>
+    <div
+      className={`rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(124,58,237,0.14),transparent_38%),#0B1020] p-10 text-center shadow-2xl shadow-black/20 ${className}`}
+    >
       <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-400/25 bg-cyan-400/10 text-2xl text-cyan-200">
         {icon}
       </div>
       <h2 className="mt-5 text-2xl font-bold text-white">{title}</h2>
-      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-gray-400">{description}</p>
+      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-gray-400">
+        {description}
+      </p>
       {(primaryAction || secondaryAction) && (
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           {primaryAction}
@@ -287,14 +319,18 @@ export function Notice({
   const icons = { success: "✓", error: "!", warning: "!", info: "i" };
 
   return (
-    <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg shadow-black/10 ${tones[tone]} ${className}`}>
+    <div
+      className={`rounded-2xl border px-4 py-3 text-sm shadow-lg shadow-black/10 ${tones[tone]} ${className}`}
+    >
       <div className="flex gap-3">
         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current/30 text-[11px] font-bold">
           {icons[tone]}
         </span>
         <div>
           {title && <p className="font-semibold text-white">{title}</p>}
-          <div className={title ? "mt-1 leading-relaxed" : "leading-relaxed"}>{children}</div>
+          <div className={title ? "mt-1 leading-relaxed" : "leading-relaxed"}>
+            {children}
+          </div>
         </div>
       </div>
     </div>
