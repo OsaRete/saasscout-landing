@@ -1,0 +1,1 @@
+import {publicSurveyHandler,publicSurveyLimit} from "@/lib/validation/server/public-survey-http";export const runtime="nodejs";export async function GET(request:Request,{params}:{params:Promise<{token:string}>}){const{token}=await params;return publicSurveyHandler(async service=>{publicSurveyLimit(request,token);return service.resolve(token)})}

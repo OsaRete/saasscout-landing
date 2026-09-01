@@ -54,7 +54,16 @@ export function validateSurveyDesign(design: SurveyDesign): ValidationResult<Sur
   const errors: ValidationDomainError[] = [];
   const hypothesis = validateDesignHypothesis(design.hypothesis); if (!hypothesis.ok) errors.push(...hypothesis.errors);
   if (!cleanList(design.targetRespondentCriteria).length) errors.push(error("invalid_experiment_design", "Target respondent criteria are required.", "targetRespondentCriteria"));
-  if (!design.questions.length) errors.push(error("invalid_experiment_design", "At least one survey question is required.", "questions"));
-  for (const [index, question] of design.questions.entries()) if (!clean(question.questionRef) || clean(question.prompt).length < 5) errors.push(error("invalid_experiment_design", "Each survey question needs an identifier and bounded prompt.", `questions.${index}`));
+  if (!design.questions.length || design.questions.length > 15) errors.push(error("invalid_experiment_design", "Use 1–15 survey questions; 5–10 is recommended.", "questions"));
+  for (const [index, question] of design.questions.entries()) {
+    const modern = typeof question.required === "boolean";
+    if (!(modern ? /^[A-Za-z0-9_-]{8,80}$/.test(question.questionRef) : Boolean(clean(question.questionRef))) || question.prompt.trim().length < 5 || question.prompt.length > 500) errors.push(error("invalid_experiment_design", "Each survey question needs an opaque identifier and bounded prompt.", `questions.${index}`));
+    if (!modern) continue;
+    const choice = question.type === "single_choice" || question.type === "multiple_choice";
+    if (choice && (!question.options || question.options.length < 2 || question.options.length > 12 || new Set(question.options).size !== question.options.length || question.options.some(option => !option.trim() || option.length > 200))) errors.push(error("invalid_experiment_design", "Choice questions require 2–12 distinct bounded options.", `questions.${index}.options`));
+    if (!choice && question.options?.length) errors.push(error("invalid_experiment_design", "Only choice questions accept options.", `questions.${index}.options`));
+    if (question.type === "number" && (question.min != null && question.max != null && question.min > question.max)) errors.push(error("invalid_experiment_design", "Number minimum cannot exceed maximum.", `questions.${index}`));
+  }
+  if (new Set(design.questions.map(question => question.questionRef)).size !== design.questions.length) errors.push(error("invalid_experiment_design", "Question identifiers must be unique.", "questions"));
   return errors.length ? { ok: false, errors } : success(design);
 }

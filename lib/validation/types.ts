@@ -49,9 +49,9 @@ export type QuestionIntent = "problem_discovery" | "past_behavior" | "frequency_
 export type ConsentPrivacyMode = "anonymous_notes" | "pseudonymous_notes" | "identified_with_explicit_consent";
 export type InterviewQuestion = Readonly<{ questionRef: string; prompt: string; intent: QuestionIntent; biasRisks?: readonly ("leading" | "hypothetical" | "double_barreled")[] }>;
 export type CustomerInterviewDesign = Readonly<{ family: "customer_interview"; hypothesis: Hypothesis; targetParticipantCriteria: readonly string[]; questions: readonly InterviewQuestion[]; consentPrivacyMode: ConsentPrivacyMode; captureMode: "manual_observation" }>;
-export type SurveyQuestionType = "single_choice" | "multiple_choice" | "scale" | "free_text" | "boolean";
-export type SurveyQuestion = Readonly<{ questionRef: string; prompt: string; type: SurveyQuestionType; intent: QuestionIntent; screening: boolean; criterionRelationship: "support" | "contradiction" | "inconclusive" | "context" }>;
-export type SurveyDesign = Readonly<{ family: "survey"; hypothesis: Hypothesis; targetRespondentCriteria: readonly string[]; questions: readonly SurveyQuestion[]; responseSource: "manual" | "imported" }>;
+export type SurveyQuestionType = "single_choice" | "multiple_choice" | "short_text" | "long_text" | "number";
+export type SurveyQuestion = Readonly<{ questionRef: string; prompt: string; type: SurveyQuestionType; required: boolean; options?: readonly string[]; min?: number; max?: number }>;
+export type SurveyDesign = Readonly<{ family: "survey"; hypothesis: Hypothesis; targetRespondentCriteria: readonly string[]; questions: readonly SurveyQuestion[]; responseSource: "public_link" }>;
 
 export type ValidationDomainErrorCode = "invalid_hypothesis" | "untestable_hypothesis" | "invalid_lifecycle_transition" | "material_change_requires_new_version" | "invalid_evidence_origin" | "invalid_evidence_classification" | "invalid_experiment_design";
 export type ValidationDomainError = Readonly<{ code: ValidationDomainErrorCode; field?: string; message: string }>;
