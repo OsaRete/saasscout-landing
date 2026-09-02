@@ -16,6 +16,7 @@ import {
 import { ExperimentForm } from "@/components/validation/experiment-form";
 import { CustomerInterviewWorkspace } from "@/components/validation/customer-interview-workspace";
 import { SurveyWorkspace } from "@/components/validation/survey-workspace";
+import { ValidationIntelligence } from "@/components/validation/validation-intelligence";
 type ExperimentVersion = {
   id: string;
   experiment_id: string;
@@ -578,17 +579,12 @@ export default function WorkspacePage({
               </div>
             )}
           </section>
-          <section className={card}>
-            <p className="text-xs font-semibold uppercase tracking-[.18em] text-slate-400">
-              Validation intelligence
-            </p>
-            <p className="mt-3 text-sm leading-6 text-slate-400">
-              Interpretation is intentionally deferred to V7. Evidence volume
-              and experiment lifecycle are not validation quality.
-            </p>
-          </section>
         </aside>
       </div>
+      <ValidationIntelligence
+        subjectId={id}
+        hasHypothesis={Boolean(latestHypothesis)}
+      />
     </ValidationPage>
   );
 }
