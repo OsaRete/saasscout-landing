@@ -8,6 +8,7 @@ import {
   SNAPSHOT_LIMITS,
 } from "../lib/validation/intelligence/snapshot.ts";
 import { parseValidationIntelligenceOutput } from "../lib/validation/intelligence/model-output.ts";
+import { buildSafeFailureDiagnostic } from "../lib/validation/intelligence/diagnostics.ts";
 const read = (p: string) =>
   readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const sql = read(
@@ -351,6 +352,63 @@ test("strict output requires six dimensions, contradiction and uncertainty and r
   assert.throws(() =>
     parseValidationIntelligenceOutput({ ...valid, successProbability: 0.9 }),
   );
+});
+test("failure diagnostics are bounded by phase and provider status without retaining sensitive content", () => {
+  const secret = "private participant answer and sk-secret";
+  const cases = [
+    [
+      new Error("provider_not_configured"),
+      "provider_request",
+      "provider_configuration_missing",
+    ],
+    [
+      Object.assign(new Error(secret), { status: 400 }),
+      "provider_request",
+      "provider_request_rejected",
+    ],
+    [
+      Object.assign(new Error(secret), { status: 429 }),
+      "provider_request",
+      "provider_rate_limited",
+    ],
+    [
+      Object.assign(new Error(secret), { status: 503 }),
+      "provider_request",
+      "provider_server_error",
+    ],
+    [
+      Object.assign(new Error(secret), { name: "APIConnectionTimeoutError" }),
+      "provider_request",
+      "provider_timeout",
+    ],
+    [new Error(secret), "provider_request", "provider_transport_error"],
+    [
+      new Error("empty_model_output"),
+      "provider_request",
+      "provider_empty_response",
+    ],
+    [
+      new SyntaxError(secret),
+      "provider_request",
+      "provider_response_parse_failed",
+    ],
+    [
+      new Error(secret),
+      "model_output_contract",
+      "model_output_contract_failed",
+    ],
+    [
+      new Error(secret),
+      "persistence_completion",
+      "persistence_completion_failed",
+    ],
+  ] as const;
+  for (const [error, phase, expected] of cases) {
+    const diagnostic = buildSafeFailureDiagnostic(error, phase, 4_700.4);
+    assert.equal(diagnostic.failureCategory, expected);
+    assert.equal(diagnostic.elapsedMs, 4_700);
+    assert.equal(JSON.stringify(diagnostic).includes(secret), false);
+  }
 });
 test("schema is immutable, owner-readable, service-only mutable and concurrency/cost bounded", () => {
   assert.match(

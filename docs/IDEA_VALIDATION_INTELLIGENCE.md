@@ -35,6 +35,8 @@ The required JSON contains all six `{ state, summary, evidenceBasis[] }` assessm
 
 A provider or validation failure marks only the run failed with a safe code. It does not mutate human evidence, hypothesis, experiment lifecycle, or knowledge tables. Diagnostics contain IDs, counts, hashes, states, and provider lifecycle only—never raw evidence, notes, PII, public tokens, or full model output.
 
+The provider boundary also emits one bounded internal failure category for operations: missing configuration, rejected/rate-limited/server responses, timeout/transport failure, empty or unparsable response, authoritative output-contract failure, or completion-persistence failure. It may include the provider HTTP status and elapsed milliseconds, but never an exception message or provider response body. The persisted/public failure remains `analysis_unavailable`; this diagnostic taxonomy does not change the API or run-state contract.
+
 ## UI and recommendation semantics
 
 The workspace first shows authoritative evidence counts, staleness, explicit Analyze/Update action, and bounded history. The report carries the visible **AI interpretation — not human evidence** boundary, six compact qualitative cards, and first-class supporting, contradicting, and uncertainty sections. Sparse/empty evidence is named without claiming representativeness. Failure stays local and retryable.
