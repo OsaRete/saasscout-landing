@@ -4,7 +4,11 @@ import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
 import { buildEvidenceSnapshot, hashEvidenceSnapshot } from "./snapshot";
 import { parseValidationIntelligenceOutput } from "./model-output";
 import type { EvidenceSnapshot } from "./contracts";
-const MODEL = "openai/gpt-4.1-mini";
+import {
+  buildSafeFailureDiagnostic,
+  VALIDATION_INTELLIGENCE_MODEL as MODEL,
+  type ValidationIntelligenceFailurePhase,
+} from "./diagnostics";
 const projection =
   "id,subject_id,hypothesis_id,hypothesis_version_id,analysis_version_number,evidence_snapshot_hash,status,dimension_assessments,supporting_synthesis,contradicting_synthesis,uncertainty_synthesis,overall_assessment,next_experiment_recommendation,created_at,completed_at,failed_at";
 function event(name: string, meta: Record<string, unknown>) {
@@ -192,6 +196,8 @@ export class ValidationIntelligenceService {
       });
       return this.status(ownerId, subjectId);
     }
+    const modelStartedAt = Date.now();
+    let failurePhase: ValidationIntelligenceFailurePhase = "provider_request";
     try {
       event("validation_intelligence_model_started", {
         ownerId,
@@ -202,12 +208,14 @@ export class ValidationIntelligenceService {
       const raw = await (this.completion
         ? this.completion(current.snapshot)
         : this.callModel(current.snapshot));
+      failurePhase = "model_output_contract";
       const result = parseValidationIntelligenceOutput(raw);
       event("validation_intelligence_model_completed", {
         ownerId,
         subjectId,
         runId: claimed.run_id,
       });
+      failurePhase = "persistence_completion";
       const done = await this.db.rpc("validation_complete_intelligence_run", {
         p_owner_id: ownerId,
         p_run_id: claimed.run_id,
@@ -227,17 +235,32 @@ export class ValidationIntelligenceService {
       });
       return this.status(ownerId, subjectId);
     } catch (error) {
+      const diagnostic = buildSafeFailureDiagnostic(
+        error,
+        failurePhase,
+        Date.now() - modelStartedAt,
+      );
       event(
-        error instanceof SyntaxError
+        diagnostic.failureCategory === "model_output_contract_failed"
           ? "validation_intelligence_model_validation_failed"
           : "validation_intelligence_failed",
-        { ownerId, subjectId, runId: claimed.run_id },
+        { ownerId, subjectId, runId: claimed.run_id, ...diagnostic },
       );
-      await this.db.rpc("validation_fail_intelligence_run", {
+      const failed = await this.db.rpc("validation_fail_intelligence_run", {
         p_owner_id: ownerId,
         p_run_id: claimed.run_id,
         p_failure_code: "analysis_unavailable",
       });
+      if (failed.error || failed.data !== true)
+        event("validation_intelligence_failure_persistence_failed", {
+          ownerId,
+          subjectId,
+          runId: claimed.run_id,
+          failureCategory: "persistence_failure_mark_failed",
+          provider: "openrouter",
+          model: MODEL,
+          elapsedMs: Math.max(0, Math.round(Date.now() - modelStartedAt)),
+        });
       throw Object.assign(new Error("analysis_unavailable"), { status: 502 });
     }
   }
