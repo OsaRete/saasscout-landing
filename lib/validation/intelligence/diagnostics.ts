@@ -1,4 +1,9 @@
-export const VALIDATION_INTELLIGENCE_MODEL = "openai/gpt-4.1-mini";
+import {
+  ValidationIntelligenceOutputError,
+  type ValidationIntelligenceValidationReason,
+} from "./model-output.ts";
+
+export const VALIDATION_INTELLIGENCE_MODEL = "openai/gpt-5.1";
 
 export type ValidationIntelligenceFailurePhase =
   "provider_request" | "model_output_contract" | "persistence_completion";
@@ -19,6 +24,7 @@ type SafeFailureDiagnostic = {
   model: typeof VALIDATION_INTELLIGENCE_MODEL;
   elapsedMs: number;
   httpStatus?: number;
+  validationReason?: ValidationIntelligenceValidationReason;
 };
 
 export function buildSafeFailureDiagnostic(
@@ -67,5 +73,9 @@ export function buildSafeFailureDiagnostic(
     model: VALIDATION_INTELLIGENCE_MODEL,
     elapsedMs: Math.max(0, Math.round(elapsedMs)),
     ...(status ? { httpStatus: status } : {}),
+    ...(phase === "model_output_contract" &&
+    error instanceof ValidationIntelligenceOutputError
+      ? { validationReason: error.code }
+      : {}),
   };
 }
