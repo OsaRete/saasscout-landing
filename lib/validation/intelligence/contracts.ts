@@ -12,6 +12,17 @@ export const DIMENSION_STATES = [
   "limited",
   "insufficient",
 ] as const;
+export const OVERALL_ASSESSMENT_LABELS = [
+  "promising",
+  "mixed",
+  "weak",
+  "inconclusive",
+] as const;
+export const NEXT_EXPERIMENT_FAMILIES = [
+  "customer_interview",
+  "survey",
+  "other_future_family",
+] as const;
 export type DimensionKey = (typeof VALIDATION_DIMENSIONS)[number];
 export type ValidationIntelligenceResult = {
   dimensions: Record<
@@ -26,13 +37,13 @@ export type ValidationIntelligenceResult = {
   whatContradictsHypothesis: string[];
   whatRemainsUncertain: string[];
   overallAssessment: {
-    label: "promising" | "mixed" | "weak" | "inconclusive";
+    label: (typeof OVERALL_ASSESSMENT_LABELS)[number];
     summary: string;
   };
   recommendedNextExperiment: {
     goal: string;
     reason: string;
-    suggestedFamily: "customer_interview" | "survey" | "other_future_family";
+    suggestedFamily: (typeof NEXT_EXPERIMENT_FAMILIES)[number];
     targetEvidenceGap: string;
   };
 };

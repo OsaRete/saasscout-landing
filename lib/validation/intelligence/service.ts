@@ -2,7 +2,10 @@ import "server-only";
 import OpenAI from "openai";
 import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
 import { buildEvidenceSnapshot, hashEvidenceSnapshot } from "./snapshot";
-import { parseValidationIntelligenceOutput } from "./model-output";
+import {
+  parseValidationIntelligenceOutput,
+  VALIDATION_INTELLIGENCE_RESPONSE_FORMAT,
+} from "./model-output";
 import type { EvidenceSnapshot } from "./contracts";
 import {
   buildSafeFailureDiagnostic,
@@ -276,7 +279,7 @@ export class ValidationIntelligenceService {
         model: MODEL,
         temperature: 0.1,
         max_tokens: 3500,
-        response_format: { type: "json_object" },
+        response_format: VALIDATION_INTELLIGENCE_RESPONSE_FORMAT,
         messages: [
           {
             role: "system",

@@ -1,8 +1,91 @@
 import {
   DIMENSION_STATES,
+  NEXT_EXPERIMENT_FAMILIES,
+  OVERALL_ASSESSMENT_LABELS,
   VALIDATION_DIMENSIONS,
   type ValidationIntelligenceResult,
 } from "./contracts.ts";
+
+const boundedTextSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 1200,
+  pattern: "\\S",
+};
+const boundedListSchema = {
+  type: "array",
+  maxItems: 12,
+  items: { type: "string", minLength: 1, maxLength: 600, pattern: "\\S" },
+};
+const dimensionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["state", "summary", "evidenceBasis"],
+  properties: {
+    state: { type: "string", enum: [...DIMENSION_STATES] },
+    summary: boundedTextSchema,
+    evidenceBasis: boundedListSchema,
+  },
+};
+
+export const VALIDATION_INTELLIGENCE_RESPONSE_FORMAT = {
+  type: "json_schema" as const,
+  json_schema: {
+    name: "validation_intelligence",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "dimensions",
+        "whatSupportsHypothesis",
+        "whatContradictsHypothesis",
+        "whatRemainsUncertain",
+        "overallAssessment",
+        "recommendedNextExperiment",
+      ],
+      properties: {
+        dimensions: {
+          type: "object",
+          additionalProperties: false,
+          required: [...VALIDATION_DIMENSIONS],
+          properties: Object.fromEntries(
+            VALIDATION_DIMENSIONS.map((dimension) => [
+              dimension,
+              dimensionSchema,
+            ]),
+          ),
+        },
+        whatSupportsHypothesis: boundedListSchema,
+        whatContradictsHypothesis: boundedListSchema,
+        whatRemainsUncertain: boundedListSchema,
+        overallAssessment: {
+          type: "object",
+          additionalProperties: false,
+          required: ["label", "summary"],
+          properties: {
+            label: { type: "string", enum: [...OVERALL_ASSESSMENT_LABELS] },
+            summary: boundedTextSchema,
+          },
+        },
+        recommendedNextExperiment: {
+          type: "object",
+          additionalProperties: false,
+          required: ["goal", "reason", "suggestedFamily", "targetEvidenceGap"],
+          properties: {
+            goal: boundedTextSchema,
+            reason: boundedTextSchema,
+            suggestedFamily: {
+              type: "string",
+              enum: [...NEXT_EXPERIMENT_FAMILIES],
+            },
+            targetEvidenceGap: boundedTextSchema,
+          },
+        },
+      },
+    },
+  },
+};
 
 export const VALIDATION_INTELLIGENCE_VALIDATION_REASONS = [
   "output_not_object",
@@ -98,9 +181,7 @@ export function parseValidationIntelligenceOutput(
   if (!overall || typeof overall !== "object" || Array.isArray(overall))
     reject("overall_assessment_invalid");
   if (
-    !["promising", "mixed", "weak", "inconclusive"].includes(
-      String(overall.label),
-    )
+    !OVERALL_ASSESSMENT_LABELS.includes(overall.label as never)
   )
     reject("overall_assessment_label_invalid");
   if (!text(overall.summary)) reject("overall_assessment_summary_invalid");
@@ -112,9 +193,7 @@ export function parseValidationIntelligenceOutput(
   if (!text(next.targetEvidenceGap))
     reject("next_experiment_evidence_gap_invalid");
   if (
-    !["customer_interview", "survey", "other_future_family"].includes(
-      String(next.suggestedFamily),
-    )
+    !NEXT_EXPERIMENT_FAMILIES.includes(next.suggestedFamily as never)
   )
     reject("next_experiment_family_invalid");
   return value as ValidationIntelligenceResult;
