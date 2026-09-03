@@ -9,10 +9,17 @@ import {
 } from "../lib/validation/intelligence/snapshot.ts";
 import {
   parseValidationIntelligenceOutput,
+  VALIDATION_INTELLIGENCE_RESPONSE_FORMAT,
   ValidationIntelligenceOutputError,
   VALIDATION_INTELLIGENCE_VALIDATION_REASONS,
   type ValidationIntelligenceValidationReason,
 } from "../lib/validation/intelligence/model-output.ts";
+import {
+  DIMENSION_STATES,
+  NEXT_EXPERIMENT_FAMILIES,
+  OVERALL_ASSESSMENT_LABELS,
+  VALIDATION_DIMENSIONS,
+} from "../lib/validation/intelligence/contracts.ts";
 import {
   buildSafeFailureDiagnostic,
   VALIDATION_INTELLIGENCE_MODEL,
@@ -361,6 +368,80 @@ test("strict output requires six dimensions, contradiction and uncertainty and r
     parseValidationIntelligenceOutput({ ...valid, successProbability: 0.9 }),
   );
 });
+test("provider schema strictly mirrors the authoritative V7 contract", () => {
+  const format = VALIDATION_INTELLIGENCE_RESPONSE_FORMAT;
+  const schema = format.json_schema.schema;
+  const dimensions = schema.properties.dimensions;
+  const problemDimension = dimensions.properties.problemEvidence;
+
+  assert.equal(format.type, "json_schema");
+  assert.equal(format.json_schema.strict, true);
+  assert.deepEqual(dimensions.required, [...VALIDATION_DIMENSIONS]);
+  assert.deepEqual(Object.keys(dimensions.properties), [
+    ...VALIDATION_DIMENSIONS,
+  ]);
+  assert.deepEqual(problemDimension.properties.state.enum, [
+    ...DIMENSION_STATES,
+  ]);
+  assert.equal(
+    problemDimension.properties.state.enum.includes("weak" as never),
+    false,
+  );
+  assert.deepEqual(schema.properties.overallAssessment.properties.label.enum, [
+    ...OVERALL_ASSESSMENT_LABELS,
+  ]);
+  assert.deepEqual(
+    schema.properties.recommendedNextExperiment.properties.suggestedFamily
+      .enum,
+    [...NEXT_EXPERIMENT_FAMILIES],
+  );
+  assert.deepEqual(schema.required, [
+    "dimensions",
+    "whatSupportsHypothesis",
+    "whatContradictsHypothesis",
+    "whatRemainsUncertain",
+    "overallAssessment",
+    "recommendedNextExperiment",
+  ]);
+  assert.deepEqual(problemDimension.required, [
+    "state",
+    "summary",
+    "evidenceBasis",
+  ]);
+  assert.deepEqual(schema.properties.overallAssessment.required, [
+    "label",
+    "summary",
+  ]);
+  assert.deepEqual(schema.properties.recommendedNextExperiment.required, [
+    "goal",
+    "reason",
+    "suggestedFamily",
+    "targetEvidenceGap",
+  ]);
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(dimensions.additionalProperties, false);
+  assert.equal(problemDimension.additionalProperties, false);
+  assert.equal(
+    schema.properties.overallAssessment.additionalProperties,
+    false,
+  );
+  assert.equal(
+    schema.properties.recommendedNextExperiment.additionalProperties,
+    false,
+  );
+
+  // JSON Schema requires every listed key, so omitting any dimension is invalid.
+  assert.equal(
+    dimensions.required.every((key) => key in valid.dimensions),
+    true,
+  );
+  const missing = structuredClone(valid);
+  delete missing.dimensions.commercialEvidence;
+  assert.equal(
+    dimensions.required.every((key) => key in missing.dimensions),
+    false,
+  );
+});
 test("every authoritative output rejection branch has a typed bounded reason", () => {
   const cases: Array<[ValidationIntelligenceValidationReason, () => unknown]> =
     [
@@ -704,7 +785,12 @@ test("GET is read-only, POST is explicit intent, provider has one attempt and sa
   assert.equal(VALIDATION_INTELLIGENCE_MODEL, "openai/gpt-5.1");
   assert.match(service, /temperature: 0\.1/);
   assert.match(service, /max_tokens: 3500/);
-  assert.match(service, /response_format: \{ type: "json_object" \}/);
+  assert.match(
+    service,
+    /response_format: VALIDATION_INTELLIGENCE_RESPONSE_FORMAT/,
+  );
+  assert.doesNotMatch(service, /type: "json_object"/);
+  assert.match(service, /parseValidationIntelligenceOutput\(raw\)/);
   assert.match(service, /AbortSignal\.timeout\(8 \* 60 \* 1000\)/);
   assert.doesNotMatch(
     service.slice(
