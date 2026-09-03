@@ -7,8 +7,16 @@ import {
   hashEvidenceSnapshot,
   SNAPSHOT_LIMITS,
 } from "../lib/validation/intelligence/snapshot.ts";
-import { parseValidationIntelligenceOutput } from "../lib/validation/intelligence/model-output.ts";
-import { buildSafeFailureDiagnostic } from "../lib/validation/intelligence/diagnostics.ts";
+import {
+  parseValidationIntelligenceOutput,
+  ValidationIntelligenceOutputError,
+  VALIDATION_INTELLIGENCE_VALIDATION_REASONS,
+  type ValidationIntelligenceValidationReason,
+} from "../lib/validation/intelligence/model-output.ts";
+import {
+  buildSafeFailureDiagnostic,
+  VALIDATION_INTELLIGENCE_MODEL,
+} from "../lib/validation/intelligence/diagnostics.ts";
 const read = (p: string) =>
   readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const sql = read(
@@ -353,6 +361,175 @@ test("strict output requires six dimensions, contradiction and uncertainty and r
     parseValidationIntelligenceOutput({ ...valid, successProbability: 0.9 }),
   );
 });
+test("every authoritative output rejection branch has a typed bounded reason", () => {
+  const cases: Array<[ValidationIntelligenceValidationReason, () => unknown]> =
+    [
+      ["output_not_object", () => null],
+      [
+        "forbidden_claim",
+        () => ({ ...structuredClone(valid), validationScore: 87 }),
+      ],
+      [
+        "dimensions_invalid",
+        () => ({ ...structuredClone(valid), dimensions: [] }),
+      ],
+      [
+        "dimension_missing",
+        () => {
+          const value = structuredClone(valid);
+          delete value.dimensions.commercialEvidence;
+          return value;
+        },
+      ],
+      [
+        "dimension_state_invalid",
+        () => {
+          const value = structuredClone(valid);
+          value.dimensions.problemEvidence.state = "certain";
+          return value;
+        },
+      ],
+      [
+        "dimension_summary_invalid",
+        () => {
+          const value = structuredClone(valid);
+          value.dimensions.problemEvidence.summary = "";
+          return value;
+        },
+      ],
+      [
+        "dimension_evidence_basis_invalid",
+        () => {
+          const value = structuredClone(valid);
+          value.dimensions.problemEvidence.evidenceBasis = "not-a-list";
+          return value;
+        },
+      ],
+      [
+        "supporting_synthesis_invalid",
+        () => ({ ...structuredClone(valid), whatSupportsHypothesis: null }),
+      ],
+      [
+        "contradicting_synthesis_invalid",
+        () => ({ ...structuredClone(valid), whatContradictsHypothesis: null }),
+      ],
+      [
+        "uncertainty_synthesis_invalid",
+        () => ({ ...structuredClone(valid), whatRemainsUncertain: null }),
+      ],
+      [
+        "overall_assessment_invalid",
+        () => ({ ...structuredClone(valid), overallAssessment: null }),
+      ],
+      [
+        "overall_assessment_label_invalid",
+        () => ({
+          ...structuredClone(valid),
+          overallAssessment: { label: "certain", summary: "Summary" },
+        }),
+      ],
+      [
+        "overall_assessment_summary_invalid",
+        () => ({
+          ...structuredClone(valid),
+          overallAssessment: { label: "mixed", summary: "" },
+        }),
+      ],
+      [
+        "next_experiment_recommendation_invalid",
+        () => ({ ...structuredClone(valid), recommendedNextExperiment: null }),
+      ],
+      [
+        "next_experiment_goal_invalid",
+        () => ({
+          ...structuredClone(valid),
+          recommendedNextExperiment: {
+            ...valid.recommendedNextExperiment,
+            goal: "",
+          },
+        }),
+      ],
+      [
+        "next_experiment_reason_invalid",
+        () => ({
+          ...structuredClone(valid),
+          recommendedNextExperiment: {
+            ...valid.recommendedNextExperiment,
+            reason: "",
+          },
+        }),
+      ],
+      [
+        "next_experiment_evidence_gap_invalid",
+        () => ({
+          ...structuredClone(valid),
+          recommendedNextExperiment: {
+            ...valid.recommendedNextExperiment,
+            targetEvidenceGap: "",
+          },
+        }),
+      ],
+      [
+        "next_experiment_family_invalid",
+        () => ({
+          ...structuredClone(valid),
+          recommendedNextExperiment: {
+            ...valid.recommendedNextExperiment,
+            suggestedFamily: "automatic_retry",
+          },
+        }),
+      ],
+      [
+        "unexpected_output_shape",
+        () => {
+          const value = structuredClone(valid);
+          value.circular = value;
+          return value;
+        },
+      ],
+    ];
+  assert.deepEqual(
+    cases.map(([reason]) => reason).sort(),
+    [...VALIDATION_INTELLIGENCE_VALIDATION_REASONS].sort(),
+  );
+  for (const [reason, makeValue] of cases)
+    assert.throws(
+      () => parseValidationIntelligenceOutput(makeValue()),
+      (error) =>
+        error instanceof ValidationIntelligenceOutputError &&
+        error.code === reason,
+      reason,
+    );
+});
+test("model contract diagnostics expose only their server-controlled reason", () => {
+  const sensitive =
+    "participant@example.com said sk-secret interview note survey answer token-123";
+  const value = structuredClone(valid);
+  value.dimensions.problemEvidence.state = sensitive;
+  let error: unknown;
+  try {
+    parseValidationIntelligenceOutput(value);
+  } catch (caught) {
+    error = caught;
+  }
+  const diagnostic = buildSafeFailureDiagnostic(
+    error,
+    "model_output_contract",
+    12,
+  );
+  assert.deepEqual(diagnostic, {
+    failureCategory: "model_output_contract_failed",
+    provider: "openrouter",
+    model: "openai/gpt-5.1",
+    elapsedMs: 12,
+    validationReason: "dimension_state_invalid",
+  });
+  assert.equal(JSON.stringify(diagnostic).includes(sensitive), false);
+  assert.equal(
+    JSON.stringify(diagnostic).includes("participant@example.com"),
+    false,
+  );
+});
 test("failure diagnostics are bounded by phase and provider status without retaining sensitive content", () => {
   const secret = "private participant answer and sk-secret";
   const cases = [
@@ -408,6 +585,8 @@ test("failure diagnostics are bounded by phase and provider status without retai
     assert.equal(diagnostic.failureCategory, expected);
     assert.equal(diagnostic.elapsedMs, 4_700);
     assert.equal(JSON.stringify(diagnostic).includes(secret), false);
+    if (phase !== "model_output_contract")
+      assert.equal("validationReason" in diagnostic, false);
   }
 });
 test("schema is immutable, owner-readable, service-only mutable and concurrency/cost bounded", () => {
@@ -522,6 +701,10 @@ test("GET is read-only, POST is explicit intent, provider has one attempt and sa
   assert.match(route, /GET[\s\S]+false/);
   assert.match(route, /POST[\s\S]+true/);
   assert.equal((service.match(/chat\.completions\.create/g) || []).length, 1);
+  assert.equal(VALIDATION_INTELLIGENCE_MODEL, "openai/gpt-5.1");
+  assert.match(service, /temperature: 0\.1/);
+  assert.match(service, /max_tokens: 3500/);
+  assert.match(service, /response_format: \{ type: "json_object" \}/);
   assert.match(service, /AbortSignal\.timeout\(8 \* 60 \* 1000\)/);
   assert.doesNotMatch(
     service.slice(
