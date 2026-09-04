@@ -56,6 +56,12 @@ test("interview and survey designs require testable hypotheses and bounded quest
   assert.equal(validateInterviewDesign({ ...interview, questions: [] }).ok, false); assert.equal(validateSurveyDesign({ ...survey, questions: [] }).ok, false);
   assert.equal(validateSurveyDesign({ ...survey, hypothesis: { ...hypothesis, problemClaim: "This app will succeed" } }).ok, false);
 });
+test("modern Survey choice designs require meaningful normalized-distinct options", () => {
+  const survey = (options: readonly string[], type: "single_choice" | "multiple_choice"): SurveyDesign => ({ family: "survey", hypothesis, targetRespondentCriteria: ["Agency staff with recent onboarding"], questions: [{ questionRef: "question_1", prompt: "Which workflow do you use?", type, required: true, options }], responseSource: "public_link" });
+  for (const invalid of [[], ["Sheets", ""], ["Sheets", "   "], ["Sheets", " sheets "]]) assert.equal(validateSurveyDesign(survey(invalid, "single_choice")).ok, false);
+  assert.equal(validateSurveyDesign(survey(["Sheets", "Manual"], "single_choice")).ok, true);
+  assert.equal(validateSurveyDesign(survey(["Email", "Shared inbox"], "multiple_choice")).ok, true);
+});
 test("validation domain has no numeric truth score or infrastructure dependency", async () => {
   const files = ["types.ts", "validators.ts", "index.ts"];
   const source = (await Promise.all(files.map((file) => readFile(new URL(`../lib/validation/${file}`, import.meta.url), "utf8")))).join("\n");
