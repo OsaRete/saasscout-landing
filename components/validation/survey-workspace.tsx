@@ -36,6 +36,19 @@ type Answer = {
   question_id: string;
   raw_answer: unknown;
 };
+const isChoice = (type: Q["type"]) =>
+  type === "single_choice" || type === "multiple_choice";
+const choiceKey = (option: string) =>
+  option.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+function choiceError(question: Q): string {
+  if (!isChoice(question.type)) return "";
+  const options = question.options || [];
+  if (options.length < 2 || options.some((option) => !option.trim()))
+    return "Add at least two complete choices before saving this survey.";
+  if (new Set(options.map(choiceKey)).size !== options.length)
+    return "Each choice must be distinct.";
+  return "";
+}
 export function SurveyWorkspace({
   versionId,
   plans,
@@ -64,6 +77,7 @@ export function SurveyWorkspace({
       "idle",
     ),
     [error, setError] = useState(""),
+    [questionErrors, setQuestionErrors] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false),
     copyReset = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -96,8 +110,15 @@ export function SurveyWorkspace({
   }
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setError("");
+    const nextQuestionErrors = Object.fromEntries(
+      questions
+        .map((question) => [question.questionRef, choiceError(question)])
+        .filter(([, message]) => message),
+    );
+    setQuestionErrors(nextQuestionErrors);
+    if (Object.keys(nextQuestionErrors).length) return;
+    setBusy(true);
     try {
       await validationRequest("/api/validation/survey-plans", {
         method: "POST",
@@ -220,7 +241,7 @@ export function SurveyWorkspace({
                             ...x,
                             type: e.target.value as Q["type"],
                             options: e.target.value.includes("choice")
-                              ? x.options || []
+                              ? x.options || ["", ""]
                               : undefined,
                           }
                         : x,
@@ -235,32 +256,82 @@ export function SurveyWorkspace({
                 <option value="number">Number</option>
               </SelectInput>
               {q.options && (
-                <Field
-                  label="Options"
-                  helper="One option per line. Enter at least two options."
-                >
-                  <TextArea
-                    value={q.options.join("\n")}
-                    placeholder={
-                      "Founder / Owner\nOperations\nFinance / Accounting"
-                    }
-                    onChange={(e) =>
-                      setQuestions((old) =>
-                        old.map((x) =>
-                          x === q
-                            ? {
-                                ...x,
-                                options: e.target.value
-                                  .split("\n")
-                                  .map((option) => option.trim())
-                                  .filter(Boolean),
-                              }
-                            : x,
-                        ),
-                      )
-                    }
-                  />
-                </Field>
+                <div>
+                  <p className="text-sm font-medium">Options</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Enter 2–12 distinct choices.
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {q.options.map((option, optionIndex) => (
+                      <div key={optionIndex} className="flex gap-2">
+                        <TextInput
+                          aria-label={`Question ${i + 1} option ${optionIndex + 1}`}
+                          maxLength={200}
+                          value={option}
+                          placeholder={`Option ${optionIndex + 1}`}
+                          onChange={(e) =>
+                            setQuestions((old) =>
+                              old.map((x) =>
+                                x === q
+                                  ? {
+                                      ...x,
+                                      options: x.options?.map((value, index) =>
+                                        index === optionIndex
+                                          ? e.target.value
+                                          : value,
+                                      ),
+                                    }
+                                  : x,
+                              ),
+                            )
+                          }
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() =>
+                            setQuestions((old) =>
+                              old.map((x) =>
+                                x === q
+                                  ? {
+                                      ...x,
+                                      options: x.options?.filter(
+                                        (_, index) => index !== optionIndex,
+                                      ),
+                                    }
+                                  : x,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  {q.options.length < 12 && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() =>
+                        setQuestions((old) =>
+                          old.map((x) =>
+                            x === q
+                              ? { ...x, options: [...(x.options || []), ""] }
+                              : x,
+                          ),
+                        )
+                      }
+                    >
+                      Add choice
+                    </Button>
+                  )}
+                  {questionErrors[q.questionRef] && (
+                    <p role="alert" className="mt-2 text-sm text-rose-200">
+                      {questionErrors[q.questionRef]}
+                    </p>
+                  )}
+                </div>
               )}
               <label className="text-sm">
                 <input

@@ -10,6 +10,8 @@ Survey responses remain in the private Validation evidence layer. V6 performs no
 
 A plan contains a participant-safe title, purpose, and 1–15 user-authored questions; 5–10 high-value questions is recommended. Supported types are single choice, multiple choice, short text, long text, and bounded number. Branching, uploads, executable content, and contact fields are not supported. Creating an edit appends a version under a lock on the logical experiment root. Old responses stay linked to the exact plan and question IDs answered.
 
+Choice authoring keeps visual examples separate from draft values. New single- and multiple-choice questions start with empty editable rows, and the participant-facing labels must be deliberately entered before saving. The authenticated command authoritatively requires 2–12 non-empty, distinct labels after whitespace and case normalization. This prospective authoring rule does not reinterpret or rewrite any prior plan, publication, submission, or answer.
+
 ## Public-link security
 
 Publishing creates 32 random bytes and returns only the base64url token to the authenticated owner. The database stores its SHA-256 hash. The public route is `/validation/survey/<opaque-token>`. It exposes only title, purpose, questions, and a privacy notice—never owner or lineage IDs, founder notes, interview data, other respondents, or aggregate results. Publishing a replacement revokes the prior active link; revocation immediately prevents resolution and submission. All tables deny anonymous mutation. A narrow server endpoint uses the service-role client and derives lineage from the publication.

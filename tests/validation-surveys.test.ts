@@ -328,20 +328,32 @@ test("V6.1 refreshes the authoritative projection on bounded return events", () 
   assert.doesNotMatch(workspaceUi, /setData\([^n]/);
 });
 
-test("V6.1 choice examples are presentation-only and entered options retain validation", () => {
-  assert.match(adminUi, /label="Options"/);
-  assert.match(adminUi, /One option per line\. Enter at least two options\./);
-  assert.match(
-    adminUi,
-    /Founder \/ Owner\\nOperations\\nFinance \/ Accounting/,
-  );
-  assert.match(
-    adminUi,
-    /options: e\.target\.value[\s\S]+\.map\(\(option\) => option\.trim\(\)\)[\s\S]+\.filter\(Boolean\)/,
-  );
-  assert.match(adminUi, /x\.options \|\| \[\]/);
+test("V6.2 choice placeholders remain separate from empty draft values", () => {
+  assert.match(adminUi, /x\.options \|\| \["", ""\]/);
+  assert.match(adminUi, /value=\{option\}/);
+  assert.match(adminUi, /placeholder=\{`Option \$\{optionIndex \+ 1\}`\}/);
   assert.doesNotMatch(adminUi, /\["Option 1",\s*"Option 2"\]/);
+  assert.match(adminUi, />\s*Add choice\s*</);
+  assert.match(adminUi, />\s*Remove\s*</);
+});
+
+test("V6.2 blocks incomplete and duplicate choices beside their question", () => {
+  assert.match(adminUi, /options\.some\(\(option\) => !option\.trim\(\)\)/);
+  assert.match(adminUi, /new Set\(options\.map\(choiceKey\)\)/);
+  assert.match(
+    adminUi,
+    /Add at least two complete choices before saving this survey\./,
+  );
+  assert.match(adminUi, /questionErrors\[q\.questionRef\]/);
+  assert.match(adminUi, /role="alert"/);
   assert.match(server, /Choice questions need 2–12 options/i);
+  assert.match(server, /q\.options\.map\(choiceKey\)/);
+});
+
+test("historical literal choice labels remain valid public survey data", () => {
+  assert.match(publicUi, /q\.options!\.map\(o=>/);
+  assert.doesNotMatch(server, /option===?["']Option [12]/i);
+  assert.doesNotMatch(publicUi, /option===?["']Option [12]/i);
 });
 
 test("V6 stays bounded away from AI and Data Moat writes", () => {
