@@ -16,10 +16,15 @@ import {
 import { ExperimentForm } from "@/components/validation/experiment-form";
 import { CustomerInterviewWorkspace } from "@/components/validation/customer-interview-workspace";
 import { SurveyWorkspace } from "@/components/validation/survey-workspace";
+import {
+  matchesPlanDraftHandoff,
+  type PlanDraftHandoff,
+} from "@/components/validation/plan-draft-handoff";
 import { ValidationIntelligence } from "@/components/validation/validation-intelligence";
 type ExperimentVersion = {
   id: string;
   experiment_id: string;
+  hypothesis_version_id: string;
   version_number: number;
   family: "customer_interview" | "survey";
   target_audience: string[];
@@ -157,6 +162,8 @@ export default function WorkspacePage({
   const [revise, setRevise] = useState(false);
   const [experiment, setExperiment] = useState(false);
   const [conflict, setConflict] = useState("");
+  const [planDraftHandoff, setPlanDraftHandoff] =
+    useState<PlanDraftHandoff | null>(null);
   const mounted = useRef(false),
     hasData = useRef(false),
     refreshInFlight = useRef<Promise<void> | null>(null);
@@ -410,7 +417,8 @@ export default function WorkspacePage({
               <ExperimentForm
                 subjectId={id}
                 hypothesisVersionId={latestHypothesis.id}
-                onDone={() => {
+                onDone={(handoff) => {
+                  setPlanDraftHandoff(handoff);
                   setExperiment(false);
                   load();
                 }}
@@ -427,6 +435,18 @@ export default function WorkspacePage({
                   const v = [...e.versions].sort(
                     (a, b) => b.version_number - a.version_number,
                   )[0];
+                  const applicableHandoff = matchesPlanDraftHandoff(
+                    planDraftHandoff,
+                    {
+                      subjectId: id,
+                      hypothesisVersionId: v.hypothesis_version_id,
+                      experimentId: e.id,
+                      experimentVersionId: v.id,
+                      family: v.family,
+                    },
+                  )
+                    ? planDraftHandoff
+                    : null;
                   return (
                     <article key={e.id} className={card}>
                       <div className="flex flex-wrap justify-between gap-3">
@@ -485,6 +505,12 @@ export default function WorkspacePage({
                             (s) => s.experiment_id === e.id,
                           )}
                           onChange={load}
+                          suggestedQuestions={
+                            applicableHandoff?.family === "customer_interview"
+                              ? applicableHandoff.interviewQuestions
+                              : undefined
+                          }
+                          onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
                       )}
                       {v.family === "survey" && (
@@ -507,6 +533,12 @@ export default function WorkspacePage({
                             ),
                           )}
                           onChange={load}
+                          suggestedQuestions={
+                            applicableHandoff?.family === "survey"
+                              ? applicableHandoff.surveyQuestions
+                              : undefined
+                          }
+                          onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
                       )}
                     </article>

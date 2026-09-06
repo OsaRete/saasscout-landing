@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Button,
   Field,
@@ -11,6 +11,10 @@ import {
 import type { ExperimentDesignDraft } from "@/lib/validation/design-assistant/contracts";
 import { validationRequest, words } from "./api";
 import { card } from "./validation-shell";
+import {
+  createPlanDraftHandoff,
+  type PlanDraftHandoff,
+} from "./plan-draft-handoff";
 
 export function ExperimentForm({
   subjectId,
@@ -20,7 +24,7 @@ export function ExperimentForm({
 }: {
   subjectId: string;
   hypothesisVersionId: string;
-  onDone: () => void;
+  onDone: (handoff: PlanDraftHandoff | null) => void;
   onCancel: () => void;
 }) {
   const [family, setFamily] = useState<"customer_interview" | "survey">(
@@ -34,33 +38,46 @@ export function ExperimentForm({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [appliedDraft, setAppliedDraft] =
+    useState<ExperimentDesignDraft | null>(null);
+  const [aiStatus, setAiStatus] = useState("");
+  const draftPanel = useRef<HTMLElement>(null);
 
   async function generateDraft() {
     setAiBusy(true);
+    setAiStatus("Designing experiment…");
     setError("");
     try {
-      setDraft(
-        await validationRequest<ExperimentDesignDraft>(
-          "/api/validation/design-assistant",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              mode: "experiment",
-              subjectId,
-              hypothesisVersionId,
-              ...(audience.trim()
-                ? { draftInput: { targetAudience: audience } }
-                : {}),
-            }),
-          },
-        ),
+      const result = await validationRequest<ExperimentDesignDraft>(
+        "/api/validation/design-assistant",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mode: "experiment",
+            subjectId,
+            hypothesisVersionId,
+            ...(audience.trim()
+              ? { draftInput: { targetAudience: audience } }
+              : {}),
+          }),
+        },
       );
+      setDraft(result);
+      setAiStatus("AI draft ready");
+      requestAnimationFrame(() => {
+        draftPanel.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+        draftPanel.current?.focus({ preventScroll: true });
+      });
     } catch (caught) {
       setError(
         caught instanceof Error && caught.message !== "auth"
           ? caught.message
           : "Please sign in again.",
       );
+      setAiStatus("AI draft could not be generated. Continue manually.");
     } finally {
       setAiBusy(false);
     }
@@ -73,7 +90,9 @@ export function ExperimentForm({
     setMethod(draft.suggestedCollectionMethod);
     setScreening(draft.screeningCriteria.join("\n"));
     setPrivacy(draft.privacyMode);
+    setAppliedDraft(draft);
     setDraft(null);
+    setAiStatus("");
   }
 
   async function submit(event: React.FormEvent) {
@@ -81,24 +100,38 @@ export function ExperimentForm({
     setBusy(true);
     setError("");
     try {
-      await validationRequest(
-        `/api/validation/subjects/${subjectId}/experiments`,
-        {
-          method: "POST",
-        body: JSON.stringify({hypothesisVersionId,family,targetAudience: words(audience),
-            collectionMethod: method,
-            designSnapshot: {
-              purpose:
-                family === "customer_interview"
-                  ? "Focused conversations"
-                  : "Structured responses",
-            },
-            screeningCriteria: words(screening),
-            consentPrivacyMode: privacy,
-          }),
-        },
+      const created = await validationRequest<{
+        experiment: { id: string };
+        version: {
+          id: string;
+          hypothesis_version_id: string;
+          family: typeof family;
+        };
+      }>(`/api/validation/subjects/${subjectId}/experiments`, {
+        method: "POST",
+        body: JSON.stringify({
+          hypothesisVersionId,
+          family,
+          targetAudience: words(audience),
+          collectionMethod: method,
+          designSnapshot: {
+            purpose:
+              family === "customer_interview"
+                ? "Focused conversations"
+                : "Structured responses",
+          },
+          screeningCriteria: words(screening),
+          consentPrivacyMode: privacy,
+        }),
+      });
+      onDone(
+        createPlanDraftHandoff(
+          subjectId,
+          hypothesisVersionId,
+          appliedDraft,
+          created,
+        ),
       );
-      onDone();
     } catch (caught) {
       setError(
         caught instanceof Error && caught.message !== "auth"
@@ -133,6 +166,9 @@ export function ExperimentForm({
       <p className="text-xs text-slate-500">
         Optional. Each click requests one draft. Applying it never creates or
         starts an experiment.
+      </p>
+      <p role="status" aria-live="polite" className="text-sm text-cyan-200">
+        {aiStatus}
       </p>
       <Field label="Experiment family">
         <SelectInput
@@ -188,9 +224,14 @@ export function ExperimentForm({
         </SelectInput>
       </Field>
       {draft && (
-        <aside className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[.06] p-5">
+        <aside
+          ref={draftPanel}
+          tabIndex={-1}
+          aria-labelledby="experiment-ai-draft-heading"
+          className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[.06] p-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
+        >
           <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
-            AI-assisted draft
+            <span id="experiment-ai-draft-heading">AI-assisted draft</span>
           </p>
           <p className="mt-2 text-sm text-slate-300">
             Review and edit before saving. This is design assistance, not
@@ -217,7 +258,13 @@ export function ExperimentForm({
           </p>
           <div className="mt-4 flex gap-3">
             <Button onClick={applyDraft}>Use this draft</Button>
-            <Button variant="ghost" onClick={() => setDraft(null)}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setDraft(null);
+                setAiStatus("");
+              }}
+            >
               Discard
             </Button>
           </div>

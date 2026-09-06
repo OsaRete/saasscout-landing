@@ -15,7 +15,12 @@ import { validationDesignResponseFormat } from "../lib/validation/design-assista
 import {
   VALIDATION_DESIGN_MAX_OUTPUT_TOKENS,
   VALIDATION_DESIGN_MODEL,
+  type ExperimentDesignDraft,
 } from "../lib/validation/design-assistant/contracts.ts";
+import {
+  createPlanDraftHandoff,
+  matchesPlanDraftHandoff,
+} from "../components/validation/plan-draft-handoff.ts";
 
 const read = (path: string) =>
   readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -23,6 +28,12 @@ const route = read("app/api/validation/design-assistant/route.ts");
 const service = read("lib/validation/design-assistant/service.ts");
 const hypothesisUi = read("components/validation/hypothesis-form.tsx");
 const experimentUi = read("components/validation/experiment-form.tsx");
+const hypothesisUiSource = hypothesisUi;
+const workspaceUi = read("app/validation/[id]/page.tsx");
+const interviewUi = read(
+  "components/validation/customer-interview-workspace.tsx",
+);
+const surveyUi = read("components/validation/survey-workspace.tsx");
 const v7Files = [
   "contracts.ts",
   "diagnostics.ts",
@@ -290,13 +301,137 @@ test("UI calls AI only from explicit handlers and applying a draft changes state
     assert.match(ui, /onClick=\{applyDraft\}/);
   }
   for (const ui of [hypothesisUi, experimentUi]) {
-    const applyBody = ui.match(/function applyDraft\(\) \{([\s\S]*?)\n  \}/)?.[1];
+    const applyBody = ui.match(
+      /function applyDraft\(\) \{([\s\S]*?)\n  \}/,
+    )?.[1];
     assert.ok(applyBody);
     assert.doesNotMatch(applyBody, /validationRequest|submit\(/);
   }
   assert.match(hypothesisUi, /type="submit"/);
   assert.match(experimentUi, /type="submit"/);
   assert.match(hypothesisUi + experimentUi, /Discard/);
+});
+
+test("V7.2 stages exact interview questions only for the created matching context", () => {
+  const draft = JSON.parse(
+    experimentOutput("customer_interview"),
+  ) as ExperimentDesignDraft;
+  const created = {
+    experiment: { id: "experiment-a" },
+    version: {
+      id: "version-a",
+      hypothesis_version_id: hypothesisVersionId,
+      family: "customer_interview" as const,
+    },
+  };
+  const handoff = createPlanDraftHandoff(
+    subjectId,
+    hypothesisVersionId,
+    draft,
+    created,
+  );
+  assert.deepEqual(handoff?.interviewQuestions, draft.interviewQuestions);
+  assert.equal(
+    matchesPlanDraftHandoff(handoff, {
+      subjectId,
+      hypothesisVersionId,
+      experimentId: "experiment-a",
+      experimentVersionId: "version-a",
+      family: "customer_interview",
+    }),
+    true,
+  );
+  assert.equal(
+    matchesPlanDraftHandoff(handoff, {
+      subjectId,
+      hypothesisVersionId,
+      experimentId: "experiment-a",
+      experimentVersionId: "version-a",
+      family: "survey",
+    }),
+    false,
+  );
+});
+
+test("V7.2 preserves structured Survey choices and rejects stale or invalid drafts locally", () => {
+  const draft = JSON.parse(experimentOutput("survey")) as ExperimentDesignDraft;
+  const created = {
+    experiment: { id: "experiment-b" },
+    version: {
+      id: "version-b",
+      hypothesis_version_id: hypothesisVersionId,
+      family: "survey" as const,
+    },
+  };
+  const handoff = createPlanDraftHandoff(
+    subjectId,
+    hypothesisVersionId,
+    draft,
+    created,
+  );
+  assert.deepEqual(handoff?.surveyQuestions, draft.surveyQuestions);
+  assert.equal(
+    createPlanDraftHandoff(subjectId, "stale-hypothesis", draft, created),
+    null,
+  );
+  const placeholders = structuredClone(draft);
+  placeholders.surveyQuestions[0].options = ["Option 1", "Option 2"];
+  // V7.1 rejects placeholders authoritatively; V7.2 never invents them.
+  assert.doesNotMatch(
+    JSON.stringify(handoff?.surveyQuestions),
+    /"Option (?:1|2)"/,
+  );
+  assert.equal(
+    createPlanDraftHandoff(
+      subjectId,
+      hypothesisVersionId,
+      placeholders,
+      created,
+    ),
+    null,
+  );
+});
+
+test("V7.2 apply controls mutate local editor state without persistence or model calls", () => {
+  for (const ui of [interviewUi, surveyUi]) {
+    assert.match(ui, /Use AI suggested questions/);
+    assert.match(ui, /AI suggested questions available/);
+    const applyStart = ui.indexOf("function applySuggestions()");
+    const applyEnd = ui.indexOf("async function", applyStart);
+    const apply = ui.slice(applyStart, applyEnd);
+    assert.ok(apply);
+    assert.match(apply, /setQuestions/);
+    assert.match(apply, /onSuggestionsDone/);
+    assert.doesNotMatch(
+      apply,
+      /validationRequest|fetch|save|publish|transition|design-assistant/i,
+    );
+    assert.match(ui, /Replace my questions/);
+  }
+  assert.match(interviewUi, /Save plan version/);
+  assert.match(surveyUi, /Save immutable plan/);
+  assert.match(surveyUi, /Remove question/);
+  assert.doesNotMatch(interviewUi + surveyUi, /openrouter|openai/i);
+});
+
+test("V7.2 completion status scrolls and focuses exactly from successful explicit generation", () => {
+  for (const ui of [hypothesisUiSource, experimentUi]) {
+    assert.match(ui, /role="status" aria-live="polite"/);
+    assert.match(ui, /AI draft ready/);
+    assert.match(ui, /scrollIntoView\(\{[\s\S]*behavior: "smooth"/);
+    assert.match(ui, /focus\(\{ preventScroll: true \}\)/);
+    assert.match(ui, /tabIndex=\{-1\}/);
+    assert.match(ui, /requestAnimationFrame/);
+    assert.equal((ui.match(/scrollIntoView/g) || []).length, 1);
+    const catchBody = ui.match(
+      /\} catch \(caught\) \{([\s\S]*?)\n    \} finally/,
+    )?.[1];
+    assert.ok(catchBody);
+    assert.doesNotMatch(catchBody, /scrollIntoView|focus\(/);
+  }
+  assert.match(hypothesisUiSource, /Generating draft…/);
+  assert.match(experimentUi, /Designing experiment…/);
+  assert.match(workspaceUi, /matchesPlanDraftHandoff/);
 });
 
 test("V7 source retains its independent model path and does not import V7.1", () => {
