@@ -36,6 +36,7 @@ type Answer = {
   question_id: string;
   raw_answer: unknown;
 };
+type SuggestedQuestion = Q & { options: string[] };
 const isChoice = (type: Q["type"]) =>
   type === "single_choice" || type === "multiple_choice";
 const choiceKey = (option: string) =>
@@ -56,6 +57,8 @@ export function SurveyWorkspace({
   submissions,
   answers,
   onChange,
+  suggestedQuestions,
+  onSuggestionsDone,
 }: {
   versionId: string;
   plans: Plan[];
@@ -63,6 +66,8 @@ export function SurveyWorkspace({
   submissions: Submission[];
   answers: Answer[];
   onChange: () => Promise<unknown> | void;
+  suggestedQuestions?: SuggestedQuestion[];
+  onSuggestionsDone: () => void;
 }) {
   const current = [...plans].sort(
       (a, b) => b.version_number - a.version_number,
@@ -72,6 +77,8 @@ export function SurveyWorkspace({
     [title, setTitle] = useState(current?.title || ""),
     [purpose, setPurpose] = useState(current?.purpose || ""),
     [questions, setQuestions] = useState<Q[]>(current?.questions || []),
+    [questionsEdited, setQuestionsEdited] = useState(Boolean(current)),
+    [replaceWarning, setReplaceWarning] = useState(false),
     [link, setLink] = useState(""),
     [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
       "idle",
@@ -97,7 +104,8 @@ export function SurveyWorkspace({
     return map;
   }, [answers]);
   function add() {
-    if (questions.length < 15)
+    if (questions.length < 15) {
+      setQuestionsEdited(true);
       setQuestions((q) => [
         ...q,
         {
@@ -107,6 +115,24 @@ export function SurveyWorkspace({
           required: false,
         },
       ]);
+    }
+  }
+  function applySuggestions() {
+    if (!suggestedQuestions) return;
+    if (questionsEdited && !replaceWarning) {
+      setReplaceWarning(true);
+      return;
+    }
+    setQuestions(
+      suggestedQuestions.map((question) => ({
+        ...question,
+        options: isChoice(question.type) ? [...question.options] : undefined,
+      })),
+    );
+    setQuestionErrors({});
+    setQuestionsEdited(false);
+    setReplaceWarning(false);
+    onSuggestionsDone();
   }
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -195,6 +221,41 @@ export function SurveyWorkspace({
           onSubmit={save}
           className="space-y-4 rounded-xl bg-white/[.035] p-4"
         >
+          {suggestedQuestions && (
+            <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/[.06] p-3">
+              <p className="text-sm font-medium text-cyan-200">
+                AI suggested questions available
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Applying only changes this editable draft. Review it before
+                saving an immutable plan.
+              </p>
+              {replaceWarning && (
+                <p role="alert" className="mt-2 text-xs text-amber-200">
+                  This will replace your edited question draft. Select replace
+                  to confirm.
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={applySuggestions}
+                >
+                  {replaceWarning
+                    ? "Replace my questions"
+                    : "Use AI suggested questions"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={onSuggestionsDone}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          )}
           <Field label="Participant-facing title">
             <TextInput
               required
@@ -221,13 +282,14 @@ export function SurveyWorkspace({
                   required
                   maxLength={500}
                   value={q.prompt}
-                  onChange={(e) =>
+                  onChange={(e) => (
+                    setQuestionsEdited(true),
                     setQuestions((old) =>
                       old.map((x) =>
                         x === q ? { ...x, prompt: e.target.value } : x,
                       ),
                     )
-                  }
+                  )}
                 />
               </Field>
               <SelectInput
@@ -347,6 +409,16 @@ export function SurveyWorkspace({
                 />{" "}
                 Required
               </label>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setQuestionsEdited(true);
+                  setQuestions((old) => old.filter((item) => item !== q));
+                }}
+              >
+                Remove question
+              </Button>
             </div>
           ))}
           <div className="flex flex-wrap gap-2">

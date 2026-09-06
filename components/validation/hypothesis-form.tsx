@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Field, TextArea, TextInput } from "@/components/ui";
 import type { HypothesisDesignDraft } from "@/lib/validation/design-assistant/contracts";
 import { validationRequest, words } from "./api";
@@ -48,6 +48,8 @@ export function HypothesisForm({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState("");
+  const draftPanel = useRef<HTMLElement>(null);
   const field =
     (key: keyof typeof form) =>
     (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -55,6 +57,7 @@ export function HypothesisForm({
 
   async function generateDraft() {
     setAiBusy(true);
+    setAiStatus("Generating draft…");
     setError("");
     try {
       const result = await validationRequest<HypothesisDesignDraft>(
@@ -77,12 +80,21 @@ export function HypothesisForm({
         },
       );
       setDraft(result);
+      setAiStatus("AI draft ready");
+      requestAnimationFrame(() => {
+        draftPanel.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+        draftPanel.current?.focus({ preventScroll: true });
+      });
     } catch (caught) {
       setError(
         caught instanceof Error && caught.message !== "auth"
           ? caught.message
           : "Please sign in again.",
       );
+      setAiStatus("AI draft could not be generated. Continue manually.");
     } finally {
       setAiBusy(false);
     }
@@ -98,6 +110,7 @@ export function HypothesisForm({
       contradiction: draft.weakeningEvidence.join("\n"),
     }));
     setDraft(null);
+    setAiStatus("");
   }
 
   async function submit(event: React.FormEvent) {
@@ -158,6 +171,9 @@ export function HypothesisForm({
         Optional. Add a target customer and problem first. Each click requests
         one AI draft.
       </p>
+      <p role="status" aria-live="polite" className="text-sm text-cyan-200">
+        {aiStatus}
+      </p>
       <Field label="Target customer / segment">
         <TextInput
           required
@@ -205,9 +221,14 @@ export function HypothesisForm({
         </Field>
       ))}
       {draft && (
-        <aside className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[.06] p-5">
+        <aside
+          ref={draftPanel}
+          tabIndex={-1}
+          aria-labelledby="hypothesis-ai-draft-heading"
+          className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[.06] p-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
+        >
           <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
-            AI-assisted draft
+            <span id="hypothesis-ai-draft-heading">AI-assisted draft</span>
           </p>
           <p className="mt-2 text-sm text-slate-300">
             Review and edit before saving. This is design assistance, not
@@ -225,7 +246,13 @@ export function HypothesisForm({
           </dl>
           <div className="mt-4 flex gap-3">
             <Button onClick={applyDraft}>Use this draft</Button>
-            <Button variant="ghost" onClick={() => setDraft(null)}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setDraft(null);
+                setAiStatus("");
+              }}
+            >
               Discard
             </Button>
           </div>

@@ -49,3 +49,25 @@ Experiment drafts recommend exactly one currently authoritative Beta family:
 questions designed around the most important evidence gap and allow negative
 evidence to contradict the hypothesis. Survey choice questions require meaningful
 respondent-facing labels and use only existing V6 question types.
+
+# V7.2 temporary plan handoff
+
+After a founder explicitly applies an experiment design draft and explicitly
+creates its experiment shell, the already-generated questions are retained only
+in the mounted validation workspace's React state. The handoff is bound to the
+subject, hypothesis version, experiment, experiment version, and recommended
+family returned by the authoritative creation command. A mismatch is ignored;
+refreshing or leaving the workspace discards the handoff.
+
+The matching Interview or Survey plan editor offers an optional **Use AI
+suggested questions** action. Applying or dismissing the suggestions consumes
+the temporary handoff. Applying changes editable local question state only and
+makes no model or persistence request. Existing client validation and the V5/V6
+**Save immutable plan** server command remain the sole route to an authoritative
+plan version. Existing meaningful question content requires an explicit
+replacement confirmation.
+
+Successful explicit generation announces **AI draft ready**, then performs one
+bounded smooth scroll and focus move to the new draft panel. Pending and failure
+states are announced locally. Rendering, applying, saving, and navigation never
+trigger this completion movement or an additional generation.
