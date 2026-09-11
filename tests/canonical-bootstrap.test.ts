@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { analyzeCanonicalBootstrap, classifyBootstrapContext } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
+import { auditCrossCandidateIdentities } from "../lib/knowledge/canonical-bootstrap/cross-candidate-identity-audit.ts";
 import { readUnresolvedProblemObservations } from "../lib/knowledge/canonical-bootstrap/repository.ts";
-import type { UnresolvedProblemObservation } from "../lib/knowledge/canonical-bootstrap/types.ts";
+import type { BootstrapCandidateCluster, UnresolvedProblemObservation } from "../lib/knowledge/canonical-bootstrap/types.ts";
 
 function observation(id: string, title: string, overrides: Partial<UnresolvedProblemObservation> = {}): UnresolvedProblemObservation {
   return {
@@ -19,6 +20,26 @@ function observation(id: string, title: string, overrides: Partial<UnresolvedPro
     affected_niches: [],
     problem_cluster: null,
     observed_at: "2026-09-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function candidate(id: string, title: string, overrides: Partial<BootstrapCandidateCluster> = {}): BootstrapCandidateCluster {
+  const normalizedTitle = title.toLowerCase();
+  return {
+    candidateId: id,
+    disposition: "high_confidence_cluster",
+    candidateCanonicalTitle: title,
+    observations: [{ id: `${id}-observation`, title, normalizedTitle, sourceTable: "discovered_problems", sourceRowId: `${id}-source`, affectedNiches: [], problemCluster: "shared problem", observedAt: null }],
+    aliasesPreview: [{ text: title, normalizedAlias: normalizedTitle, kind: "original_title" }],
+    reasons: ["fixture"],
+    baseActivationDisposition: "auto_activatable",
+    activationDisposition: "auto_activatable",
+    activationBlockReasons: [],
+    crossCandidateAuditDisposition: "not_applicable",
+    finalActivationDisposition: "auto_activatable",
+    trustedAffectedNiches: [],
+    ignoredAffectedNiches: [],
     ...overrides,
   };
 }
@@ -205,6 +226,84 @@ test("activation calibration leaves V8-B0.1 candidate IDs unchanged", () => {
   assert.equal(analyzeCanonicalBootstrap(rows).clusters[0].candidateId, "cb1_0c84941f2664359785641e8c");
 });
 
+test("cross-candidate audit flags adjective and noun near-identity wording", () => {
+  const { audit } = auditCrossCandidateIdentities([
+    candidate("a", "Spreadsheet-Based Workflow Management Inefficiencies"),
+    candidate("b", "Inefficient Spreadsheet-Based Workflow Management"),
+  ]);
+  assert.equal(audit.potentialCollisionPairs.length, 1);
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("normalized_token_near_identity"));
+  assert.deepEqual(audit.blockedAutoActivatableCandidateIds, ["a", "b"]);
+});
+
+test("cross-candidate audit flags a base identity plus bounded consequence", () => {
+  const { audit } = auditCrossCandidateIdentities([
+    candidate("a", "Manual Sales Process Automation Gaps"),
+    candidate("b", "Manual Sales Process Automation Gaps Leading to Missed Leads and Revenue Loss"),
+  ]);
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("title_containment_with_modifier"));
+});
+
+test("cross-candidate audit flags a segment-qualified variant only with context corroboration", () => {
+  const base = candidate("a", "Fragmented Toolsets Causing Operational Inefficiencies", { trustedAffectedNiches: ["freelancers"] });
+  const qualified = candidate("b", "Fragmented Toolsets Causing Operational Inefficiencies for Freelancers", { trustedAffectedNiches: ["freelancers"] });
+  const { audit } = auditCrossCandidateIdentities([base, qualified]);
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("segment_qualified_variant"));
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("trusted_niche_corroboration"));
+});
+
+test("cross-candidate audit ignores unrelated operational problems and generic-token overlap", () => {
+  const { audit } = auditCrossCandidateIdentities([
+    candidate("a", "Invoice Approval Bottlenecks"),
+    candidate("b", "Disconnected CRM Workflow Operations"),
+    candidate("c", "Manual Workflow Automation Operations for Scheduling"),
+    candidate("d", "Manual Workflow Automation Operations for Accounting"),
+  ]);
+  assert.equal(audit.potentialCollisionPairs.length, 0);
+  assert.deepEqual(audit.clearlyUniqueAutoActivatableCandidateIds, ["a", "b", "c", "d"]);
+});
+
+test("an auto candidate matching a blocked candidate becomes finally blocked without losing base disposition", () => {
+  const blocked = candidate("blocked", "Spreadsheet Workflow Management Inefficiency", {
+    baseActivationDisposition: "blocked_for_review", activationDisposition: "blocked_for_review", activationBlockReasons: ["ambiguous_alias_collision"], finalActivationDisposition: "blocked_for_review",
+  });
+  const { audit, clusters } = auditCrossCandidateIdentities([candidate("auto", "Inefficient Spreadsheet Workflow Management"), blocked]);
+  const auto = clusters.find((item) => item.candidateId === "auto");
+  assert.equal(auto?.activationDisposition, "auto_activatable");
+  assert.equal(auto?.baseActivationDisposition, "auto_activatable");
+  assert.equal(auto?.crossCandidateAuditDisposition, "potential_canonical_collision");
+  assert.equal(auto?.finalActivationDisposition, "blocked_for_review");
+  assert.deepEqual(audit.autoCandidatesMatchingBlockedCandidateIds, ["auto"]);
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("auto_candidate_matches_blocked_candidate"));
+});
+
+test("cross-candidate collision groups are deterministic connected review components", () => {
+  const fixtures = [
+    candidate("a", "Manual Sales Process Automation Gaps"),
+    candidate("b", "Manual Sales Process Automation Gaps Leading to Missed Leads"),
+    candidate("c", "Manual Sales Process Automation Gaps Leading to Missed Leads and Revenue Loss"),
+  ];
+  const forwards = auditCrossCandidateIdentities(fixtures).audit;
+  const backwards = auditCrossCandidateIdentities([...fixtures].reverse()).audit;
+  assert.deepEqual(forwards.potentialCollisionGroups, [["a", "b", "c"]]);
+  assert.equal(JSON.stringify(forwards), JSON.stringify(backwards));
+  assert.equal(JSON.stringify(forwards), JSON.stringify(auditCrossCandidateIdentities(fixtures).audit));
+});
+
+test("cross-candidate audit does not alter pre-audit clustering membership or base activation", () => {
+  const report = analyzeCanonicalBootstrap([
+    observation("a1", "Spreadsheet workflow management inefficiencies", { problem_cluster: "alpha" }),
+    observation("a2", "Spreadsheet workflow management inefficiencies", { problem_cluster: "alpha" }),
+    observation("b1", "Inefficient spreadsheet workflow management", { problem_cluster: "beta" }),
+    observation("b2", "Inefficient spreadsheet workflow management", { problem_cluster: "beta" }),
+  ]);
+  assert.equal(report.summary.highConfidenceCandidateClusters, 2);
+  assert.ok(report.clusters.every((cluster) => cluster.disposition === "high_confidence_cluster"));
+  assert.ok(report.clusters.every((cluster) => cluster.activationDisposition === "auto_activatable"));
+  assert.ok(report.clusters.every((cluster) => cluster.finalActivationDisposition === "blocked_for_review"));
+  assert.equal(report.crossCandidateIdentityAudit.potentialCollisionPairs.length, 1);
+});
+
 test("rejects canonicalized input rather than silently expanding scope", () => {
   assert.throws(() => analyzeCanonicalBootstrap([observation("a", "A problem", { canonical_problem_id: "existing" as never })]), /already canonicalized/);
 });
@@ -222,6 +321,7 @@ test("repository paginates a SELECT-only fixture adapter", async () => {
 test("bootstrap implementation exposes neither mutation nor model invocation paths", async () => {
   const files = await Promise.all([
     "lib/knowledge/canonical-bootstrap/analyzer.ts",
+    "lib/knowledge/canonical-bootstrap/cross-candidate-identity-audit.ts",
     "lib/knowledge/canonical-bootstrap/repository.ts",
     "scripts/canonical-bootstrap-dry-run.ts",
   ].map((path) => readFile(new URL(`../${path}`, import.meta.url), "utf8")));

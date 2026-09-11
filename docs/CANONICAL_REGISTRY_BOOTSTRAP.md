@@ -1,4 +1,4 @@
-# V8-B0.1.1 Canonical Registry Bootstrap Activation Calibration
+# V8-B0.1.2 Canonical Registry Bootstrap Identity Fragmentation Audit
 
 ## Purpose and boundary
 
@@ -7,6 +7,8 @@ This phase audits unresolved `problem_observations` and previews likely canonica
 The report is a decision aid for V8-B0.2, not an instruction to merge. Its source rows are fetched through an HTTP `GET`-only repository adapter, while clustering is a pure function over a deliberately narrow, non-PII observation shape. The local artifact is gitignored.
 
 V8-B0.1.1 adds a second, read-only decision after clustering: **high confidence does not mean auto activatable**. High confidence describes the local identity relationship within a candidate. Activation eligibility asks whether that candidate is globally unambiguous and remains supported by safe evidence. The calibration changes neither membership nor candidate identity.
+
+V8-B0.1.2 adds a third, post-cluster decision: **initially auto activatable does not mean globally distinct**. It asks only whether two candidate identities could plausibly be wording variants of one canonical problem. It never decides that they are equivalent. This distinction protects the Data Moat from fragmentation, where future evidence would be split across near-duplicate canonical records, without accepting the equally dangerous risk of an automatic false merge.
 
 ## Existing deduplication audit
 
@@ -43,6 +45,27 @@ Only a `high_confidence_cluster` can be `auto_activatable`. Review-required clus
 
 Exact normalized-title duplicates are the safest initial bootstrap candidates because their identity does not depend on context corroboration. They are normally auto activatable only when globally unique, cluster-compatible, and free of every activation blocker. “Auto activatable” remains a dry-run recommendation, never an activation action.
 
+## Versioned cross-candidate identity audit
+
+Audit rule version: `cross_candidate_identity_audit_v1`. Observation clustering remains exactly `canonical_bootstrap_v1`; the new audit runs only after B0.1.1 activation calibration and never changes candidate membership, candidate IDs, titles, aliases, semantic dispositions, or base activation results.
+
+The comparison scope includes every pair of initially auto-activatable candidates and every pair between an initially auto-activatable candidate and a blocked high-confidence or review-required candidate. Blocked singletons are excluded as comparison partners because one unsupported observation is not enough to block an otherwise eligible cluster. A base activation gate therefore cannot hide a plausible identity split in a substantive candidate.
+
+Candidate titles and alias previews are represented with the shared `normalizeProblemText`, `extractProblemTokens`, and `calculateOverlapScore` primitives. A deliberately tiny morphological equivalence table treats `inefficient`/`inefficiency`/`inefficiencies`, singular/plural `workflow`, and singular/plural `operation` as the same comparison token. This table is bounded to observed structural variants and is not a synonym dictionary. Broad tokens such as `manual`, `workflow`, `automation`, `operation`, `business`, and the normalized inefficiency token cannot provide the required distinctive shared token by themselves.
+
+A pair is reported only when it has at least one conservative identity signal:
+
+1. **Near identity:** title-token Jaccard is at least `8.0/10`, at least three title tokens are shared, and at least one shared token is not in the bounded generic-token set.
+2. **Base plus consequence/modifier:** the smaller title has at least four tokens; all of those tokens occur in the larger title (`10.0/10` containment); the larger title adds at most six tokens; at least one shared token is distinctive; and either title contains the bounded connector `causing`, `leading`, or `resulting`.
+3. **Strong alias identity:** the strongest cross-candidate alias Jaccard is at least `9.0/10`, while the candidate titles share at least three tokens including one distinctive token.
+4. **Segment-qualified variant:** all additional title tokens occur in the longer candidate's trusted affected-niche representation, and matching problem-cluster or overlapping trusted-niche context corroborates the relationship.
+
+Compatible or conflicting non-empty problem clusters and exact trusted-niche overlap are reported as context facts and stable reason codes. They make the diagnostic explainable but do not independently create a collision. `ignoredAffectedNiches` never corroborate identity. Scores for pain, revenue, urgency, trend, buying signal, opportunity, and confidence are absent from this audit.
+
+Potential collision groups are deterministic connected components of reported pairs. Thus `A ↔ B` and `B ↔ C` produce one joint review group, but the group does **not** claim that A, B, and C are equivalent. No winning title, merged candidate, canonical ID, alias reassignment, or observation reassignment is produced.
+
+Each candidate preserves B0.1.1's `activationDisposition` as its base result. The separate `crossCandidateAuditDisposition` is `clearly_unique`, `potential_canonical_collision`, or `not_applicable`, and `finalActivationDisposition` applies the additional safety gate. Any initially auto-activatable candidate in a collision becomes finally `blocked_for_review`; an already blocked candidate remains blocked. The summary therefore separately reports initial auto eligibility, final auto eligibility, newly blocked candidates, collision pairs, and review groups. The audit also lists initially eligible candidates that match an already blocked candidate.
+
 ### Conservative trusted-context filter
 
 Historical `affected_niches` values remain unchanged and remain visible in observation audits. In memory only, the calibration normalizes and classifies each value for whether it may corroborate identity. It accepts a short category label (for example `agencies`, `freelancers`, `small businesses`, `professional services`, `sales teams`, `operations teams`, `retail`, `saas companies`, `b2b companies`, or `independent consultants`). It rejects empty or long phrases, numeric/debug strings, product and pipeline vocabulary, and sentence-like claim vocabulary.
@@ -67,6 +90,8 @@ Before V8-B0.2, reviewers should inspect:
 
 No percentage in the report represents canonical confidence.
 
+The entire B0.1.2 path is deterministic, read-only, and model-free. It has no Supabase mutation client, write/apply mode, external API, OpenRouter or other model call, embeddings, clock input, randomness, or persistence path. Its output is local diagnostic JSON only.
+
 ## Running against production
 
 With the repository's normal server environment configured, run:
@@ -76,3 +101,5 @@ npm run canonical-bootstrap:dry-run
 ```
 
 The command performs paginated `GET` requests selecting only unresolved observations and writes `artifacts/canonical-bootstrap-dry-run.json`. There is no apply, write, or commit mode. The credential is used only as authorization for these reads and is never included in output.
+
+V8-B0.2 remains future work. No registry activation is safe until humans review the B0.1.2 production collision pairs and connected review groups; this audit provides review evidence, not activation or merge authority.

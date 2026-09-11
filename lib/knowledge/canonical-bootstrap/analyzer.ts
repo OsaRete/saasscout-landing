@@ -13,6 +13,7 @@ import {
   type NormalizedIdentityCollision,
   type UnresolvedProblemObservation,
 } from "./types.ts";
+import { auditCrossCandidateIdentities } from "./cross-candidate-identity-audit.ts";
 
 const HIGH_TITLE_OVERLAP = 8;
 const REVIEW_TITLE_OVERLAP = 4.5;
@@ -113,7 +114,7 @@ function auditObservation(row: UnresolvedProblemObservation): BootstrapObservati
 
 function buildCluster(rows: UnresolvedProblemObservation[], disposition: BootstrapCandidateCluster["disposition"], reasons: string[]): BootstrapCandidateCluster {
   const sorted = [...rows].sort((a, b) => compare(a.id, b.id));
-  return { candidateId: candidateId(sorted), disposition, candidateCanonicalTitle: titleCandidate(sorted), observations: sorted.map(auditObservation), aliasesPreview: aliases(sorted), reasons: uniqueSorted(reasons), activationDisposition: "blocked_for_review", activationBlockReasons: ["non_high_confidence_disposition"], trustedAffectedNiches: [], ignoredAffectedNiches: [] };
+  return { candidateId: candidateId(sorted), disposition, candidateCanonicalTitle: titleCandidate(sorted), observations: sorted.map(auditObservation), aliasesPreview: aliases(sorted), reasons: uniqueSorted(reasons), baseActivationDisposition: "blocked_for_review", activationDisposition: "blocked_for_review", activationBlockReasons: ["non_high_confidence_disposition"], crossCandidateAuditDisposition: "not_applicable", finalActivationDisposition: "blocked_for_review", trustedAffectedNiches: [], ignoredAffectedNiches: [] };
 }
 
 function collisionIndex(clusters: BootstrapCandidateCluster[], values: (cluster: BootstrapCandidateCluster) => string[]) {
@@ -166,7 +167,8 @@ function calibrateCluster(cluster: BootstrapCandidateCluster, aliasIndex: Map<st
   // Exact-title clusters do not need context corroboration. For near duplicates, matching
   // cluster or trusted niche evidence must survive the conservative activation filter.
   const sortedReasons = [...reasons].sort(compare);
-  return { ...cluster, activationDisposition: sortedReasons.length ? "blocked_for_review" : "auto_activatable", activationBlockReasons: sortedReasons, trustedAffectedNiches: context.trusted, ignoredAffectedNiches: context.ignored };
+  const activationDisposition = sortedReasons.length ? "blocked_for_review" : "auto_activatable";
+  return { ...cluster, baseActivationDisposition: activationDisposition, activationDisposition, activationBlockReasons: sortedReasons, trustedAffectedNiches: context.trusted, ignoredAffectedNiches: context.ignored };
 }
 
 /** Pure, model-free analysis. It cannot receive a database client and has no persistence path. */
@@ -216,6 +218,7 @@ export function analyzeCanonicalBootstrap(input: readonly UnresolvedProblemObser
   const blockedHighConfidence = calibratedClusters.filter((cluster) => cluster.disposition === "high_confidence_cluster" && cluster.activationDisposition === "blocked_for_review");
   const normalizedCounts = new Map<string, number>();
   for (const row of rows) normalizedCounts.set(normalizedStoredTitle(row), (normalizedCounts.get(normalizedStoredTitle(row)) || 0) + 1);
+  const { audit: crossCandidateIdentityAudit, clusters: auditedClusters } = auditCrossCandidateIdentities(calibratedClusters);
 
   return {
     bootstrapRuleVersion: CANONICAL_BOOTSTRAP_RULE_VERSION,
@@ -239,9 +242,14 @@ export function analyzeCanonicalBootstrap(input: readonly UnresolvedProblemObser
       blockedByNormalizedIdentityCollision: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("duplicate_normalized_identity_across_candidates")).length,
       blockedByContextIssue: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("insufficient_trusted_context")).length,
       blockedByClusterConflict: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("conflicting_problem_cluster")).length,
+      finalAutoActivatableClusters: crossCandidateIdentityAudit.clearlyUniqueAutoActivatableCandidateIds.length,
+      blockedByCrossCandidateIdentityAudit: crossCandidateIdentityAudit.blockedAutoActivatableCandidateIds.length,
+      potentialCanonicalCollisionPairs: crossCandidateIdentityAudit.potentialCollisionPairs.length,
+      potentialCanonicalCollisionGroups: crossCandidateIdentityAudit.potentialCollisionGroups.length,
     },
     ambiguousAliasCollisions,
     normalizedIdentityCollisions,
-    clusters: calibratedClusters,
+    crossCandidateIdentityAudit,
+    clusters: auditedClusters,
   };
 }
