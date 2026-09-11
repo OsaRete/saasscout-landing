@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { analyzeCanonicalBootstrap } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
+import { analyzeCanonicalBootstrap, classifyBootstrapContext } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
 import { readUnresolvedProblemObservations } from "../lib/knowledge/canonical-bootstrap/repository.ts";
 import type { UnresolvedProblemObservation } from "../lib/knowledge/canonical-bootstrap/types.ts";
 
@@ -36,6 +36,10 @@ test("clusters exact normalized duplicates and keeps auditable aliases", () => {
     "normalized_title:slow client onboarding",
     "original_title:slow client onboarding",
   ]);
+  assert.equal(report.clusters[0].activationDisposition, "auto_activatable");
+  assert.deepEqual(report.clusters[0].activationBlockReasons, []);
+  assert.equal(report.summary.autoActivatableClusters, 1);
+  assert.equal(report.activationEligibilityRuleVersion, "canonical_activation_eligibility_v1");
 });
 
 test("clusters strongly overlapping wording only with corroborating context, including across niches", () => {
@@ -114,6 +118,91 @@ test("flags a normalized alias owned by different candidate clusters", () => {
   assert.equal(report.summary.ambiguousAliasCollisions, 1);
   assert.equal(report.ambiguousAliasCollisions[0].normalizedAlias, "shared reconciliation");
   assert.equal(report.ambiguousAliasCollisions[0].candidateIds.length, 2);
+  const affected = report.clusters.filter((cluster) => cluster.activationBlockReasons.includes("ambiguous_alias_collision"));
+  assert.equal(affected.length, 2);
+  assert.ok(affected.every((cluster) => cluster.activationDisposition === "blocked_for_review"));
+  assert.equal(report.summary.blockedByAliasCollision, 2);
+});
+
+test("blocks both candidates when a normalized observation identity crosses clusters", () => {
+  const report = analyzeCanonicalBootstrap([
+    observation("a", "Shared identity", { normalized_problem_title: "shared identity", problem_cluster: "alpha" }),
+    observation("b", "The shared identity", { normalized_problem_title: "shared identity", problem_cluster: "alpha" }),
+    observation("c", "Shared identity", { normalized_problem_title: "shared identity", problem_cluster: "beta" }),
+  ]);
+  const affected = report.clusters.filter((cluster) => cluster.activationBlockReasons.includes("duplicate_normalized_identity_across_candidates"));
+  assert.equal(affected.length, 2);
+  assert.equal(report.normalizedIdentityCollisions[0].normalizedIdentity, "shared identity");
+  assert.deepEqual(report.normalizedIdentityCollisions[0].candidateIds, [...report.normalizedIdentityCollisions[0].candidateIds].sort());
+});
+
+test("classifies trusted niches and ignores internal or sentence-like context deterministically", () => {
+  for (const value of ["agencies", "freelancers", "small businesses", "professional services", "sales teams", "operations teams", "retail", "saas companies", "b2b companies", "independent consultants"]) {
+    assert.equal(classifyBootstrapContext(value), "trusted_context", value);
+  }
+  for (const value of ["data moat", "weekly intelligence", "evidence multiple signals sources 1 5 7 8", "manual workflows lead to errors delays poor visibility", "small businesses and freelancers struggle with manual workflows"]) {
+    assert.equal(classifyBootstrapContext(value), "untrusted_internal_or_prose_context", value);
+  }
+});
+
+test("requires trusted corroboration for near duplicates and reports ignored context", () => {
+  const blocked = analyzeCanonicalBootstrap([
+    observation("a", "Manual invoice approval delays", { affected_niches: ["weekly intelligence"] }),
+    observation("b", "Invoice approval manual delays", { affected_niches: ["weekly intelligence"] }),
+  ]).clusters.find((cluster) => cluster.disposition === "high_confidence_cluster");
+  assert.equal(blocked?.activationDisposition, "blocked_for_review");
+  assert.deepEqual(blocked?.activationBlockReasons, ["insufficient_trusted_context"]);
+  assert.deepEqual(blocked?.ignoredAffectedNiches, ["weekly intelligence"]);
+
+  const eligible = analyzeCanonicalBootstrap([
+    observation("a", "Manual invoice approval delays", { affected_niches: ["Agencies"], problem_cluster: "invoice approval" }),
+    observation("b", "Invoice approval manual delays", { affected_niches: ["agencies"], problem_cluster: "Invoice Approval" }),
+  ]).clusters.find((cluster) => cluster.disposition === "high_confidence_cluster");
+  assert.equal(eligible?.activationDisposition, "auto_activatable");
+  assert.deepEqual(eligible?.trustedAffectedNiches, ["agencies"]);
+});
+
+test("review-required clusters and singletons are never auto activatable", () => {
+  const review = analyzeCanonicalBootstrap([
+    observation("a", "Manual inventory reconciliation delays"),
+    observation("b", "Manual inventory reconciliation errors"),
+  ]).clusters[0];
+  assert.equal(review.disposition, "review_required");
+  assert.deepEqual(review.activationBlockReasons, ["non_high_confidence_disposition"]);
+
+  const singleton = analyzeCanonicalBootstrap([observation("only", "Warehouse temperature alerts")]).clusters[0];
+  assert.equal(singleton.disposition, "singleton");
+  assert.equal(singleton.activationDisposition, "blocked_for_review");
+});
+
+test("conflicting problem clusters remain blocked and expose the conflict", () => {
+  const cluster = analyzeCanonicalBootstrap([
+    observation("a", "Manual reconciliation delays", { problem_cluster: "inventory" }),
+    observation("b", "Manual reconciliation delays", { problem_cluster: "accounting" }),
+  ]).clusters[0];
+  assert.equal(cluster.disposition, "review_required");
+  assert.deepEqual(cluster.activationBlockReasons, ["conflicting_problem_cluster", "non_high_confidence_disposition"]);
+});
+
+test("multiple activation reasons and collision indexes are stable across input order", () => {
+  const fixtures = [
+    observation("a1", "Shared workflow", { normalized_problem_title: "alpha shared workflow", affected_niches: ["data moat"] }),
+    observation("a2", "Alpha shared workflow", { normalized_problem_title: "alpha shared workflow", affected_niches: ["data moat"] }),
+    observation("b1", "Shared workflow", { normalized_problem_title: "beta shared workflow", affected_niches: ["weekly intelligence"] }),
+    observation("b2", "Beta shared workflow", { normalized_problem_title: "beta shared workflow", affected_niches: ["weekly intelligence"] }),
+  ];
+  const forwards = analyzeCanonicalBootstrap(fixtures);
+  const backwards = analyzeCanonicalBootstrap([...fixtures].reverse());
+  assert.deepEqual(forwards, backwards);
+  const reasons = forwards.clusters[0].activationBlockReasons;
+  assert.deepEqual(reasons, [...reasons].sort());
+  assert.ok(reasons.length >= 2);
+});
+
+test("activation calibration leaves V8-B0.1 candidate IDs unchanged", () => {
+  const rows = [observation("b", "Slow Client Onboarding"), observation("a", "Slow Client Onboarding")];
+  // Fixed regression value produced by canonical_bootstrap_v1 over the original member contract.
+  assert.equal(analyzeCanonicalBootstrap(rows).clusters[0].candidateId, "cb1_0c84941f2664359785641e8c");
 });
 
 test("rejects canonicalized input rather than silently expanding scope", () => {
