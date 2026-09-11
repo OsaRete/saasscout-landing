@@ -62,6 +62,9 @@ node_modules/
 
 deployment-backups/
 
+# Local, read-only Knowledge Layer audit reports
+/artifacts/canonical-bootstrap-dry-run.json
+
 # Local database schema backups
 remote-public-schema.sql
 database-backups/
