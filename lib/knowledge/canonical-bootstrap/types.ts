@@ -1,6 +1,15 @@
 export const CANONICAL_BOOTSTRAP_RULE_VERSION = "canonical_bootstrap_v1" as const;
+export const CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION = "canonical_activation_eligibility_v1" as const;
 
 export type BootstrapDisposition = "high_confidence_cluster" | "review_required" | "singleton";
+export type ActivationDisposition = "auto_activatable" | "blocked_for_review";
+export type ActivationBlockReason =
+  | "ambiguous_alias_collision"
+  | "duplicate_normalized_identity_across_candidates"
+  | "conflicting_problem_cluster"
+  | "insufficient_trusted_context"
+  | "incomplete_complete_link_identity"
+  | "non_high_confidence_disposition";
 
 /** Deliberately excludes source evidence, authors, URLs, metadata and opportunity scores. */
 export type UnresolvedProblemObservation = Readonly<{
@@ -41,6 +50,10 @@ export type BootstrapCandidateCluster = Readonly<{
   observations: BootstrapObservationAudit[];
   aliasesPreview: BootstrapAliasPreview[];
   reasons: string[];
+  activationDisposition: ActivationDisposition;
+  activationBlockReasons: ActivationBlockReason[];
+  trustedAffectedNiches: string[];
+  ignoredAffectedNiches: string[];
 }>;
 
 export type AmbiguousAliasCollision = Readonly<{
@@ -48,8 +61,14 @@ export type AmbiguousAliasCollision = Readonly<{
   candidateIds: string[];
 }>;
 
+export type NormalizedIdentityCollision = Readonly<{
+  normalizedIdentity: string;
+  candidateIds: string[];
+}>;
+
 export type CanonicalBootstrapReport = Readonly<{
   bootstrapRuleVersion: typeof CANONICAL_BOOTSTRAP_RULE_VERSION;
+  activationEligibilityRuleVersion: typeof CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION;
   summary: Readonly<{
     observationsAnalyzed: number;
     distinctSourceTables: string[];
@@ -61,7 +80,16 @@ export type CanonicalBootstrapReport = Readonly<{
     singletonObservations: number;
     exactTitleDuplicateGroups: number;
     ambiguousAliasCollisions: number;
+    autoActivatableClusters: number;
+    observationsInAutoActivatableClusters: number;
+    blockedHighConfidenceClusters: number;
+    observationsInBlockedHighConfidenceClusters: number;
+    blockedByAliasCollision: number;
+    blockedByNormalizedIdentityCollision: number;
+    blockedByContextIssue: number;
+    blockedByClusterConflict: number;
   }>;
   ambiguousAliasCollisions: AmbiguousAliasCollision[];
+  normalizedIdentityCollisions: NormalizedIdentityCollision[];
   clusters: BootstrapCandidateCluster[];
 }>;

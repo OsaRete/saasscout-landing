@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 
 import { calculateOverlapScore, extractProblemTokens, normalizeProblemText } from "../deduplication/helpers.ts";
 import {
+  CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION,
   CANONICAL_BOOTSTRAP_RULE_VERSION,
+  type ActivationBlockReason,
   type AmbiguousAliasCollision,
   type BootstrapAliasPreview,
   type BootstrapCandidateCluster,
   type BootstrapObservationAudit,
   type CanonicalBootstrapReport,
+  type NormalizedIdentityCollision,
   type UnresolvedProblemObservation,
 } from "./types.ts";
 
@@ -21,6 +24,27 @@ const normalizedStoredTitle = (row: UnresolvedProblemObservation) => normalizePr
 const normalizedCluster = (row: UnresolvedProblemObservation) => normalizeProblemText(row.problem_cluster);
 const normalizedNiches = (row: UnresolvedProblemObservation) => uniqueSorted(row.affected_niches.map(normalizeProblemText));
 const overlap = (left: string[], right: string[]) => calculateOverlapScore(left, right);
+
+const INTERNAL_CONTEXT_TOKENS = new Set([
+  "architecture", "bootstrap", "canonical", "data", "debug", "engine", "evidence", "intelligence", "moat", "pipeline", "signal", "signals", "source", "sources", "weekly",
+]);
+const PROSE_CONTEXT_TOKENS = new Set([
+  "are", "because", "cannot", "delays", "errors", "face", "facing", "lack", "lead", "leads", "multiple", "poor", "struggle", "struggles", "visibility", "with",
+]);
+const TRUSTED_MULTI_WORD_ENDINGS = new Set([
+  "agencies", "businesses", "companies", "consultants", "freelancers", "professionals", "retailers", "services", "teams",
+]);
+
+/** Conservative structural classifier: it decides corroboration safety, not ontology membership. */
+export function classifyBootstrapContext(value: string): "trusted_context" | "untrusted_internal_or_prose_context" {
+  const normalized = normalizeProblemText(value);
+  const tokens = normalized.split(" ").filter(Boolean);
+  if (!normalized || tokens.length > 3 || tokens.some((token) => (/\d/.test(token) && token !== "b2b") || INTERNAL_CONTEXT_TOKENS.has(token) || PROSE_CONTEXT_TOKENS.has(token))) {
+    return "untrusted_internal_or_prose_context";
+  }
+  if (tokens.length === 1) return "trusted_context";
+  return TRUSTED_MULTI_WORD_ENDINGS.has(tokens[tokens.length - 1]) ? "trusted_context" : "untrusted_internal_or_prose_context";
+}
 
 type Relationship = Readonly<{ kind: "high" | "review" | "separate"; reasons: string[] }>;
 
@@ -89,7 +113,60 @@ function auditObservation(row: UnresolvedProblemObservation): BootstrapObservati
 
 function buildCluster(rows: UnresolvedProblemObservation[], disposition: BootstrapCandidateCluster["disposition"], reasons: string[]): BootstrapCandidateCluster {
   const sorted = [...rows].sort((a, b) => compare(a.id, b.id));
-  return { candidateId: candidateId(sorted), disposition, candidateCanonicalTitle: titleCandidate(sorted), observations: sorted.map(auditObservation), aliasesPreview: aliases(sorted), reasons: uniqueSorted(reasons) };
+  return { candidateId: candidateId(sorted), disposition, candidateCanonicalTitle: titleCandidate(sorted), observations: sorted.map(auditObservation), aliasesPreview: aliases(sorted), reasons: uniqueSorted(reasons), activationDisposition: "blocked_for_review", activationBlockReasons: ["non_high_confidence_disposition"], trustedAffectedNiches: [], ignoredAffectedNiches: [] };
+}
+
+function collisionIndex(clusters: BootstrapCandidateCluster[], values: (cluster: BootstrapCandidateCluster) => string[]) {
+  const owners = new Map<string, Set<string>>();
+  for (const cluster of clusters) for (const value of uniqueSorted(values(cluster))) {
+    const candidates = owners.get(value) || new Set<string>();
+    candidates.add(cluster.candidateId);
+    owners.set(value, candidates);
+  }
+  const entries: [string, string[]][] = [...owners.entries()].map(([value, candidates]) => [value, [...candidates].sort(compare)]);
+  return new Map(entries.sort(([left], [right]) => compare(left, right)));
+}
+
+function activationContext(cluster: BootstrapCandidateCluster) {
+  const contexts = uniqueSorted(cluster.observations.flatMap((observation) => observation.affectedNiches));
+  return {
+    trusted: contexts.filter((value) => classifyBootstrapContext(value) === "trusted_context"),
+    ignored: contexts.filter((value) => classifyBootstrapContext(value) !== "trusted_context"),
+  };
+}
+
+function activationRelationship(left: BootstrapObservationAudit, right: BootstrapObservationAudit, hasSummaryCorroboration: boolean) {
+  if (left.normalizedTitle === right.normalizedTitle) return { coherent: true, contextIssue: false, clusterConflict: false };
+  const clusterConflict = Boolean(left.problemCluster && right.problemCluster && left.problemCluster !== right.problemCluster);
+  const clusterAgreement = Boolean(left.problemCluster && left.problemCluster === right.problemCluster);
+  const trustedLeft = left.affectedNiches.filter((value) => classifyBootstrapContext(value) === "trusted_context");
+  const trustedRight = right.affectedNiches.filter((value) => classifyBootstrapContext(value) === "trusted_context");
+  const trustedNicheOverlap = overlap(trustedLeft, trustedRight) > 0;
+  // Summaries are intentionally absent from report observations; the original high-confidence
+  // reason records whether summary evidence, rather than contaminated niches, corroborated it.
+  return { coherent: !clusterConflict && (clusterAgreement || trustedNicheOverlap || hasSummaryCorroboration), contextIssue: !clusterConflict && !clusterAgreement && !trustedNicheOverlap && !hasSummaryCorroboration, clusterConflict };
+}
+
+function calibrateCluster(cluster: BootstrapCandidateCluster, aliasIndex: Map<string, string[]>, identityIndex: Map<string, string[]>): BootstrapCandidateCluster {
+  const context = activationContext(cluster);
+  const reasons = new Set<ActivationBlockReason>();
+  if (cluster.aliasesPreview.some((alias) => (aliasIndex.get(alias.normalizedAlias)?.length || 0) > 1)) reasons.add("ambiguous_alias_collision");
+  const identities = uniqueSorted([normalizeProblemText(cluster.candidateCanonicalTitle), ...cluster.observations.map((item) => item.normalizedTitle)]);
+  if (identities.some((identity) => (identityIndex.get(identity)?.length || 0) > 1)) reasons.add("duplicate_normalized_identity_across_candidates");
+  if (cluster.disposition !== "high_confidence_cluster") {
+    if (cluster.reasons.includes("conflicting_problem_cluster")) reasons.add("conflicting_problem_cluster");
+    reasons.add("non_high_confidence_disposition");
+    return { ...cluster, activationBlockReasons: [...reasons].sort(compare), trustedAffectedNiches: context.trusted, ignoredAffectedNiches: context.ignored };
+  }
+  for (let index = 0; index < cluster.observations.length; index += 1) for (const right of cluster.observations.slice(index + 1)) {
+    const relation = activationRelationship(cluster.observations[index], right, cluster.reasons.includes("corroborating_summary_overlap"));
+    if (relation.clusterConflict) reasons.add("conflicting_problem_cluster");
+    if (!relation.coherent) reasons.add(relation.contextIssue ? "insufficient_trusted_context" : "incomplete_complete_link_identity");
+  }
+  // Exact-title clusters do not need context corroboration. For near duplicates, matching
+  // cluster or trusted niche evidence must survive the conservative activation filter.
+  const sortedReasons = [...reasons].sort(compare);
+  return { ...cluster, activationDisposition: sortedReasons.length ? "blocked_for_review" : "auto_activatable", activationBlockReasons: sortedReasons, trustedAffectedNiches: context.trusted, ignoredAffectedNiches: context.ignored };
 }
 
 /** Pure, model-free analysis. It cannot receive a database client and has no persistence path. */
@@ -130,18 +207,19 @@ export function analyzeCanonicalBootstrap(input: readonly UnresolvedProblemObser
 
   const singletons = rows.filter((row) => unassigned.has(row.id)).map((row) => buildCluster([row], "singleton", ["no_high_confidence_or_review_relationship"]));
   const clusters = [...high, ...review, ...singletons].sort((a, b) => compare(a.candidateId, b.candidateId));
-  const aliasOwners = new Map<string, Set<string>>();
-  for (const cluster of clusters) for (const alias of cluster.aliasesPreview) {
-    const owners = aliasOwners.get(alias.normalizedAlias) || new Set<string>();
-    owners.add(cluster.candidateId);
-    aliasOwners.set(alias.normalizedAlias, owners);
-  }
-  const ambiguousAliasCollisions: AmbiguousAliasCollision[] = [...aliasOwners.entries()].filter(([, owners]) => owners.size > 1).map(([normalizedAlias, owners]) => ({ normalizedAlias, candidateIds: [...owners].sort(compare) })).sort((a, b) => compare(a.normalizedAlias, b.normalizedAlias));
+  const aliasIndex = collisionIndex(clusters, (cluster) => cluster.aliasesPreview.map((alias) => alias.normalizedAlias));
+  const identityIndex = collisionIndex(clusters, (cluster) => [normalizeProblemText(cluster.candidateCanonicalTitle), ...cluster.observations.map((item) => item.normalizedTitle)]);
+  const ambiguousAliasCollisions: AmbiguousAliasCollision[] = [...aliasIndex.entries()].filter(([, owners]) => owners.length > 1).map(([normalizedAlias, candidateIds]) => ({ normalizedAlias, candidateIds }));
+  const normalizedIdentityCollisions: NormalizedIdentityCollision[] = [...identityIndex.entries()].filter(([, owners]) => owners.length > 1).map(([normalizedIdentity, candidateIds]) => ({ normalizedIdentity, candidateIds }));
+  const calibratedClusters = clusters.map((cluster) => calibrateCluster(cluster, aliasIndex, identityIndex));
+  const autoActivatable = calibratedClusters.filter((cluster) => cluster.activationDisposition === "auto_activatable");
+  const blockedHighConfidence = calibratedClusters.filter((cluster) => cluster.disposition === "high_confidence_cluster" && cluster.activationDisposition === "blocked_for_review");
   const normalizedCounts = new Map<string, number>();
   for (const row of rows) normalizedCounts.set(normalizedStoredTitle(row), (normalizedCounts.get(normalizedStoredTitle(row)) || 0) + 1);
 
   return {
     bootstrapRuleVersion: CANONICAL_BOOTSTRAP_RULE_VERSION,
+    activationEligibilityRuleVersion: CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION,
     summary: {
       observationsAnalyzed: rows.length,
       distinctSourceTables: uniqueSorted(rows.map((row) => row.source_table || "unknown")),
@@ -153,8 +231,17 @@ export function analyzeCanonicalBootstrap(input: readonly UnresolvedProblemObser
       singletonObservations: singletons.length,
       exactTitleDuplicateGroups: [...normalizedCounts.values()].filter((count) => count > 1).length,
       ambiguousAliasCollisions: ambiguousAliasCollisions.length,
+      autoActivatableClusters: autoActivatable.length,
+      observationsInAutoActivatableClusters: autoActivatable.reduce((sum, cluster) => sum + cluster.observations.length, 0),
+      blockedHighConfidenceClusters: blockedHighConfidence.length,
+      observationsInBlockedHighConfidenceClusters: blockedHighConfidence.reduce((sum, cluster) => sum + cluster.observations.length, 0),
+      blockedByAliasCollision: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("ambiguous_alias_collision")).length,
+      blockedByNormalizedIdentityCollision: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("duplicate_normalized_identity_across_candidates")).length,
+      blockedByContextIssue: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("insufficient_trusted_context")).length,
+      blockedByClusterConflict: blockedHighConfidence.filter((cluster) => cluster.activationBlockReasons.includes("conflicting_problem_cluster")).length,
     },
     ambiguousAliasCollisions,
-    clusters,
+    normalizedIdentityCollisions,
+    clusters: calibratedClusters,
   };
 }
