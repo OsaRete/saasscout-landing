@@ -1,6 +1,7 @@
 export const CANONICAL_BOOTSTRAP_RULE_VERSION = "canonical_bootstrap_v1" as const;
 export const CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION = "canonical_activation_eligibility_v1" as const;
 export const CROSS_CANDIDATE_IDENTITY_AUDIT_RULE_VERSION = "cross_candidate_identity_audit_v1" as const;
+export const CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION = "canonical_bootstrap_activation_plan_v1" as const;
 
 export type BootstrapDisposition = "high_confidence_cluster" | "review_required" | "singleton";
 export type ActivationDisposition = "auto_activatable" | "blocked_for_review";
@@ -144,4 +145,28 @@ export type CanonicalBootstrapReport = Readonly<{
   normalizedIdentityCollisions: NormalizedIdentityCollision[];
   crossCandidateIdentityAudit: CrossCandidateIdentityAudit;
   clusters: BootstrapCandidateCluster[];
+}>;
+
+export type CandidateActivationSnapshot = Readonly<{
+  candidateId: string;
+  candidateCanonicalTitle: string;
+  candidateNormalizedTitle: string;
+  observationIds: string[];
+  aliases: ReadonlyArray<{ text: string; normalizedAlias: string }>;
+  baseActivationDisposition: ActivationDisposition;
+  crossCandidateAuditDisposition: CrossCandidateAuditDisposition;
+  finalActivationDisposition: ActivationDisposition;
+  bootstrapRuleVersion: string;
+  activationEligibilityRuleVersion: string;
+  crossCandidateAuditRuleVersion: string;
+  candidateSnapshotHash: string;
+}>;
+
+export type CanonicalBootstrapActivationPlan = Readonly<{
+  ruleVersion: typeof CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION;
+  eligibleCandidateCount: number;
+  candidateIds: string[];
+  candidateSnapshotHashes: string[];
+  candidates: CandidateActivationSnapshot[];
+  activationPlanHash: string;
 }>;

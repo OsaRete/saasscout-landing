@@ -100,6 +100,54 @@ With the repository's normal server environment configured, run:
 npm run canonical-bootstrap:dry-run
 ```
 
-The command performs paginated `GET` requests selecting only unresolved observations and writes `artifacts/canonical-bootstrap-dry-run.json`. There is no apply, write, or commit mode. The credential is used only as authorization for these reads and is never included in output.
+The command performs paginated `GET` requests selecting only unresolved observations and writes `artifacts/canonical-bootstrap-dry-run.json`. It remains read-only: the separate B0.2 apply command described below is the only bootstrap mutation path. The credential is never included in output.
 
-V8-B0.2 remains future work. No registry activation is safe until humans review the B0.1.2 production collision pairs and connected review groups; this audit provides review evidence, not activation or merge authority.
+## V8-B0.2 — controlled registry activation
+
+B0.2 is the first write-enabled bootstrap phase. It does not change B0.1 clustering, B0.1.1 calibration, or B0.1.2 identity auditing. It selects only `high_confidence_cluster` candidates whose base disposition is `auto_activatable`, whose cross-candidate disposition is `clearly_unique`, and whose final disposition remains `auto_activatable`. Blocked, review-required, singleton, and collision-group candidates remain unresolved.
+
+Its write boundary is deliberately limited to creating `canonical_problems`, inserting observed-title `problem_aliases`, linking exact member rows through `problem_observations.canonical_problem_id`, and recording the private `canonical_bootstrap_activations` identity mapping. It never writes Validation, Weekly Intelligence, `problem_intelligence`, or `problem_evolution_snapshots`. V8 Validation evidence promotion and V9 Knowledge Evolution consumption are still **not implemented**.
+
+### Schema safety audit and migration
+
+The existing schema already used database-owned UUID canonical IDs, a canonical-key unique index, an observation foreign key, RLS, and service-role-only table grants. It did not provide a durable bootstrap candidate mapping, global normalized canonical/alias ownership constraints, or an atomic multi-table operation. Migration `20260912000000_controlled_canonical_bootstrap_activation.sql` therefore adds only:
+
+- the private, RLS-enabled `canonical_bootstrap_activations` ledger;
+- global unique normalized-title and normalized-alias indexes;
+- the transaction-scoped `apply_canonical_bootstrap_activation` RPC.
+
+The RPC is `SECURITY DEFINER` with a fixed `pg_catalog, public` search path. Execute is revoked from `public`, `anon`, and `authenticated`, and granted only to `service_role`. There is no route, browser API, anon grant, cron, trigger, or automatic production execution. B0.1/B0.1.1/B0.1.2 eligibility and activation-plan legitimacy are recomputed by the trusted operator CLI. The RPC is the transactional database-integrity boundary: it validates bounded structural and ownership invariants but does not independently execute the TypeScript analyzer or prove semantic eligibility. Direct service-role invocation is therefore privileged, trusted infrastructure access rather than a public authority boundary.
+
+### Reviewed plan and drift guard
+
+Every dry-run now emits `activationPlan`, sorted by candidate ID. Each candidate snapshot hashes stable bounded identity fields: candidate ID/title/normalized title, sorted observation IDs, deduplicated and sorted observed aliases, all three dispositions, and all three rule versions. It excludes timestamps, evidence bodies, PII, scores, and display diagnostics. The overall `activationPlanHash` hashes the rule versions plus every sorted candidate ID/snapshot hash pair.
+
+An operator must review that report and pass the exact hash back; candidate lists or uploaded JSON are not accepted as authority:
+
+```bash
+npm run canonical-bootstrap:dry-run
+CANONICAL_BOOTSTRAP_APPLY=1 \
+CANONICAL_BOOTSTRAP_PLAN_HASH=<reviewed-64-character-hash> \
+npm run canonical-bootstrap:apply
+```
+
+Apply immediately rereads unresolved observations, reruns the deterministic pipeline, rebuilds the snapshots, and compares the reviewed plan hash before calling the private RPC. A changed plan fails closed. The acknowledgement variable makes accidental execution harder; neither variable substitutes for service-role authorization.
+
+### Atomicity, conflicts, and idempotency
+
+The RPC is one PostgreSQL transaction. It takes one transaction advisory lock before checking any candidate, then checks candidates in sorted order; this global-first lock order prevents two bootstrap applies from creating duplicate state. Global preflight rejects duplicate candidate IDs and any observation ID repeated either within one candidate or across candidates. All candidates are preflighted before mutation. A failure rolls back canonical creation, aliases, observation links, and ledger rows together.
+
+The ledger maps analysis IDs to database-owned canonical UUIDs and stores the snapshot hash and exact observation IDs. Identical existing mappings are reused; a different hash fails with `canonical_bootstrap_candidate_snapshot_mismatch`. Canonical normalized identity and normalized alias ownership are globally unique and conflicts fail closed. Before B0.2, `canonical_problems(normalized_title)` and `problem_aliases(normalized_alias)` had non-unique lookup indexes only; their existing unique indexes covered `canonical_key` and `(canonical_problem_id, normalized_alias, alias_type)` respectively, so neither was equivalent to the global ownership constraints added here. Observation updates affect only recomputed member IDs that are null (or, on a database-level repeat, already reference the mapped canonical); another canonical is never overwritten. After every update, exact ownership of every expected member is verified before already-linked rows are counted. Aliases come only from normalized observed title variants—no semantic synonym is generated.
+
+Stable operator-safe errors include `canonical_bootstrap_apply_not_authorized`, `canonical_bootstrap_preflight_failed`, `canonical_bootstrap_candidate_snapshot_mismatch`, `canonical_bootstrap_identity_collision`, `canonical_bootstrap_alias_collision`, `canonical_bootstrap_observation_conflict`, and `canonical_bootstrap_transaction_failed`. Reports contain bounded counts and safe IDs/hashes, never credentials or source evidence.
+
+### Production runbook
+
+1. Pull the merged branch and confirm a clean `git status`.
+2. Review `supabase migration list`, run `supabase db push --dry-run`, apply the migration, and verify the list again.
+3. Run `npm run canonical-bootstrap:dry-run` against production.
+4. Manually review the current final eligible candidates and copy the emitted `activationPlanHash`.
+5. Run the explicit acknowledged apply command above with that exact hash.
+6. Run the read-only dry-run and registry verification queries again. Check ledger-to-canonical uniqueness, alias ownership, exact member links, and that blocked/non-member observations remain unresolved.
+
+Do not treat merge or migration application as approval to apply. Production activation is a separate operator decision. B0.2 creates only a conservative registry seed; it does not complete a resolver, resolve ambiguous candidates, aggregate the Data Moat, promote Validation evidence, or enable Knowledge Evolution consumption.
