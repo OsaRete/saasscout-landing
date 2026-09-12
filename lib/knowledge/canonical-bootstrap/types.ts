@@ -1,11 +1,21 @@
 export const CANONICAL_BOOTSTRAP_RULE_VERSION = "canonical_bootstrap_v1" as const;
 export const CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION = "canonical_activation_eligibility_v1" as const;
 export const CROSS_CANDIDATE_IDENTITY_AUDIT_RULE_VERSION = "cross_candidate_identity_audit_v1" as const;
+export const CAUSE_CONSEQUENCE_IDENTITY_AUDIT_RULE_VERSION = "cause_consequence_identity_audit_v1" as const;
 export const CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION = "canonical_bootstrap_activation_plan_v1" as const;
 
 export type BootstrapDisposition = "high_confidence_cluster" | "review_required" | "singleton";
 export type ActivationDisposition = "auto_activatable" | "blocked_for_review";
 export type CrossCandidateAuditDisposition = "clearly_unique" | "potential_canonical_collision" | "not_applicable";
+export type CauseConsequenceAuditDisposition = "clearly_unique" | "potential_cause_consequence_collision" | "not_applicable";
+export type CauseConsequenceCollisionReason =
+  | "cause_consequence_reversal"
+  | "shared_specific_cause_identity"
+  | "shared_specific_consequence_identity"
+  | "strong_specific_token_overlap"
+  | "compatible_problem_cluster"
+  | "trusted_niche_corroboration"
+  | "auto_candidate_matches_blocked_causal_family";
 export type CrossCandidateCollisionReason =
   | "very_high_title_overlap"
   | "normalized_token_near_identity"
@@ -69,6 +79,8 @@ export type BootstrapCandidateCluster = Readonly<{
   activationBlockReasons: ActivationBlockReason[];
   crossCandidateAuditDisposition: CrossCandidateAuditDisposition;
   finalActivationDisposition: ActivationDisposition;
+  causeConsequenceAuditDisposition: CauseConsequenceAuditDisposition;
+  postCauseConsequenceActivationDisposition: ActivationDisposition;
   trustedAffectedNiches: string[];
   ignoredAffectedNiches: string[];
 }>;
@@ -114,6 +126,30 @@ export type CrossCandidateIdentityAudit = Readonly<{
   autoCandidatesMatchingBlockedCandidateIds: string[];
 }>;
 
+export type PotentialCauseConsequenceCollisionPair = Readonly<{
+  candidateAId: string;
+  candidateBId: string;
+  candidateATitle: string;
+  candidateBTitle: string;
+  candidateAPriorDisposition: ActivationDisposition;
+  candidateBPriorDisposition: ActivationDisposition;
+  reasons: CauseConsequenceCollisionReason[];
+  sharedSpecificTokens: string[];
+  causeSideOverlap: string[];
+  consequenceSideOverlap: string[];
+  trustedNicheOverlap: string[];
+  problemClusterRelationship: "compatible" | "conflicting" | "unavailable";
+}>;
+
+export type CauseConsequenceIdentityAudit = Readonly<{
+  ruleVersion: typeof CAUSE_CONSEQUENCE_IDENTITY_AUDIT_RULE_VERSION;
+  candidatesAudited: number;
+  pairComparisons: number;
+  potentialCollisionPairs: PotentialCauseConsequenceCollisionPair[];
+  blockedInitiallyAutoCandidateIds: string[];
+  clearlyUniqueAutoCandidateIds: string[];
+}>;
+
 export type CanonicalBootstrapReport = Readonly<{
   bootstrapRuleVersion: typeof CANONICAL_BOOTSTRAP_RULE_VERSION;
   activationEligibilityRuleVersion: typeof CANONICAL_ACTIVATION_ELIGIBILITY_RULE_VERSION;
@@ -144,6 +180,7 @@ export type CanonicalBootstrapReport = Readonly<{
   ambiguousAliasCollisions: AmbiguousAliasCollision[];
   normalizedIdentityCollisions: NormalizedIdentityCollision[];
   crossCandidateIdentityAudit: CrossCandidateIdentityAudit;
+  causeConsequenceIdentityAudit: CauseConsequenceIdentityAudit;
   clusters: BootstrapCandidateCluster[];
 }>;
 
@@ -156,9 +193,12 @@ export type CandidateActivationSnapshot = Readonly<{
   baseActivationDisposition: ActivationDisposition;
   crossCandidateAuditDisposition: CrossCandidateAuditDisposition;
   finalActivationDisposition: ActivationDisposition;
+  causeConsequenceAuditDisposition: CauseConsequenceAuditDisposition;
+  postCauseConsequenceActivationDisposition: ActivationDisposition;
   bootstrapRuleVersion: string;
   activationEligibilityRuleVersion: string;
   crossCandidateAuditRuleVersion: string;
+  causeConsequenceIdentityAuditRuleVersion: string;
   candidateSnapshotHash: string;
 }>;
 

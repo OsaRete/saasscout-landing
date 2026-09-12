@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { analyzeCanonicalBootstrap, classifyBootstrapContext } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
 import { auditCrossCandidateIdentities } from "../lib/knowledge/canonical-bootstrap/cross-candidate-identity-audit.ts";
+import { auditCauseConsequenceIdentities } from "../lib/knowledge/canonical-bootstrap/cause-consequence-identity-audit.ts";
 import { readUnresolvedProblemObservations } from "../lib/knowledge/canonical-bootstrap/repository.ts";
 import type { BootstrapCandidateCluster, UnresolvedProblemObservation } from "../lib/knowledge/canonical-bootstrap/types.ts";
 
@@ -38,6 +39,10 @@ function candidate(id: string, title: string, overrides: Partial<BootstrapCandid
     activationBlockReasons: [],
     crossCandidateAuditDisposition: "not_applicable",
     finalActivationDisposition: "auto_activatable",
+    causeConsequenceAuditDisposition: "not_applicable",
+    postCauseConsequenceActivationDisposition: "auto_activatable",
+    causeConsequenceAuditDisposition: "not_applicable",
+    postCauseConsequenceActivationDisposition: "auto_activatable",
     trustedAffectedNiches: [],
     ignoredAffectedNiches: [],
     ...overrides,
@@ -304,6 +309,41 @@ test("cross-candidate audit does not alter pre-audit clustering membership or ba
   assert.equal(report.crossCandidateIdentityAudit.potentialCollisionPairs.length, 1);
 });
 
+test("cause-consequence audit blocks reversed causal identity while preserving B0.1.2 fields", () => {
+  const auto = candidate("auto", "Missed Leads and Revenue Loss Due to Manual Sales Processes", { crossCandidateAuditDisposition: "clearly_unique" });
+  const blocked = candidate("blocked", "Manual Sales Process Automation Gaps Leading to Missed Leads and Revenue Loss", {
+    baseActivationDisposition: "blocked_for_review", activationDisposition: "blocked_for_review", finalActivationDisposition: "blocked_for_review", activationBlockReasons: ["ambiguous_alias_collision"],
+  });
+  const { audit, clusters } = auditCauseConsequenceIdentities([auto, blocked]);
+  assert.equal(audit.ruleVersion, "cause_consequence_identity_audit_v1");
+  assert.deepEqual(audit.blockedInitiallyAutoCandidateIds, ["auto"]);
+  assert.deepEqual(audit.potentialCollisionPairs[0].causeSideOverlap, ["manual", "process", "sales"]);
+  assert.deepEqual(audit.potentialCollisionPairs[0].consequenceSideOverlap, ["lead", "loss", "missed", "revenue"]);
+  assert.ok(audit.potentialCollisionPairs[0].reasons.includes("cause_consequence_reversal"));
+  const result = clusters.find((item) => item.candidateId === "auto");
+  assert.equal(result?.finalActivationDisposition, "auto_activatable");
+  assert.equal(result?.causeConsequenceAuditDisposition, "potential_cause_consequence_collision");
+  assert.equal(result?.postCauseConsequenceActivationDisposition, "blocked_for_review");
+  assert.equal(clusters.find((item) => item.candidateId === "blocked")?.postCauseConsequenceActivationDisposition, "blocked_for_review");
+});
+
+test("cause-consequence audit ignores containment, generic overlap, and unrelated examples", () => {
+  const fixtures = [candidate("containment-a", "Manual Sales Process Automation Gaps"), candidate("containment-b", "Manual Sales Process Automation Gaps Leading to Missed Leads"),
+    candidate("invoice", "Invoice Approval Bottlenecks"), candidate("crm", "Disconnected CRM Workflow Operations"), candidate("operations", "Operational Workflow Fragmentation"),
+    candidate("tasks", "Excessive Manual Repetitive Tasks Consuming Business Hours")];
+  const audit = auditCauseConsequenceIdentities(fixtures).audit;
+  assert.equal(audit.potentialCollisionPairs.length, 0);
+  assert.deepEqual(audit.clearlyUniqueAutoCandidateIds, fixtures.map((item) => item.candidateId).sort());
+});
+
+test("cause-consequence audit detects reordered sides and is input-order deterministic", () => {
+  const fixtures = [candidate("a", "Lost Revenue and Missed Leads Due to Manual Sales Workflows"), candidate("b", "Sales Workflow Automation Gaps Causing Leads Missed and Revenue Lost")];
+  const forwards = auditCauseConsequenceIdentities(fixtures);
+  assert.equal(forwards.audit.potentialCollisionPairs.length, 1);
+  assert.deepEqual(forwards, auditCauseConsequenceIdentities([...fixtures].reverse()));
+  assert.deepEqual(forwards, auditCauseConsequenceIdentities(fixtures));
+});
+
 test("rejects canonicalized input rather than silently expanding scope", () => {
   assert.throws(() => analyzeCanonicalBootstrap([observation("a", "A problem", { canonical_problem_id: "existing" as never })]), /already canonicalized/);
 });
@@ -322,6 +362,7 @@ test("bootstrap implementation exposes neither mutation nor model invocation pat
   const files = await Promise.all([
     "lib/knowledge/canonical-bootstrap/analyzer.ts",
     "lib/knowledge/canonical-bootstrap/cross-candidate-identity-audit.ts",
+    "lib/knowledge/canonical-bootstrap/cause-consequence-identity-audit.ts",
     "lib/knowledge/canonical-bootstrap/repository.ts",
     "scripts/canonical-bootstrap-dry-run.ts",
   ].map((path) => readFile(new URL(`../${path}`, import.meta.url), "utf8")));
