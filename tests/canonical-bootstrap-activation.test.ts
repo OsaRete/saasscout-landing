@@ -220,3 +220,20 @@ test("B0.2.2 preserves authority, eligibility, ownership, and successful respons
   ]) assert.match(migration, invariant);
   assert.doesNotMatch(migration, /openrouter|openai|embedding|https?:\/\//i);
 });
+
+test("B0.2.3 constructs canonical keys as explicit text without JSON operator ambiguity", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260912030000_fix_canonical_bootstrap_key_construction.sql", import.meta.url), "utf8");
+  const canonicalInsert = migration.slice(
+    migration.indexOf("insert into public.canonical_problems"),
+    migration.indexOf("insert into public.canonical_bootstrap_activations"),
+  );
+
+  assert.match(canonicalInsert, /pg_catalog\.concat\(\s*'bootstrap:',\s*candidate->>'bootstrapRuleVersion',\s*':',\s*candidate->>'candidateId'\s*\)/);
+  assert.doesNotMatch(canonicalInsert, /'bootstrap:'\s*\|\|\s*candidate->>'bootstrapRuleVersion'/);
+
+  const candidate = { bootstrapRuleVersion: "canonical_bootstrap_v1", candidateId: "cb1_1e47593fd365ef352633eab6" };
+  assert.equal(
+    ["bootstrap:", candidate.bootstrapRuleVersion, ":", candidate.candidateId].join(""),
+    "bootstrap:canonical_bootstrap_v1:cb1_1e47593fd365ef352633eab6",
+  );
+});
