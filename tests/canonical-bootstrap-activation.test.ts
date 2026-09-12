@@ -144,3 +144,79 @@ test("B0.2.1 diagnostics keep the reviewed five-candidate incident contract unch
   assert.match(documentation, /cb1_9a2d319d26e902747fbcbf7a[\s\S]*remains blocked/);
   assert.match(documentation, /2b389d4e0d7c3854e3dd3eb4f96c7ebfb5687b43b531fa30f96eaad4964c7392/);
 });
+
+test("B0.2.2 exposes only bounded canonical insert diagnostics", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260912020000_safe_canonical_insert_failure_diagnostics.sql", import.meta.url), "utf8");
+  const insertBoundary = migration.slice(migration.indexOf("failure_stage := 'canonical_insert'"), migration.indexOf("failure_stage := 'ledger_insert'"));
+  const diagnosticHandler = insertBoundary.slice(insertBoundary.indexOf("exception when others then"));
+
+  assert.match(insertBoundary, /exception when others then\s+get stacked diagnostics/);
+  assert.match(insertBoundary, /diagnostic_sqlstate = returned_sqlstate/);
+  assert.match(insertBoundary, /diagnostic_constraint = constraint_name/);
+  assert.match(insertBoundary, /diagnostic_table = table_name/);
+  assert.match(insertBoundary, /diagnostic_column = column_name/);
+  assert.match(insertBoundary, /stage=canonical_insert/);
+  assert.match(insertBoundary, /\^\[a-z_\]\[a-z0-9_\]\{0,62\}\$/);
+  assert.doesNotMatch(diagnosticHandler, /message_text|pg_exception_detail|pg_exception_hint|pg_exception_context/i);
+  assert.doesNotMatch(diagnosticHandler, /candidateCanonicalTitle|candidateNormalizedTitle|observationIds|source_evidence|source_url/);
+});
+
+test("B0.2.2 apply error parser accepts safe structural diagnostics", () => {
+  assert.equal(
+    safeCanonicalBootstrapRpcError(JSON.stringify({
+      message: "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:constraint=canonical_problems_status_check:table=canonical_problems:column=status",
+      details: "candidate title must never escape",
+      hint: "private hint",
+    })),
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:constraint=canonical_problems_status_check:table=canonical_problems:column=status",
+  );
+  assert.equal(
+    safeCanonicalBootstrapRpcError(JSON.stringify({ message: "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=XXXXX" })),
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=XXXXX",
+  );
+});
+
+test("B0.2.2 apply error parser rejects unbounded or malformed diagnostics", () => {
+  for (const message of [
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:constraint=bad-name",
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:constraint=ok_name:detail=private",
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:table=CanonicalProblems",
+    `canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=23514:column=${"a".repeat(64)}`,
+    "canonical_bootstrap_canonical_insert_failed:stage=alias_insert:sqlstate=23514",
+    "canonical_bootstrap_canonical_insert_failed:stage=canonical_insert:sqlstate=not-safe",
+  ]) {
+    assert.equal(safeCanonicalBootstrapRpcError(JSON.stringify({ message })), "canonical_bootstrap_transaction_failed");
+  }
+});
+
+test("B0.2.2 canonical insert failures abort before all later mutation stages", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260912020000_safe_canonical_insert_failure_diagnostics.sql", import.meta.url), "utf8");
+  const insertBoundaryStart = migration.indexOf("failure_stage := 'canonical_insert'");
+  const insertFailureRaise = migration.indexOf("raise exception using errcode = 'P0001', message = safe_diagnostic", insertBoundaryStart);
+  const ledgerInsert = migration.indexOf("insert into public.canonical_bootstrap_activations", insertBoundaryStart);
+  const aliasInsert = migration.indexOf("insert into public.problem_aliases", insertBoundaryStart);
+  const observationUpdate = migration.indexOf("update public.problem_observations", insertBoundaryStart);
+
+  assert.ok(insertBoundaryStart >= 0 && insertFailureRaise > insertBoundaryStart);
+  assert.ok(insertFailureRaise < ledgerInsert && ledgerInsert < aliasInsert && aliasInsert < observationUpdate);
+  assert.match(migration, /create or replace function[\s\S]*begin[\s\S]*exception when others then/);
+  assert.doesNotMatch(migration, /\bcommit\b|\brollback\b/i);
+});
+
+test("B0.2.2 preserves authority, eligibility, ownership, and successful response contracts", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260912020000_safe_canonical_insert_failure_diagnostics.sql", import.meta.url), "utf8");
+  for (const invariant of [
+    /security definer[\s\S]*set search_path = pg_catalog, public/,
+    /pg_advisory_xact_lock/,
+    /baseActivationDisposition' <> 'auto_activatable'/,
+    /crossCandidateAuditDisposition' <> 'clearly_unique'/,
+    /finalActivationDisposition' <> 'auto_activatable'/,
+    /candidate_snapshot_hash <> candidate->>'candidateSnapshotHash'/,
+    /group by observation_id having count\(\*\) > 1/,
+    /if verified <> expected then[\s\S]*canonical_bootstrap_observation_conflict/,
+    /return jsonb_build_object\([\s\S]*observationsAlreadyLinked[\s\S]*already_applied/,
+    /revoke all on function[\s\S]*public, anon, authenticated/,
+    /grant execute[\s\S]*service_role/,
+  ]) assert.match(migration, invariant);
+  assert.doesNotMatch(migration, /openrouter|openai|embedding|https?:\/\//i);
+});
