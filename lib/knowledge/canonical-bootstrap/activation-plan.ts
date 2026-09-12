@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { normalizeProblemText } from "../deduplication/helpers.ts";
 import {
+  CAUSE_CONSEQUENCE_IDENTITY_AUDIT_RULE_VERSION,
   CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION,
   CROSS_CANDIDATE_IDENTITY_AUDIT_RULE_VERSION,
   type BootstrapCandidateCluster,
@@ -22,6 +23,7 @@ function assertEligible(candidate: BootstrapCandidateCluster, report: CanonicalB
   const collisionMembers = new Set(report.crossCandidateIdentityAudit.potentialCollisionGroups.flat());
   if (candidate.disposition !== "high_confidence_cluster" || candidate.baseActivationDisposition !== "auto_activatable" ||
       candidate.crossCandidateAuditDisposition !== "clearly_unique" || candidate.finalActivationDisposition !== "auto_activatable" ||
+      candidate.causeConsequenceAuditDisposition !== "clearly_unique" || candidate.postCauseConsequenceActivationDisposition !== "auto_activatable" ||
       candidate.observations.length < 2 || collisionMembers.has(candidate.candidateId) ||
       report.crossCandidateIdentityAudit.blockedAutoActivatableCandidateIds.includes(candidate.candidateId)) {
     throw new CanonicalBootstrapError("canonical_bootstrap_preflight_failed");
@@ -40,21 +42,25 @@ export function buildCandidateSnapshot(candidate: BootstrapCandidateCluster, rep
     baseActivationDisposition: candidate.baseActivationDisposition,
     crossCandidateAuditDisposition: candidate.crossCandidateAuditDisposition,
     finalActivationDisposition: candidate.finalActivationDisposition,
+    causeConsequenceAuditDisposition: candidate.causeConsequenceAuditDisposition,
+    postCauseConsequenceActivationDisposition: candidate.postCauseConsequenceActivationDisposition,
     bootstrapRuleVersion: report.bootstrapRuleVersion,
     activationEligibilityRuleVersion: report.activationEligibilityRuleVersion,
     crossCandidateAuditRuleVersion: CROSS_CANDIDATE_IDENTITY_AUDIT_RULE_VERSION,
+    causeConsequenceIdentityAuditRuleVersion: CAUSE_CONSEQUENCE_IDENTITY_AUDIT_RULE_VERSION,
   };
   return { ...identity, candidateSnapshotHash: hash(identity) };
 }
 
 export function buildActivationPlan(report: CanonicalBootstrapReport): CanonicalBootstrapActivationPlan {
-  const candidates = report.clusters.filter((item) => item.finalActivationDisposition === "auto_activatable")
+  const candidates = report.clusters.filter((item) => item.postCauseConsequenceActivationDisposition === "auto_activatable")
     .map((item) => buildCandidateSnapshot(item, report)).sort((a, b) => compare(a.candidateId, b.candidateId));
   const planIdentity = {
     ruleVersion: CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION,
     bootstrapRuleVersion: report.bootstrapRuleVersion,
     activationEligibilityRuleVersion: report.activationEligibilityRuleVersion,
     crossCandidateAuditRuleVersion: CROSS_CANDIDATE_IDENTITY_AUDIT_RULE_VERSION,
+    causeConsequenceIdentityAuditRuleVersion: CAUSE_CONSEQUENCE_IDENTITY_AUDIT_RULE_VERSION,
     candidates: candidates.map(({ candidateId, candidateSnapshotHash }) => ({ candidateId, candidateSnapshotHash })),
   };
   return { ruleVersion: CANONICAL_BOOTSTRAP_ACTIVATION_PLAN_RULE_VERSION, eligibleCandidateCount: candidates.length,

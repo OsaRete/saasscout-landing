@@ -10,6 +10,14 @@ V8-B0.1.1 adds a second, read-only decision after clustering: **high confidence 
 
 V8-B0.1.2 adds a third, post-cluster decision: **initially auto activatable does not mean globally distinct**. It asks only whether two candidate identities could plausibly be wording variants of one canonical problem. It never decides that they are equivalent. This distinction protects the Data Moat from fragmentation, where future evidence would be split across near-duplicate canonical records, without accepting the equally dangerous risk of an automatic false merge.
 
+## V8-B0.1.3 cause/consequence identity safety audit
+
+V8-B0.1.3 is a final, read-only audit that runs strictly after B0.1.2. Its versioned rule, `cause_consequence_identity_audit_v1`, conservatively catches strong identity-family wording in which the same specific cause and consequence are expressed in reversed order (for example, “cause leading to consequence” versus “consequence due to cause”). It emits bounded pair diagnostics and blocks an involved auto candidate for human review; it never declares equivalence, merges candidates, or creates registry data.
+
+The layer is monotonic: it can preserve an existing auto disposition or reduce it to blocked, but it can never promote a previously blocked candidate. B0.1, B0.1.1, and B0.1.2 membership, identities, dispositions, and diagnostics retain their original meaning. The rule is deterministic and uses only local normalization and explicit connector/token rules—no model, embeddings, fuzzy dependency, or external API.
+
+B0.2 apply mechanics and SQL remain unchanged. Whenever B0.1.3 changes eligibility, every previously reviewed `activationPlanHash` must be discarded. An operator must run a fresh production dry-run, inspect the B0.1.3 diagnostics and eligible candidates, and manually review the newly generated hash before any separately authorized apply.
+
 ## Existing deduplication audit
 
 The generic `ProblemDeduplicationEngine` already provides model-free text normalization, stable token extraction, Jaccard overlap on a 0–10 scale, and a merge/link/review/separate vocabulary. The bootstrap reuses those generic normalization, token, and overlap primitives.

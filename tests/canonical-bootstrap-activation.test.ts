@@ -16,6 +16,15 @@ test("activation plan selects only final auto-activatable candidates", () => {
   assert.equal(buildActivationPlan(report).candidates[0].observationIds.length, 2);
 });
 
+test("activation plan excludes a B0.1.3-blocked candidate and changes its hash", () => {
+  const report = eligibleReport();
+  const original = buildActivationPlan(report);
+  const blocked = { ...report.clusters[0], causeConsequenceAuditDisposition: "potential_cause_consequence_collision" as const, postCauseConsequenceActivationDisposition: "blocked_for_review" as const };
+  const changed = buildActivationPlan({ ...report, clusters: [blocked] });
+  assert.equal(changed.eligibleCandidateCount, 0);
+  assert.notEqual(changed.activationPlanHash, original.activationPlanHash);
+});
+
 test("candidate and plan hashes are deterministic independent of report invocation", () => {
   assert.deepEqual(buildActivationPlan(eligibleReport()), buildActivationPlan(eligibleReport()));
 });
@@ -45,10 +54,10 @@ test("review, singleton, calibrated-blocked and audited-collision candidates are
   const report = eligibleReport();
   const base = report.clusters[0];
   const variants: BootstrapCandidateCluster[] = [
-    { ...base, candidateId: "review", disposition: "review_required", finalActivationDisposition: "blocked_for_review" },
-    { ...base, candidateId: "singleton", disposition: "singleton", observations: [base.observations[0]], finalActivationDisposition: "blocked_for_review" },
-    { ...base, candidateId: "calibrated", baseActivationDisposition: "blocked_for_review", activationDisposition: "blocked_for_review", finalActivationDisposition: "blocked_for_review" },
-    { ...base, candidateId: "audited", crossCandidateAuditDisposition: "potential_canonical_collision", finalActivationDisposition: "blocked_for_review" },
+    { ...base, candidateId: "review", disposition: "review_required", finalActivationDisposition: "blocked_for_review", postCauseConsequenceActivationDisposition: "blocked_for_review" },
+    { ...base, candidateId: "singleton", disposition: "singleton", observations: [base.observations[0]], finalActivationDisposition: "blocked_for_review", postCauseConsequenceActivationDisposition: "blocked_for_review" },
+    { ...base, candidateId: "calibrated", baseActivationDisposition: "blocked_for_review", activationDisposition: "blocked_for_review", finalActivationDisposition: "blocked_for_review", postCauseConsequenceActivationDisposition: "blocked_for_review" },
+    { ...base, candidateId: "audited", crossCandidateAuditDisposition: "potential_canonical_collision", finalActivationDisposition: "blocked_for_review", postCauseConsequenceActivationDisposition: "blocked_for_review" },
   ];
   assert.equal(buildActivationPlan({ ...report, clusters: variants }).eligibleCandidateCount, 0);
 });
