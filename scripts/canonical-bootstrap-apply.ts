@@ -1,5 +1,6 @@
 import { analyzeCanonicalBootstrap } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
 import { buildActivationPlan, CanonicalBootstrapError } from "../lib/knowledge/canonical-bootstrap/activation-plan.ts";
+import { safeCanonicalBootstrapRpcError } from "../lib/knowledge/canonical-bootstrap/apply-errors.ts";
 import { createSupabaseApplyObservationReader, readUnresolvedProblemObservations } from "../lib/knowledge/canonical-bootstrap/repository.ts";
 
 function fail(code: string): never { process.stderr.write(`${JSON.stringify({ mode: "apply", status: "failed", error: code })}\n`); process.exit(1); }
@@ -21,7 +22,7 @@ try {
     method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ p_plan_hash: plan.activationPlanHash, p_candidates: plan.candidates }),
   });
-  if (!response.ok) fail("canonical_bootstrap_transaction_failed");
+  if (!response.ok) fail(safeCanonicalBootstrapRpcError(await response.text()));
   const result = await response.json();
   process.stdout.write(`${JSON.stringify({ mode: "apply", ...result }, null, 2)}\n`);
 } catch (error) {

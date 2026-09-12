@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { analyzeCanonicalBootstrap } from "../lib/knowledge/canonical-bootstrap/analyzer.ts";
 import { buildActivationPlan, buildCandidateSnapshot, CanonicalBootstrapError } from "../lib/knowledge/canonical-bootstrap/activation-plan.ts";
+import { safeCanonicalBootstrapRpcError } from "../lib/knowledge/canonical-bootstrap/apply-errors.ts";
 import type { BootstrapCandidateCluster, CanonicalBootstrapReport, UnresolvedProblemObservation } from "../lib/knowledge/canonical-bootstrap/types.ts";
 
 const row = (id: string, title = "Invoice approval delays"): UnresolvedProblemObservation => ({ id, canonical_problem_id: null, observation_fingerprint: `fp-${id}`, problem_title: title,
@@ -104,4 +105,42 @@ test("duplicate-membership defenses stay inside the atomic RPC transaction", asy
   const migration = await readFile(new URL("../supabase/migrations/20260912000000_controlled_canonical_bootstrap_activation.sql", import.meta.url), "utf8");
   assert.match(migration, /create or replace function public\.apply_canonical_bootstrap_activation[\s\S]*begin[\s\S]*pg_advisory_xact_lock[\s\S]*exception when others/);
   assert.doesNotMatch(migration, /\bcommit\b|\brollback\b/i);
+});
+
+test("apply CLI preserves only allowlisted RPC errors", () => {
+  assert.equal(safeCanonicalBootstrapRpcError(JSON.stringify({ message: "canonical_bootstrap_alias_insert_failed", details: "private row data" })), "canonical_bootstrap_alias_insert_failed");
+  assert.equal(safeCanonicalBootstrapRpcError(JSON.stringify({ message: "canonical_bootstrap_observation_conflict" })), "canonical_bootstrap_observation_conflict");
+});
+
+test("apply CLI reduces malformed, unknown, and non-canonical RPC bodies to the generic error", () => {
+  for (const body of ["not-json", JSON.stringify({ message: "canonical_bootstrap_attacker_chosen" }), JSON.stringify({ message: "relation secret_table failed" })]) {
+    assert.equal(safeCanonicalBootstrapRpcError(body), "canonical_bootstrap_transaction_failed");
+  }
+});
+
+test("B0.2.1 migration corrects JSON string UUID extraction and preserves the RPC safety boundary", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260912010000_canonical_bootstrap_apply_diagnostics.sql", import.meta.url), "utf8");
+  assert.match(migration, /security definer[\s\S]*set search_path = pg_catalog, public/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /jsonb_array_elements_text\(candidate->'observationIds'\)/);
+  assert.doesNotMatch(migration, /value::text::uuid/);
+  assert.match(migration, /if verified <> expected then[\s\S]*canonical_bootstrap_observation_conflict/);
+  assert.match(migration, /exception when others then[\s\S]*case failure_stage/);
+  assert.doesNotMatch(migration, /message\s*=\s*sqlerrm/);
+  assert.match(migration, /revoke all on function[\s\S]*public, anon, authenticated/);
+  assert.match(migration, /grant execute[\s\S]*service_role/);
+  assert.doesNotMatch(migration, /\bcommit\b|\brollback\b/i);
+});
+
+test("B0.2.1 diagnostics keep the reviewed five-candidate incident contract unchanged", async () => {
+  const documentation = await readFile(new URL("../docs/CANONICAL_REGISTRY_BOOTSTRAP.md", import.meta.url), "utf8");
+  for (const candidateId of [
+    "cb1_1e47593fd365ef352633eab6",
+    "cb1_2e74cc331b42c9b041a22d40",
+    "cb1_3f4b214a7fbbf2f43e201eaa",
+    "cb1_62263ef1cb13f093024925cf",
+    "cb1_e12233fe75f9f0099d11a3d9",
+  ]) assert.match(documentation, new RegExp(candidateId));
+  assert.match(documentation, /cb1_9a2d319d26e902747fbcbf7a[\s\S]*remains blocked/);
+  assert.match(documentation, /2b389d4e0d7c3854e3dd3eb4f96c7ebfb5687b43b531fa30f96eaad4964c7392/);
 });
