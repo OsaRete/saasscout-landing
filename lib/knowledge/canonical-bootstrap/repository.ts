@@ -34,3 +34,25 @@ export function createSupabaseObservationReader(env: NodeJS.ProcessEnv = process
     return await response.json() as UnresolvedProblemObservation[];
   };
 }
+
+/** Apply-time reader includes prior B0.2 members so an identical run can recompute the reviewed plan. */
+export async function createSupabaseApplyObservationReader(env: NodeJS.ProcessEnv = process.env): Promise<ReadOnlyObservationPage> {
+  const url = env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Canonical bootstrap service configuration is missing.");
+  const ledgerEndpoint = new URL("/rest/v1/canonical_bootstrap_activations", url);
+  ledgerEndpoint.searchParams.set("select", "canonical_problem_id");
+  const ledgerResponse = await fetch(ledgerEndpoint, { method: "GET", headers: { apikey: key, Authorization: `Bearer ${key}` } });
+  if (!ledgerResponse.ok) throw new Error(`Canonical activation ledger read failed with HTTP ${ledgerResponse.status}.`);
+  const canonicalIds = (await ledgerResponse.json() as Array<{ canonical_problem_id: string }>).map((item) => item.canonical_problem_id).sort();
+  return async (rangeStart, rangeEnd) => {
+    const endpoint = new URL("/rest/v1/problem_observations", url);
+    endpoint.searchParams.set("select", COLUMNS);
+    endpoint.searchParams.set("order", "id.asc");
+    endpoint.searchParams.set("or", canonicalIds.length ? `(canonical_problem_id.is.null,canonical_problem_id.in.(${canonicalIds.join(",")}))` : "(canonical_problem_id.is.null)");
+    const response = await fetch(endpoint, { method: "GET", headers: { apikey: key, Authorization: `Bearer ${key}`, Range: `${rangeStart}-${rangeEnd}`, "Range-Unit": "items" } });
+    if (!response.ok) throw new Error(`Problem observation read failed with HTTP ${response.status}.`);
+    const rows = await response.json() as Array<Omit<UnresolvedProblemObservation, "canonical_problem_id"> & { canonical_problem_id: string | null }>;
+    return rows.map((item) => ({ ...item, canonical_problem_id: null }));
+  };
+}

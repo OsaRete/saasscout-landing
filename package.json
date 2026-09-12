@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "node --test tests/**/*.test.ts",
     "canonical-bootstrap:dry-run": "node scripts/canonical-bootstrap-dry-run.ts",
+    "canonical-bootstrap:apply": "node scripts/canonical-bootstrap-apply.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
