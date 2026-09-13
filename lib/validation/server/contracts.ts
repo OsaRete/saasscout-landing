@@ -1,6 +1,6 @@
 export const LIMITS = { label: 200, text: 4_000, jsonBytes: 32_000, list: 50, ingestionKey: 200 } as const;
 
-export type ValidationErrorCode = "unauthenticated" | "not_found" | "invalid_request" | "invalid_hypothesis" | "invalid_experiment_design" | "invalid_lifecycle_transition" | "invalid_evidence_origin" | "invalid_evidence_classification" | "version_conflict" | "idempotency_conflict" | "participant_scope_mismatch" | "constraint_conflict";
+export type ValidationErrorCode = "unauthenticated" | "not_found" | "validation_owned_lookup_failed" | "invalid_request" | "invalid_hypothesis" | "invalid_experiment_design" | "invalid_lifecycle_transition" | "invalid_evidence_origin" | "invalid_evidence_classification" | "version_conflict" | "idempotency_conflict" | "participant_scope_mismatch" | "constraint_conflict";
 
 export class ValidationServerError extends Error {
   constructor(readonly status: number, readonly code: ValidationErrorCode, message: string) { super(message); this.name = "ValidationServerError"; }

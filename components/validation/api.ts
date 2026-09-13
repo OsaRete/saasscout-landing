@@ -9,5 +9,6 @@ export async function validationRequest<T>(path:string, init?:RequestInit):Promi
   if(!response.ok){const error=new Error(payload?.error?.message||"SaaSScout could not complete that request.");Object.assign(error,{code:payload?.error?.code,status:response.status});throw error}
   return payload.data as T;
 }
+export function validationErrorMessage(error:unknown,fallback:string):string{const safe=error as {code?:unknown;message?:unknown};if(typeof safe.code==="string"&&typeof safe.message==="string")return safe.message;return fallback}
 export const displayDate=(value:string)=>new Intl.DateTimeFormat("en",{month:"short",day:"numeric",year:"numeric"}).format(new Date(value));
 export const words=(value:string)=>value.split("\n").map(x=>x.trim()).filter(Boolean);

@@ -1,5 +1,5 @@
 "use client";
-import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Button, LoadingState } from "@/components/ui";
 import {
@@ -8,7 +8,12 @@ import {
   ValidationPage,
   card,
 } from "@/components/validation/validation-shell";
-import { displayDate, validationRequest } from "@/components/validation/api";
+import {
+  displayDate,
+  validationErrorMessage,
+  validationRequest,
+} from "@/components/validation/api";
+import { createWorkspaceRefresh } from "@/components/validation/workspace-refresh";
 import {
   HypothesisForm,
   type HypothesisVersion,
@@ -164,39 +169,35 @@ export default function WorkspacePage({
   const [conflict, setConflict] = useState("");
   const [planDraftHandoff, setPlanDraftHandoff] =
     useState<PlanDraftHandoff | null>(null);
-  const mounted = useRef(false),
-    hasData = useRef(false),
-    refreshInFlight = useRef<Promise<void> | null>(null);
-  const load = useCallback(() => {
-    if (refreshInFlight.current) return refreshInFlight.current;
-    const request = validationRequest<Workspace>(
-      `/api/validation/subjects/${id}`,
-    )
-      .then((next) => {
-        if (!mounted.current) return;
-        hasData.current = true;
-        setData(next);
-        setError("");
-      })
-      .catch((e) => {
-        if (!mounted.current) return;
-        if ((e as { status?: number }).status === 404)
-          setError(
-            "This validation workspace was not found or is not available to you.",
-          );
-        else if (e instanceof Error && e.message === "auth")
-          router.push("/login");
-        else if (!hasData.current)
-          setError("We couldn't load this validation workspace.");
-      })
-      .finally(() => {
-        if (refreshInFlight.current === request) refreshInFlight.current = null;
-      });
-    refreshInFlight.current = request;
-    return request;
-  }, [id, router]);
+  const refresh = useMemo(
+    () =>
+      createWorkspaceRefresh<Workspace>({
+        request: () =>
+          validationRequest<Workspace>(`/api/validation/subjects/${id}`),
+        accept: (next) => {
+          setData(next);
+          setError("");
+        },
+        reject: (e, hasAccepted) => {
+          if ((e as { status?: number }).status === 404)
+            setError(
+              "This validation workspace was not found or is not available to you.",
+            );
+          else if (e instanceof Error && e.message === "auth")
+            router.push("/login");
+          else if (!hasAccepted)
+            setError("We couldn't load this validation workspace.");
+        },
+      }),
+    [id, router],
+  );
+  const load = useCallback(() => refresh.passive(), [refresh]);
+  const reloadAfterCommand = useCallback(
+    () => refresh.authoritative(),
+    [refresh],
+  );
   useEffect(() => {
-    mounted.current = true;
+    refresh.activate();
     void load();
     const refreshOnFocus = () => {
       void load();
@@ -207,11 +208,11 @@ export default function WorkspacePage({
     window.addEventListener("focus", refreshOnFocus);
     document.addEventListener("visibilitychange", refreshOnVisibility);
     return () => {
-      mounted.current = false;
+      refresh.deactivate();
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [load]);
+  }, [load, refresh]);
   const latestHypothesis = useMemo(
     () =>
       data?.hypotheses
@@ -232,14 +233,20 @@ export default function WorkspacePage({
           }),
         },
       );
-      await load();
+      await reloadAfterCommand();
     } catch (e) {
       if ((e as { status?: number }).status === 409) {
         setConflict(
           "The experiment changed since this page was loaded. Refreshing current state.",
         );
-        await load();
-      } else setConflict("The lifecycle action could not be completed.");
+        await reloadAfterCommand();
+      } else
+        setConflict(
+          validationErrorMessage(
+            e,
+            "The lifecycle action could not be completed.",
+          ),
+        );
     }
   }
   if (!data && !error)
@@ -327,7 +334,7 @@ export default function WorkspacePage({
                 current={revise ? latestHypothesis : undefined}
                 onDone={() => {
                   setRevise(false);
-                  load();
+                  void reloadAfterCommand();
                 }}
                 onCancel={revise ? () => setRevise(false) : undefined}
               />
@@ -420,7 +427,7 @@ export default function WorkspacePage({
                 onDone={(handoff) => {
                   setPlanDraftHandoff(handoff);
                   setExperiment(false);
-                  load();
+                  void reloadAfterCommand();
                 }}
                 onCancel={() => setExperiment(false)}
               />
@@ -493,6 +500,7 @@ export default function WorkspacePage({
                       </div>
                       {v.family === "customer_interview" && (
                         <CustomerInterviewWorkspace
+                          key={v.id}
                           experimentId={e.id}
                           versionId={v.id}
                           lifecycle={v.lifecycle}
@@ -504,7 +512,7 @@ export default function WorkspacePage({
                           sessions={data.interview_sessions.filter(
                             (s) => s.experiment_id === e.id,
                           )}
-                          onChange={load}
+                          onChange={reloadAfterCommand}
                           suggestedQuestions={
                             applicableHandoff?.family === "customer_interview"
                               ? applicableHandoff.interviewQuestions
@@ -532,7 +540,7 @@ export default function WorkspacePage({
                                 s.experiment_id === e.id,
                             ),
                           )}
-                          onChange={load}
+                          onChange={reloadAfterCommand}
                           suggestedQuestions={
                             applicableHandoff?.family === "survey"
                               ? applicableHandoff.surveyQuestions
