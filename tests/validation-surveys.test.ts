@@ -311,7 +311,9 @@ test("V6.1 refreshes the authoritative projection on bounded return events", () 
     /document\.addEventListener\("visibilitychange", refreshOnVisibility\)/,
   );
   assert.match(workspaceUi, /document\.visibilityState === "visible"/);
-  assert.match(workspaceUi, /refreshInFlight\.current/);
+  assert.match(workspaceUi, /createWorkspaceRefresh/);
+  assert.match(workspaceUi, /refresh\.passive\(\)/);
+  assert.match(workspaceUi, /refresh\.authoritative\(\)/);
   assert.match(
     workspaceUi,
     /window\.removeEventListener\("focus", refreshOnFocus\)/,

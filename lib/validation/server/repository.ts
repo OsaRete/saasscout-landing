@@ -1,13 +1,14 @@
 import "server-only";
 import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
 import { ValidationServerError } from "./contracts";
+import { classifyOwnedLookup } from "./owned-lookup";
 
 type Row = Record<string, unknown>;
 const safe = (error: { code?: string } | null, fallback: ValidationServerError): never => { if (error?.code === "23505") throw new ValidationServerError(409, "constraint_conflict", fallback.message); throw fallback; };
 
 export class ValidationRepository {
   constructor(private readonly db: SupabaseAdminClient) {}
-  private async owned(table: string, ownerId: string, id: string, columns = "*"): Promise<Row> { const { data, error } = await this.db.from(table).select(columns).eq("id", id).eq("owner_id", ownerId).maybeSingle(); if (error || !data) throw new ValidationServerError(404, "not_found", "Validation resource not found."); return data as unknown as Row; }
+  private async owned(table: string, ownerId: string, id: string, columns = "*"): Promise<Row> { const result=classifyOwnedLookup(await this.db.from(table).select(columns).eq("id", id).eq("owner_id", ownerId).maybeSingle()); if(!result.ok){if(result.failure==="lookup_failed")throw new ValidationServerError(503,"validation_owned_lookup_failed","Validation is temporarily unavailable. Please try again.");throw new ValidationServerError(404,"not_found","Validation resource not found.");}return result.data as unknown as Row; }
   async listSubjects(ownerId: string) {
     const { data, error } = await this.db.from("validation_subjects").select("id,creation_origin,label,context_snapshot,status,created_at").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(100);
     if (error) safe(error, new ValidationServerError(500, "constraint_conflict", "Could not read validation subjects."));
