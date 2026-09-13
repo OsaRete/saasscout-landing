@@ -64,6 +64,7 @@ deployment-backups/
 
 # Local, read-only Knowledge Layer audit reports
 /artifacts/canonical-bootstrap-dry-run.json
+/artifacts/validation-promotion-dry-run.json
 
 # Local database schema backups
 remote-public-schema.sql
