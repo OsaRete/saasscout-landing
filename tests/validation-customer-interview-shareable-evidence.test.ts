@@ -111,3 +111,47 @@ test("legacy snake-case kind remains readable while non-interview families fail 
   const other=prepareValidationPromotion(rows("summary","survey"));
   assert.equal(other.evaluated[0].eligibility.eligible,false);assert.ok(other.evaluated[0].eligibility.reasons.includes("unsupported_experiment_family"));
 });
+
+const hardeningMigration=readFileSync("supabase/migrations/20260919010000_customer_interview_shareable_evidence_hardening.sql","utf8");
+const workspace=readFileSync("components/validation/customer-interview-workspace.tsx","utf8");
+const page=readFileSync("app/validation/[id]/page.tsx","utf8");
+
+test("B3.0.1 qualifies pgcrypto under the fixed RPC search path without weakening constraints",()=>{
+  assert.match(hardeningMigration,/create or replace function public\.validation_record_interview_observation_v2/);assert.match(hardeningMigration,/set search_path=public/);
+  assert.equal(hardeningMigration.match(/extensions\.digest/g)?.length,2);assert.doesNotMatch(hardeningMigration,/(?<!extensions\.)digest\(/);
+  assert.match(hardeningMigration,/on conflict\(owner_id,ingestion_key\)[\s\S]+raise exception 'idempotency conflict'/);assert.match(hardeningMigration,/revoke all[\s\S]+grant execute[\s\S]+service_role/);
+  assert.doesNotMatch(hardeningMigration,/drop |delete from|update public\.validation_evidence_observations/i);
+});
+
+test("observation and optional shareable evidence stay in one atomic RPC command",()=>{
+  const observationInsert=hardeningMigration.indexOf("insert into public.validation_evidence_observations");const shareableInsert=hardeningMigration.indexOf("insert into public.validation_customer_interview_shareable_evidence");const functionEnd=hardeningMigration.indexOf("end $$");
+  assert.ok(observationInsert>0&&shareableInsert>observationInsert&&functionEnd>shareableInsert);assert.doesNotMatch(hardeningMigration.slice(observationInsert,functionEnd),/begin\s*;|commit\s*;/i);assert.match(hardeningMigration,/existing rows[\s\S]+append-only semantics/i);
+});
+
+test("client retains one command identity and timestamp for uncertain retries then rotates after confirmation",()=>{
+  assert.match(ui,/useRef<PendingObservationCommand \| null>/);assert.match(ui,/pendingCommand\.current \?\?/);assert.match(ui,/ingestionKey: command\.ingestionKey/);assert.match(ui,/observedAt: command\.observedAt/);
+  const request=ui.indexOf('"/api/validation/interview-observations"');const clear=ui.indexOf("pendingCommand.current = null",request);assert.ok(request>0&&clear>request);assert.equal((ui.match(/crypto\.randomUUID\(\)/g)??[]).length,1);
+});
+
+test("observation save gives bounded pending feedback, prevents double submission, and preserves failed input",()=>{
+  assert.match(ui,/if \(saving\) return/);assert.match(ui,/disabled=\{[\s\S]+saving/);assert.match(ui,/Recording immutable observation…/);assert.match(ui,/animate-spin/);
+  const catchStart=ui.indexOf("catch (cause)");const finallyStart=ui.indexOf("finally",catchStart);assert.doesNotMatch(ui.slice(catchStart,finallyStart),/setContent|setShareableStatement|pendingCommand\.current = null/);assert.match(ui,/finally[\s\S]+setSaving\(false\)/);
+});
+
+test("success resets every observation-specific field while statement edits revoke approval",()=>{
+  for(const reset of ['setContent("")','setCategory("other")','setKind("summary")','setPolarity("")','setShareableStatement("")','setShareableReviewed(false)'])assert.ok(ui.includes(reset),`missing ${reset}`);
+  assert.match(ui,/setShareableStatement\(event\.target\.value\);\s+setShareableReviewed\(false\)/);
+});
+
+test("idempotency conflict mapping is bounded and non-idempotency database faults are not mislabeled",()=>{
+  assert.match(repositorySource,/error\?\.code === "23505"[\s\S]+"idempotency_conflict"/);assert.match(repositorySource,/500,"constraint_conflict","Could not record interview observation\."/);assert.match(ui,/error\?\.code === "idempotency_conflict"/);assert.doesNotMatch(ui,/PostgreSQL|Supabase|23505|42883/);
+});
+
+test("successful interview transition clears only its own stale notes error",()=>{
+  assert.match(workspace,/const \[sessionError,setSessionError\]=useState\(""\)/);const moveStart=workspace.indexOf("async function move");const moveEnd=workspace.indexOf("return",moveStart);const move=workspace.slice(moveStart,moveEnd);
+  assert.match(move,/await onChange\(\);setSessionError\(""\)/);assert.match(move,/catch\(e\)[\s\S]+setSessionError\(validationErrorMessage/);assert.doesNotMatch(move,/setError\(/);
+});
+
+test("responsive grid repositions but never conditionally hides or duplicates evidence and classifications",()=>{
+  assert.match(page,/xl:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(300px,\.65fr\)\]/);const aside=page.slice(page.indexOf('<aside className="space-y-6">'),page.indexOf("</aside>"));assert.match(aside,/Evidence/);assert.match(aside,/Classifications/);assert.doesNotMatch(aside,/\bhidden\b|useMediaQuery|window\.innerWidth/);assert.equal((page.match(/<aside className="space-y-6">/g)??[]).length,1);
+});
