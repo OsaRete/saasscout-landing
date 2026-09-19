@@ -5,6 +5,7 @@ import { classifyOwnedLookup } from "./owned-lookup";
 
 type Row = Record<string, unknown>;
 const safe = (error: { code?: string } | null, fallback: ValidationServerError): never => { if (error?.code === "23505") throw new ValidationServerError(409, "constraint_conflict", fallback.message); throw fallback; };
+const interviewObservationFailure = (error: { code?: string } | null): never => { if (error?.code === "23505") throw new ValidationServerError(409,"idempotency_conflict","This observation command conflicts with an earlier submission."); throw new ValidationServerError(500,"constraint_conflict","Could not record interview observation."); };
 
 export class ValidationRepository {
   constructor(private readonly db: SupabaseAdminClient) {}
@@ -59,5 +60,5 @@ export class ValidationRepository {
   async createInterviewPlan(ownerId:string,row:Row){await this.owned("validation_experiment_versions",ownerId,String(row.p_experiment_version_id),"id");const{data,error}=await this.db.rpc("validation_create_interview_plan",{p_owner_id:ownerId,...row});if(error||!data)safe(error,new ValidationServerError(409,"constraint_conflict","Could not save interview plan."));return data;}
   async createInterviewSession(ownerId:string,row:Row){await this.owned("validation_experiment_versions",ownerId,String(row.p_experiment_version_id),"id");await this.owned("validation_participants",ownerId,String(row.p_participant_id),"id");await this.owned("validation_interview_plan_versions",ownerId,String(row.p_interview_plan_version_id),"id");const{data,error}=await this.db.rpc("validation_create_interview_session",{p_owner_id:ownerId,...row});if(error||!data)safe(error,new ValidationServerError(409,"constraint_conflict","Could not create interview."));return data;}
   async updateInterviewSession(ownerId:string,id:string,row:Row){await this.owned("validation_interview_sessions",ownerId,id,"id");const{data,error}=await this.db.rpc("validation_update_interview_session",{p_owner_id:ownerId,p_session_id:id,...row});if(error||!data)safe(error,new ValidationServerError(409,"constraint_conflict","Could not update interview."));return data;}
-  async recordInterviewObservation(ownerId:string,row:Row){await this.owned("validation_interview_sessions",ownerId,String(row.p_interview_session_id),"id");const{data,error}=await this.db.rpc("validation_record_interview_observation_v2",{p_owner_id:ownerId,...row});if(error||!data)safe(error,new ValidationServerError(409,"idempotency_conflict","Could not record interview observation."));return data;}
+  async recordInterviewObservation(ownerId:string,row:Row){await this.owned("validation_interview_sessions",ownerId,String(row.p_interview_session_id),"id");const{data,error}=await this.db.rpc("validation_record_interview_observation_v2",{p_owner_id:ownerId,...row});if(error||!data)interviewObservationFailure(error);return data;}
 }
