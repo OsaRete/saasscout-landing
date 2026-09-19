@@ -14,7 +14,7 @@ The projections deliberately omit participant names, emails, pseudonymous refere
 
 ## Evaluation
 
-The orchestration reuses policy `v8-b1.1`, including terminal authoritative classification resolution by supersession graph rather than timestamps. AI-suggested rows cannot establish authority. It reports every V8-B1 reason, including the Survey projection boundary, and treats supporting, contradicting, and mixed symmetrically.
+The orchestration reuses policy `v8-b1.2`, including explicit Customer Interview experiment-family enforcement and terminal authoritative classification resolution by supersession graph rather than timestamps. AI-suggested rows cannot establish authority. It reports every V8-B1 reason, including the Survey projection boundary, and treats supporting, contradicting, and mixed symmetrically.
 
 Only eligible observations enter resolver `v8-b1-exact.1`. Resolution uses upstream canonical ID, then subject label, then hypothesis claim only when the label is absent; title and alias matching remain exact and normalized. Respondent prose is never an identity input. Unmatched, ambiguous, and insufficient identities remain deferred.
 

@@ -1,4 +1,4 @@
-export const VALIDATION_PROMOTION_POLICY_VERSION = "v8-b1.1" as const;
+export const VALIDATION_PROMOTION_POLICY_VERSION = "v8-b1.2" as const;
 export const VALIDATION_CANONICAL_RESOLVER_VERSION = "v8-b1-exact.1" as const;
 
 export type ValidationPolarity = "supporting" | "contradicting" | "mixed" | "neutral" | "inconclusive";
@@ -6,7 +6,8 @@ export type PromotionEligibilityReason =
   | "eligible" | "missing_authoritative_classification" | "ambiguous_authoritative_classification"
   | "classification_not_promotable" | "unsupported_evidence_origin" | "missing_independence_identity"
   | "empty_evidence_content" | "invalid_validation_lineage" | "experiment_state_not_eligible"
-  | "target_relevance_unproven" | "participant_state_not_eligible" | "survey_projection_required";
+  | "target_relevance_unproven" | "participant_state_not_eligible" | "survey_projection_required"
+  | "unsupported_experiment_family";
 
 export type AuthoritativeClassification = { id: string; observationId: string; polarity: ValidationPolarity; source: string; authorityStatus: "authoritative" | "suggested"; supersedesClassificationId: string | null };
 export type EligibilityInput = {

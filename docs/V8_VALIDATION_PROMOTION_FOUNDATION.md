@@ -26,7 +26,7 @@ STOP — no problem_observations write in V8-B1
 
 ## Evidence and eligibility policy
 
-Policy `v8-b1.1` initially accepts only immutable, non-empty Customer Interview observations created under the explicit `human_interview` / `interview_observation` / `customer_interview` contract. The composite lineage must be valid; participant status must be active; the session must be in progress or completed; the experiment must be running, paused, or completed; and structured target relevance must be `target_segment_match`.
+Policy `v8-b1.2` accepts only immutable, non-empty Customer Interview observations created under the explicit `human_interview` / `interview_observation` / `customer_interview` contract and now also requires the authoritative experiment family to be `customer_interview`. The composite lineage must be valid; participant status must be active; the session must be in progress or completed; the experiment must be running, paused, or completed; and structured target relevance must be `target_segment_match`.
 
 AI intelligence, synthesis, generated drafts, questions, copy, recommendations, interview notes, hypotheses, and arbitrary respondent prose are not evidence inputs. `ai_model_suggested` can never resolve as authoritative. This source boundary prevents the recursive human → AI summary → new “human” corroboration loop.
 

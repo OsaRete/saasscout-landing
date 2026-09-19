@@ -49,7 +49,7 @@ test("canonical resolution only uses provenance or explicit problem identity", (
   assert.equal(resolveValidationCanonicalProblem({ provenanceCanonicalProblemId: "cp1", subjectLabel: "other" }, registry).identitySource, "provenance");
   assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Same" }, [...registry, { ...registry[0], id: "cp2", canonicalTitle: "Same", normalizedTitle: "same" }, { ...registry[0], id: "cp3", canonicalTitle: "Same", normalizedTitle: "same" }]).status, "ambiguous");
 });
-test("versions are explicit and outputs structurally deterministic", () => { assert.equal(VALIDATION_PROMOTION_POLICY_VERSION, "v8-b1.1"); assert.equal(VALIDATION_CANONICAL_RESOLVER_VERSION, "v8-b1-exact.1"); assert.deepEqual(evaluateValidationPromotionEligibility(base()), evaluateValidationPromotionEligibility(base())); });
+test("versions are explicit and outputs structurally deterministic", () => { assert.equal(VALIDATION_PROMOTION_POLICY_VERSION, "v8-b1.2"); assert.equal(VALIDATION_CANONICAL_RESOLVER_VERSION, "v8-b1-exact.1"); assert.deepEqual(evaluateValidationPromotionEligibility(base()), evaluateValidationPromotionEligibility(base())); });
 test("ledger is private, append-only, constrained, and contains no Data Moat mutation", () => {
   const sql = readFileSync("supabase/migrations/20260913000000_validation_evidence_promotion_foundation.sql", "utf8");
   assert.match(sql, /enable row level security/i); assert.match(sql, /revoke all[^;]+authenticated/i); assert.doesNotMatch(sql, /grant select[^;]+authenticated/i); assert.match(sql, /append_only/i);
