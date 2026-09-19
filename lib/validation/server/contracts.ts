@@ -3,7 +3,9 @@ export const LIMITS = { label: 200, text: 4_000, jsonBytes: 32_000, list: 50, in
 export type ValidationErrorCode = "unauthenticated" | "not_found" | "validation_owned_lookup_failed" | "invalid_request" | "invalid_hypothesis" | "invalid_experiment_design" | "invalid_lifecycle_transition" | "invalid_evidence_origin" | "invalid_evidence_classification" | "version_conflict" | "idempotency_conflict" | "participant_scope_mismatch" | "constraint_conflict";
 
 export class ValidationServerError extends Error {
-  constructor(readonly status: number, readonly code: ValidationErrorCode, message: string) { super(message); this.name = "ValidationServerError"; }
+  readonly status:number;
+  readonly code:ValidationErrorCode;
+  constructor(status: number, code: ValidationErrorCode, message: string) { super(message); this.status=status; this.code=code; this.name = "ValidationServerError"; }
 }
 
 export type HypothesisVersionInput = { targetSegment: string; problemClaim: string; expectedObservableBehavior: string; commercialAssumption?: string; supportCriteria: string[]; contradictionCriteria: string[]; inconclusiveCriteria: string[]; scope: { included: string[]; excluded: string[] }; supersedesVersionId?: string };

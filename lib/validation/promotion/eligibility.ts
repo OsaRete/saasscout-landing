@@ -20,6 +20,7 @@ export function evaluateValidationPromotionEligibility(input: EligibilityInput):
   if (!input.lineageValid || !input.observationId) reasons.push("invalid_validation_lineage");
   const interview = input.origin === "human_interview" && input.modality === "interview_observation" && input.sourceType === "customer_interview" && Boolean(input.interviewSessionId);
   if (!interview) reasons.push(input.modality === "survey_answer" || input.origin === "survey_response" ? "survey_projection_required" : "unsupported_evidence_origin");
+  if (input.experimentFamily !== "customer_interview") reasons.push("unsupported_experiment_family");
   if (!hasUsefulContent(input.content)) reasons.push("empty_evidence_content");
   if (current.status === "missing") reasons.push("missing_authoritative_classification");
   if (current.status === "ambiguous") reasons.push("ambiguous_authoritative_classification");
