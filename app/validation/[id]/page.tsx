@@ -132,6 +132,7 @@ type Workspace = {
     rationale?: string;
   }>;
 };
+type TransitionFeedback = { tone: "success" | "error"; message: string };
 const transitions = {
   draft: [
     ["Mark ready", "ready"],
@@ -166,7 +167,12 @@ export default function WorkspacePage({
   const [error, setError] = useState("");
   const [revise, setRevise] = useState(false);
   const [experiment, setExperiment] = useState(false);
-  const [conflict, setConflict] = useState("");
+  const [transitionPending, setTransitionPending] = useState<
+    Record<string, string>
+  >({});
+  const [transitionFeedback, setTransitionFeedback] = useState<
+    Record<string, TransitionFeedback>
+  >({});
   const [planDraftHandoff, setPlanDraftHandoff] =
     useState<PlanDraftHandoff | null>(null);
   const refresh = useMemo(
@@ -221,7 +227,13 @@ export default function WorkspacePage({
     [data],
   );
   async function move(v: ExperimentVersion, target: string) {
-    setConflict("");
+    if (transitionPending[v.id]) return;
+    setTransitionPending((pending) => ({ ...pending, [v.id]: target }));
+    setTransitionFeedback((feedback) => {
+      const next = { ...feedback };
+      delete next[v.id];
+      return next;
+    });
     try {
       await validationRequest(
         `/api/validation/experiment-versions/${v.id}/transition`,
@@ -234,19 +246,56 @@ export default function WorkspacePage({
         },
       );
       await reloadAfterCommand();
+      const action =
+        target === "running"
+          ? v.lifecycle === "paused"
+            ? "resumed"
+            : "started"
+          : target === "ready"
+            ? "marked ready"
+            : target === "draft"
+              ? "returned to draft"
+              : target === "completed"
+                ? "completed"
+                : target === "paused"
+                  ? "paused"
+                  : "cancelled";
+      setTransitionFeedback((feedback) => ({
+        ...feedback,
+        [v.id]: {
+          tone: "success",
+          message: `Experiment ${action}.`,
+        },
+      }));
     } catch (e) {
       if ((e as { status?: number }).status === 409) {
-        setConflict(
-          "The experiment changed since this page was loaded. Refreshing current state.",
-        );
+        setTransitionFeedback((feedback) => ({
+          ...feedback,
+          [v.id]: {
+            tone: "error",
+            message:
+              "The experiment changed since this page was loaded. Refreshing current state.",
+          },
+        }));
         await reloadAfterCommand();
-      } else
-        setConflict(
-          validationErrorMessage(
-            e,
-            "The lifecycle action could not be completed.",
-          ),
-        );
+      } else {
+        setTransitionFeedback((feedback) => ({
+          ...feedback,
+          [v.id]: {
+            tone: "error",
+            message: validationErrorMessage(
+              e,
+              "The lifecycle action could not be completed.",
+            ),
+          },
+        }));
+      }
+    } finally {
+      setTransitionPending((pending) => {
+        const next = { ...pending };
+        delete next[v.id];
+        return next;
+      });
     }
   }
   if (!data && !error)
@@ -311,7 +360,7 @@ export default function WorkspacePage({
           ))}
         </ContextNotice>
       </section>
-      <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,.65fr)]">
+      <div className="mt-8 space-y-8">
         <div className="space-y-8">
           <section>
             <div className="mb-4 flex items-center justify-between">
@@ -487,6 +536,7 @@ export default function WorkspacePage({
                         {transitions[v.lifecycle].map(([label, target]) => (
                           <Button
                             key={target}
+                            disabled={Boolean(transitionPending[v.id])}
                             variant={
                               target === "cancelled"
                                 ? "destructive"
@@ -494,9 +544,33 @@ export default function WorkspacePage({
                             }
                             onClick={() => move(v, target)}
                           >
-                            {label}
+                            {transitionPending[v.id] === target
+                              ? `${label.replace("Mark ready", "Marking ready").replace("Return to draft", "Returning to draft").replace("Start", "Starting").replace("Pause", "Pausing").replace("Complete", "Completing").replace("Resume", "Resuming").replace("Cancel", "Cancelling")}…`
+                              : label}
                           </Button>
                         ))}
+                      </div>
+                      <div
+                        className="mt-3"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      >
+                        {transitionFeedback[v.id] && (
+                          <p
+                            role={
+                              transitionFeedback[v.id].tone === "error"
+                                ? "alert"
+                                : "status"
+                            }
+                            className={
+                              transitionFeedback[v.id].tone === "error"
+                                ? "text-sm text-rose-200"
+                                : "text-sm text-emerald-200"
+                            }
+                          >
+                            {transitionFeedback[v.id].message}
+                          </p>
+                        )}
                       </div>
                       {v.family === "customer_interview" && (
                         <CustomerInterviewWorkspace
@@ -554,14 +628,12 @@ export default function WorkspacePage({
                 })}
               </div>
             )}
-            {conflict && (
-              <p role="status" className="mt-3 text-sm text-amber-200">
-                {conflict}
-              </p>
-            )}
           </section>
         </div>
-        <aside className="space-y-6">
+        <aside
+          aria-label="Authoritative validation evidence"
+          className="grid min-w-0 gap-6 md:grid-cols-2"
+        >
           <section className={card}>
             <p className="text-xs font-semibold uppercase tracking-[.18em] text-violet-300">
               Evidence
