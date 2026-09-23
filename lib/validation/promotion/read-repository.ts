@@ -18,7 +18,7 @@ const PAGE_SIZE = 1000;
 const projections = {
   observations: ["validation_evidence_observations", "id,owner_id,subject_id,hypothesis_id,hypothesis_version_id,experiment_id,experiment_version_id,participant_id,interview_session_id,origin,modality,source_type,observed_at,observation_content,participant_independence_key"],
   classifications: ["validation_evidence_classifications", "id,owner_id,observation_id,polarity,classification_source,authority_status,supersedes_classification_id"],
-  subjects: ["validation_subjects", "id,owner_id,label,context_snapshot"],
+  subjects: ["validation_subjects", "id,owner_id,label"],
   hypotheses: ["validation_hypothesis_versions", "id,owner_id,subject_id,hypothesis_id,problem_claim"],
   experiments: ["validation_experiment_versions", "id,owner_id,subject_id,experiment_id,hypothesis_id,hypothesis_version_id,family,lifecycle"],
   participants: ["validation_participants", "id,owner_id,status"],

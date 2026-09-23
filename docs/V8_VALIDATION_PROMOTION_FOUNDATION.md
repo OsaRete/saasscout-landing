@@ -64,14 +64,7 @@ Only factors already supplied as structured preparation fields are operational. 
 
 ## Canonical resolution
 
-Resolver `v8-b1-exact.1` is read-only. Precedence is:
-
-1. explicit upstream canonical problem ID, when it identifies one active registry row;
-2. exact normalized active canonical title using the shared Knowledge normalizer;
-3. exact normalized active alias;
-4. defer as unmatched or ambiguous.
-
-Subject label precedes hypothesis problem claim as the explicit text identity. Respondent answer prose is never a resolution source. Similarity is intentionally not enabled: the existing generic similarity engine combines context and scoring inputs that this bounded Validation identity contract cannot safely provide. The resolver creates no canonical problem or alias and performs no mutation.
+Resolver `v8-b3.0.2-exact.1` is read-only and ignores arbitrary subject context. Subject label and hypothesis problem claim are independently matched against the union of exact normalized active canonical titles and aliases. Multiple candidates or different exact candidates across the two signals defer as ambiguous; agreeing signals resolve, a single exact candidate resolves, and absent or unmatched identity defers. Respondent answer prose is never a resolution source. Similarity is intentionally not enabled: the existing generic similarity engine combines context and scoring inputs that this bounded Validation identity contract cannot safely provide. The resolver creates no canonical problem or alias and performs no mutation.
 
 ## Survey boundary
 

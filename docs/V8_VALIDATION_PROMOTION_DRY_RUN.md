@@ -16,7 +16,7 @@ The projections deliberately omit participant names, emails, pseudonymous refere
 
 The orchestration reuses policy `v8-b1.2`, including explicit Customer Interview experiment-family enforcement and terminal authoritative classification resolution by supersession graph rather than timestamps. AI-suggested rows cannot establish authority. It reports every V8-B1 reason, including the Survey projection boundary, and treats supporting, contradicting, and mixed symmetrically.
 
-Only eligible observations enter resolver `v8-b1-exact.1`. Resolution uses upstream canonical ID, then subject label, then hypothesis claim only when the label is absent; title and alias matching remain exact and normalized. Respondent prose is never an identity input. Unmatched, ambiguous, and insufficient identities remain deferred.
+Only eligible observations enter resolver `v8-b3.0.2-exact.1`. Subject context is not selected or interpreted as authority. Subject label and hypothesis claim are independently matched against exact normalized active canonical titles and aliases; competing candidates fail closed as ambiguous. Respondent prose is never an identity input. Unmatched, ambiguous, and insufficient identities remain deferred.
 
 Resolved observations are grouped by private participant ID, canonical problem ID, and polarity. V8-B1 lexicographic representative selection picks at most one member per group. The report does not emit participant IDs or group keys: it emits ordered, report-local group references that are not a shared identity contract. It emits content metadata, not observation prose or raw notes.
 

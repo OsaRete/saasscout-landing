@@ -27,6 +27,25 @@ test("real-row adapter preserves exact lineage and ignores independence key as p
   assert.equal(item.input.lineageValid, true); assert.equal(item.input.participantId, "p1"); assert.equal(item.input.experimentFamily, "customer_interview"); assert.equal(item.identity.subjectLabel, "Invoice bottleneck");
 });
 
+test("subject context canonical-looking IDs remain readable but cannot establish authority", () => {
+  for (const key of ["canonical_problem_id", "canonicalProblemId"] as const) {
+    const rows = fixture(); const context = { benign: { retained: true }, [key]: "cp1" }; rows.subjects[0].context_snapshot = context; rows.subjects[0].label = "No exact canonical identity"; rows.hypotheses[0].problem_claim = "Also unmatched"; const before = structuredClone(context);
+    const prepared = adaptPersistedPromotionRows(rows); const report = buildValidationPromotionDryRunReport(rows);
+    assert.equal("provenanceCanonicalProblemId" in prepared[0].identity, false); assert.equal(report.summary.canonicalUnmatched, 1); assert.equal(report.representativeCandidates.length, 0); assert.deepEqual(rows.subjects[0].context_snapshot, before);
+  }
+});
+
+test("active, inactive, and random UUID-shaped context values never affect B2 resolution", () => {
+  for (const value of ["cp1", "inactive-id", "550e8400-e29b-41d4-a716-446655440000"]) {
+    const rows = fixture(); rows.canonicalProblems.push({ id: "inactive-id", canonical_title: "Inactive", normalized_title: "inactive", status: "inactive" }); rows.subjects[0] = { ...rows.subjects[0], label: "Unmatched identity", context_snapshot: { canonical_problem_id: value } }; rows.hypotheses[0].problem_claim = "Unmatched hypothesis";
+    const report = buildValidationPromotionDryRunReport(rows); assert.equal(report.summary.canonicalUnmatched, 1); assert.equal(report.representativeCandidates.length, 0);
+  }
+});
+
+test("B2 exposes the repaired shared resolver contract", () => {
+  const report = buildValidationPromotionDryRunReport(fixture()); assert.equal(report.resolverVersion, "v8-b3.0.2-exact.1"); assert.equal(report.policyVersion, "v8-b1.2"); assert.equal(report.representativeCandidates[0].canonicalResolutionReason, "exact_normalized_alias");
+});
+
 test("classification policy defers missing, ambiguous, AI-only, neutral, and inconclusive", () => {
   for (const variant of ["missing", "ambiguous", "ai", "neutral", "inconclusive"] as const) {
     const rows = fixture();
