@@ -147,11 +147,11 @@ test("idempotency conflict mapping is bounded and non-idempotency database fault
   assert.match(repositorySource,/error\?\.code === "23505"[\s\S]+"idempotency_conflict"/);assert.match(repositorySource,/500,"constraint_conflict","Could not record interview observation\."/);assert.match(ui,/error\?\.code === "idempotency_conflict"/);assert.doesNotMatch(ui,/PostgreSQL|Supabase|23505|42883/);
 });
 
-test("successful interview transition clears only its own stale notes error",()=>{
-  assert.match(workspace,/const \[sessionError,setSessionError\]=useState\(""\)/);const moveStart=workspace.indexOf("async function move");const moveEnd=workspace.indexOf("return",moveStart);const move=workspace.slice(moveStart,moveEnd);
-  assert.match(move,/await onChange\(\);setSessionError\(""\)/);assert.match(move,/catch\(e\)[\s\S]+setSessionError\(validationErrorMessage/);assert.doesNotMatch(move,/setError\(/);
+test("interview transition feedback is isolated to its session",()=>{
+  assert.match(workspace,/Record<string, Feedback>/);const moveStart=workspace.indexOf("async function move");const moveEnd=workspace.indexOf("\n  return (",moveStart);const move=workspace.slice(moveStart,moveEnd);
+  assert.match(move,/await onChange\(\);[\s\S]+setSessionFeedback/);assert.match(move,/catch \(cause\)[\s\S]+setSessionFeedback/);assert.match(move,/\[session\.id\]/);assert.doesNotMatch(move,/setPlanFeedback|setParticipantFeedback|setInterviewFeedback/);
 });
 
-test("responsive grid repositions but never conditionally hides or duplicates evidence and classifications",()=>{
-  assert.match(page,/xl:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(300px,\.65fr\)\]/);const aside=page.slice(page.indexOf('<aside className="space-y-6">'),page.indexOf("</aside>"));assert.match(aside,/Evidence/);assert.match(aside,/Classifications/);assert.doesNotMatch(aside,/\bhidden\b|useMediaQuery|window\.innerWidth/);assert.equal((page.match(/<aside className="space-y-6">/g)??[]).length,1);
+test("responsive evidence region stays in flow and never conditionally hides or duplicates",()=>{
+  assert.doesNotMatch(page,/xl:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(300px,\.65fr\)\]/);const aside=page.slice(page.indexOf('<aside\n          aria-label="Authoritative validation evidence"'),page.indexOf("</aside>"));assert.match(aside,/Evidence/);assert.match(aside,/Classifications/);assert.match(aside,/md:grid-cols-2/);assert.doesNotMatch(aside,/\bhidden\b|useMediaQuery|window\.innerWidth/);assert.equal((page.match(/aria-label="Authoritative validation evidence"/g)??[]).length,1);
 });
