@@ -4,7 +4,7 @@ import { selectValidationRepresentatives } from "./representative-selection.ts";
 import type { AuthoritativeClassification, CanonicalRegistryEntry, EvidenceSpecificity, EligibilityInput, RepresentativeCandidate, ValidationPolarity } from "./types.ts";
 import type { PersistedPromotionRows } from "./read-repository.ts";
 
-export type PreparedObservation = { input: EligibilityInput; identity: { provenanceCanonicalProblemId: string | null; subjectLabel: string | null; hypothesisProblemClaim: string | null }; specificity: EvidenceSpecificity; statementKind: "direct_quote" | "summary" | null; contentLength: number; observedAt: string };
+export type PreparedObservation = { input: EligibilityInput; identity: { subjectLabel: string | null; hypothesisProblemClaim: string | null }; specificity: EvidenceSpecificity; statementKind: "direct_quote" | "summary" | null; contentLength: number; observedAt: string };
 const text = (value: unknown) => typeof value === "string" ? value : null;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
@@ -27,12 +27,12 @@ export function adaptPersistedPromotionRows(rows: PersistedPromotionRows): Prepa
     classifications.set(observationId, [...(classifications.get(observationId) ?? []), item]);
   }
   return rows.observations.map((row) => {
-    const id = text(row.id) ?? "", subject = subjects.get(text(row.subject_id)) ?? {}, hypothesis = hypotheses.get(text(row.hypothesis_version_id)) ?? {}, experiment = experiments.get(text(row.experiment_version_id)) ?? {}, participant = participants.get(text(row.participant_id)) ?? {}, session = sessions.get(text(row.interview_session_id)) ?? {}, content = record(row.observation_content), context = record(subject.context_snapshot);
+    const id = text(row.id) ?? "", subject = subjects.get(text(row.subject_id)) ?? {}, hypothesis = hypotheses.get(text(row.hypothesis_version_id)) ?? {}, experiment = experiments.get(text(row.experiment_version_id)) ?? {}, participant = participants.get(text(row.participant_id)) ?? {}, session = sessions.get(text(row.interview_session_id)) ?? {}, content = record(row.observation_content);
     const lineageValid = Boolean(text(row.owner_id) && text(row.subject_id) && text(row.hypothesis_id) && text(row.hypothesis_version_id) && text(row.experiment_id) && text(row.experiment_version_id)) && text(experiment.subject_id) === text(row.subject_id) && text(experiment.hypothesis_version_id) === text(row.hypothesis_version_id) && (!text(row.interview_session_id) || (text(session.experiment_version_id) === text(row.experiment_version_id) && text(session.participant_id) === text(row.participant_id)));
     const input: EligibilityInput = { observationId: id, origin: text(row.origin) ?? "", modality: text(row.modality) ?? "", sourceType: text(row.source_type) ?? "", content, participantId: text(row.participant_id), participantIndependenceKey: text(row.participant_independence_key), participantStatus: text(participant.status), interviewSessionId: text(row.interview_session_id), interviewSessionStatus: text(session.status), participantRelevance: text(session.participant_relevance), experimentFamily: text(experiment.family) ?? "", experimentLifecycle: text(experiment.lifecycle) ?? "", lineageValid, classifications: classifications.get(id) ?? [] };
     const contentText = JSON.stringify(content);
     const persistedStatementKind = text(content.statementKind) ?? text(content.statement_kind);
-    return { input, identity: { provenanceCanonicalProblemId: text(context.canonical_problem_id) ?? text(context.canonicalProblemId), subjectLabel: text(subject.label), hypothesisProblemClaim: text(hypothesis.problem_claim) }, specificity: specificity(content, input.modality), statementKind: persistedStatementKind === "direct_quote" ? "direct_quote" : persistedStatementKind === "summary" ? "summary" : null, contentLength: contentText.length, observedAt: text(row.observed_at) ?? "" };
+    return { input, identity: { subjectLabel: text(subject.label), hypothesisProblemClaim: text(hypothesis.problem_claim) }, specificity: specificity(content, input.modality), statementKind: persistedStatementKind === "direct_quote" ? "direct_quote" : persistedStatementKind === "summary" ? "summary" : null, contentLength: contentText.length, observedAt: text(row.observed_at) ?? "" };
   });
 }
 

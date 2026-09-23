@@ -147,3 +147,7 @@ production data was read or mutated, no remote SQL was executed, and
 `supabase db push` was not run. Surveys, behavioral evidence, social evidence,
 automatic promotion, downstream Problem Intelligence aggregation, and
 Knowledge Evolution/V9 remain deferred.
+
+## V8-B3.0.2 prerequisite status
+
+V8-B3.0.2 repairs this authority boundary with resolver `v8-b3.0.2-exact.1`; see `V8_B3_0_2_CANONICAL_AUTHORITY_HARDENING.md`. Subject context is no longer a resolver input, historical JSON is unchanged, exact subject/hypothesis conflicts defer, and B2 exposes the versioned shared pure contract. This makes it safe to resume B3.1 design review, but does not implement or authorize B3.1 promotion.

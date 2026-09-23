@@ -40,16 +40,26 @@ test("representative selection is grouped, polarity-safe, deterministic, and sta
   assert.equal(selectValidationRepresentatives([candidate("b"), candidate("a")])[0].representativeObservationId, "a");
   assert.equal("score" in forward[0], false); assert.equal("confidence" in forward[0], false);
 });
-test("canonical resolution only uses provenance or explicit problem identity", () => {
+test("canonical resolution only uses exact explicit problem identity", () => {
   const registry = [{ id: "cp1", canonicalTitle: "Invoice Approval Bottlenecks", normalizedTitle: "invoice approval bottlenecks", status: "active", aliases: [{ normalizedAlias: "slow invoice approvals" }] }];
   assert.equal(resolveValidationCanonicalProblem({ subjectLabel: " INVOICE approval—bottlenecks " }, registry).canonicalProblemId, "cp1");
   assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Slow invoice approvals" }, registry).reason, "exact_normalized_alias");
   assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Different problem" }, registry).status, "unmatched");
   assert.equal(resolveValidationCanonicalProblem({ respondentProse: "invoice approval bottlenecks" }, registry).status, "insufficient_identity");
-  assert.equal(resolveValidationCanonicalProblem({ provenanceCanonicalProblemId: "cp1", subjectLabel: "other" }, registry).identitySource, "provenance");
   assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Same" }, [...registry, { ...registry[0], id: "cp2", canonicalTitle: "Same", normalizedTitle: "same" }, { ...registry[0], id: "cp3", canonicalTitle: "Same", normalizedTitle: "same" }]).status, "ambiguous");
 });
-test("versions are explicit and outputs structurally deterministic", () => { assert.equal(VALIDATION_PROMOTION_POLICY_VERSION, "v8-b1.2"); assert.equal(VALIDATION_CANONICAL_RESOLVER_VERSION, "v8-b1-exact.1"); assert.deepEqual(evaluateValidationPromotionEligibility(base()), evaluateValidationPromotionEligibility(base())); });
+test("conflicting exact subject and hypothesis identities fail closed", () => {
+  const registry = [{ id: "cp1", canonicalTitle: "Invoice delays", normalizedTitle: "invoice delays", status: "active", aliases: [] }, { id: "cp2", canonicalTitle: "Payment failures", normalizedTitle: "payment failures", status: "active", aliases: [] }];
+  const resolution = resolveValidationCanonicalProblem({ subjectLabel: "Invoice delays", hypothesisProblemClaim: "Payment failures" }, registry);
+  assert.equal(resolution.status, "ambiguous"); assert.equal(resolution.reason, "canonical_identity_conflict"); assert.equal(resolution.canonicalProblemId, null);
+});
+test("inactive entries, prose, AI output, evidence text, and fuzzy text cannot resolve", () => {
+  const registry = [{ id: "cp1", canonicalTitle: "Invoice Approval Bottlenecks", normalizedTitle: "invoice approval bottlenecks", status: "inactive", aliases: [{ normalizedAlias: "slow invoice approvals" }] }];
+  assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Invoice Approval Bottlenecks" }, registry).status, "unmatched");
+  for (const ignored of [{ respondentProse: "Invoice Approval Bottlenecks" }, { respondentProse: "AI: Invoice Approval Bottlenecks" }, { respondentProse: "raw interview evidence Invoice Approval Bottlenecks" }]) assert.equal(resolveValidationCanonicalProblem(ignored, registry).status, "insufficient_identity");
+  assert.equal(resolveValidationCanonicalProblem({ subjectLabel: "Invoice Approval Bottleneck" }, [{ ...registry[0], status: "active" }]).status, "unmatched");
+});
+test("versions are explicit and outputs structurally deterministic", () => { assert.equal(VALIDATION_PROMOTION_POLICY_VERSION, "v8-b1.2"); assert.equal(VALIDATION_CANONICAL_RESOLVER_VERSION, "v8-b3.0.2-exact.1"); assert.deepEqual(evaluateValidationPromotionEligibility(base()), evaluateValidationPromotionEligibility(base())); });
 test("ledger is private, append-only, constrained, and contains no Data Moat mutation", () => {
   const sql = readFileSync("supabase/migrations/20260913000000_validation_evidence_promotion_foundation.sql", "utf8");
   assert.match(sql, /enable row level security/i); assert.match(sql, /revoke all[^;]+authenticated/i); assert.doesNotMatch(sql, /grant select[^;]+authenticated/i); assert.match(sql, /append_only/i);
