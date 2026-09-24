@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
 import { ValidationServerError } from "./contracts";
 import { classifyOwnedLookup } from "./owned-lookup";
+import type { ValidationPromotionAuthority } from "../promotion/write-contract";
 
 type Row = Record<string, unknown>;
 const safe = (error: { code?: string } | null, fallback: ValidationServerError): never => { if (error?.code === "23505") throw new ValidationServerError(409, "constraint_conflict", fallback.message); throw fallback; };
@@ -25,7 +26,7 @@ export class ValidationRepository {
   }
   async getSubject(ownerId: string, id: string) {
     const subject=await this.owned("validation_subjects",ownerId,id,"id,creation_origin,label,context_snapshot,status,created_at");
-    const [links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications,interviewPlans,interviewSessions,surveyPlans,surveyPublications,surveySubmissions,surveyAnswers]=await Promise.all([
+    const [links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications,interviewPlans,interviewSessions,surveyPlans,surveyPublications,surveySubmissions,surveyAnswers,shareableEvidence,promotions]=await Promise.all([
       this.db.from("validation_subject_links").select("id,source_type,source_row_id,source_version,link_role,context_snapshot,created_at").eq("owner_id",ownerId).eq("subject_id",id),
       this.db.from("validation_hypotheses").select("id,status,created_at").eq("owner_id",ownerId).eq("subject_id",id),
       this.db.from("validation_hypothesis_versions").select("id,hypothesis_id,version_number,target_segment,problem_claim,expected_observable_behavior,commercial_assumption,support_criteria,contradiction_criteria,inconclusive_criteria,scope_included,scope_excluded,supersedes_version_id,created_at").eq("owner_id",ownerId).eq("subject_id",id).order("version_number",{ascending:false}),
@@ -40,11 +41,17 @@ export class ValidationRepository {
       this.db.from("validation_survey_publications").select("id,experiment_id,experiment_version_id,survey_plan_version_id,state,published_at,revoked_at").eq("owner_id",ownerId).eq("subject_id",id).order("published_at",{ascending:false}),
       this.db.from("validation_survey_submissions").select("id,experiment_id,survey_plan_version_id,publication_id,respondent_id,submitted_at").eq("owner_id",ownerId).eq("subject_id",id).order("submitted_at",{ascending:false}).limit(200),
       this.db.from("validation_survey_answers").select("id,submission_id,survey_plan_version_id,question_id,question_type,raw_answer").eq("owner_id",ownerId).limit(3000),
-    ]); if([links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications,interviewPlans,interviewSessions,surveyPlans,surveyPublications,surveySubmissions,surveyAnswers].some(x=>x.error)) throw new ValidationServerError(500,"constraint_conflict","Could not read validation workspace.");
+      this.db.from("validation_customer_interview_shareable_evidence").select("source_observation_id").eq("owner_id",ownerId),
+      this.db.from("validation_evidence_promotions").select("observation_id,problem_observation_id").eq("owner_id",ownerId).not("problem_observation_id","is",null),
+    ]); if([links,hypotheses,versions,experiments,experimentVersions,participants,observations,classifications,interviewPlans,interviewSessions,surveyPlans,surveyPublications,surveySubmissions,surveyAnswers,shareableEvidence,promotions].some(x=>x.error)) throw new ValidationServerError(500,"constraint_conflict","Could not read validation workspace.");
     const hypothesisRows=(hypotheses.data??[]).map(h=>({...h,versions:(versions.data??[]).filter(v=>v.hypothesis_id===h.id)}));
     const experimentRows=(experiments.data??[]).map(e=>({...e,versions:(experimentVersions.data??[]).filter(v=>v.experiment_id===e.id)}));
     const observationIds=new Set((observations.data??[]).map(o=>o.id));
-    return {subject,links:links.data??[],hypotheses:hypothesisRows,experiments:experimentRows,participant_count:participants.count??0,participants:participants.data??[],observations:observations.data??[],classifications:(classifications.data??[]).filter(c=>observationIds.has(c.observation_id)),interview_plans:interviewPlans.data??[],interview_sessions:interviewSessions.data??[],survey_plans:surveyPlans.data??[],survey_publications:surveyPublications.data??[],survey_submissions:surveySubmissions.data??[],survey_answers:surveyAnswers.data??[]};
+    const shareableIds=new Set((shareableEvidence.data??[]).map(row=>row.source_observation_id));
+    const promotedIds=new Set((promotions.data??[]).map(row=>row.observation_id));
+    const subjectClassifications=(classifications.data??[]).filter(c=>observationIds.has(c.observation_id));
+    const workspaceObservations=(observations.data??[]).map(observation=>({...observation,promotion_candidate:observation.origin==="human_interview"&&shareableIds.has(observation.id)&&subjectClassifications.some(c=>c.observation_id===observation.id&&c.authority_status==="authoritative"&&["supporting","contradicting","mixed"].includes(c.polarity)),promoted:promotedIds.has(observation.id)}));
+    return {subject,links:links.data??[],hypotheses:hypothesisRows,experiments:experimentRows,participant_count:participants.count??0,participants:participants.data??[],observations:workspaceObservations,classifications:subjectClassifications,interview_plans:interviewPlans.data??[],interview_sessions:interviewSessions.data??[],survey_plans:surveyPlans.data??[],survey_publications:surveyPublications.data??[],survey_submissions:surveySubmissions.data??[],survey_answers:surveyAnswers.data??[]};
   }
   async verifyUpstream(ownerId: string, type: string, id: string) { const map: Record<string, [string,string]> = { saved_idea:["saved_ideas","user_id"], opportunity:["opportunities","user_id"], discover:["discovered_problems","user_id"], scan:["scan","user_id"], weekly:["weekly_intelligence_runs","user_id"] }; const target = map[type]; if (!target) throw new ValidationServerError(400,"invalid_request","Unsupported provenance type."); const { data, error } = await this.db.from(target[0]).select("id").eq("id",id).eq(target[1],ownerId).maybeSingle(); if (error || !data) throw new ValidationServerError(404,"not_found","Upstream resource not found."); }
   async createSubject(ownerId: string, row: Row, link?: Row) { if (link) await this.verifyUpstream(ownerId, String(link.source_type), String(link.source_row_id)); const { data, error } = await this.db.rpc("validation_create_subject", { p_owner_id: ownerId, p_creation_origin: row.creation_origin, p_label: row.label, p_context_snapshot: row.context_snapshot, p_source_type: link?.source_type ?? null, p_source_row_id: link?.source_row_id ?? null, p_source_version: link?.source_version ?? null, p_link_context_snapshot: link?.context_snapshot ?? {} }); if (error || !data) safe(error, new ValidationServerError(409,"constraint_conflict","Could not create validation subject.")); return data as Row; }
@@ -61,4 +68,20 @@ export class ValidationRepository {
   async createInterviewSession(ownerId:string,row:Row){await this.owned("validation_experiment_versions",ownerId,String(row.p_experiment_version_id),"id");await this.owned("validation_participants",ownerId,String(row.p_participant_id),"id");await this.owned("validation_interview_plan_versions",ownerId,String(row.p_interview_plan_version_id),"id");const{data,error}=await this.db.rpc("validation_create_interview_session",{p_owner_id:ownerId,...row});if(error||!data)safe(error,new ValidationServerError(409,"constraint_conflict","Could not create interview."));return data;}
   async updateInterviewSession(ownerId:string,id:string,row:Row){await this.owned("validation_interview_sessions",ownerId,id,"id");const{data,error}=await this.db.rpc("validation_update_interview_session",{p_owner_id:ownerId,p_session_id:id,...row});if(error||!data)safe(error,new ValidationServerError(409,"constraint_conflict","Could not update interview."));return data;}
   async recordInterviewObservation(ownerId:string,row:Row){await this.owned("validation_interview_sessions",ownerId,String(row.p_interview_session_id),"id");const{data,error}=await this.db.rpc("validation_record_interview_observation_v2",{p_owner_id:ownerId,...row});if(error||!data)interviewObservationFailure(error);return data;}
+  async promoteInterviewObservation(ownerId:string,authority:ValidationPromotionAuthority){
+    const {data,error}=await this.db.rpc("validation_promote_customer_interview_v1",{p_owner_id:ownerId,p_observation_id:authority.observationId,p_expected_classification_id:authority.classificationId,p_expected_canonical_problem_id:authority.canonicalProblemId,p_expected_subject_label:authority.subjectLabel,p_expected_hypothesis_claim:authority.hypothesisProblemClaim,p_expected_polarity:authority.polarity,p_authority_snapshot:authority.authoritySnapshot});
+    if(!error&&data)return data;
+    const message=String(error?.message??"");
+    if(error?.code==="P0002"||message.includes("promotion_not_found"))throw new ValidationServerError(404,"not_found","Observation not found.");
+    if(message.includes("promotion_shareable_approval"))throw new ValidationServerError(409,"promotion_shareable_approval","Reviewed shareable evidence is unavailable.");
+    if(message.includes("promotion_classification_authority"))throw new ValidationServerError(409,"promotion_classification_authority","Authoritative classification is unavailable.");
+    if(message.includes("promotion_canonical")||message.includes("promotion_authority_changed"))throw new ValidationServerError(409,"promotion_canonical_unresolved","Canonical problem identity is not uniquely resolved.");
+    if(message.includes("promotion_non_representative"))throw new ValidationServerError(409,"promotion_non_representative","This observation is not the current representative evidence.");
+    if(message.includes("promotion_correction_required"))throw new ValidationServerError(409,"promotion_correction_required","This evidence was already contributed under different authoritative state and requires a future reviewed correction workflow.");
+    if(message.includes("promotion_group_already_finalized"))throw new ValidationServerError(409,"promotion_group_already_finalized","This participant and evidence group already has a final shared contribution.");
+    if(message.includes("promotion_ledger_history_conflict"))throw new ValidationServerError(409,"promotion_integrity_conflict","Existing preparation history cannot be finalized by the B3.1 V1 contract.");
+    if(error?.code==="23000"||error?.code==="23505"||message.includes("promotion_integrity_conflict"))throw new ValidationServerError(409,"promotion_integrity_conflict","Stored promotion state failed its integrity check.");
+    if(message.includes("promotion_not_eligible"))throw new ValidationServerError(409,"promotion_not_eligible","This observation is not eligible for shared evidence contribution.");
+    throw new ValidationServerError(500,"constraint_conflict","Could not contribute reviewed evidence.");
+  }
 }

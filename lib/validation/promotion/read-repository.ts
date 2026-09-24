@@ -38,9 +38,29 @@ async function readAll(db: SupabaseAdminClient, table: string, columns: string) 
   }
 }
 
+async function readOwned(db: SupabaseAdminClient, table: string, columns: string, ownerId: string) {
+  const output: Record<string, unknown>[] = [];
+  for (let start = 0; ; start += PAGE_SIZE) {
+    const result = await db.from(table).select(columns).eq("owner_id", ownerId).order("id", { ascending: true }).range(start, start + PAGE_SIZE - 1);
+    if (result.error) throw new Error(`validation_promotion_read_failed:${table}`);
+    const page = (result.data ?? []) as unknown as Record<string, unknown>[];
+    output.push(...page);
+    if (page.length < PAGE_SIZE) return output;
+  }
+}
+
 /** Service-role, SELECT-only boundary. It intentionally exposes no mutation method. */
 export async function readValidationPromotionRows(db: SupabaseAdminClient = createSupabaseAdminClient()): Promise<PersistedPromotionRows> {
   const entries = await Promise.all(Object.entries(projections).map(async ([key, [table, columns]]) => [key, await readAll(db, table, columns)] as const));
+  return Object.fromEntries(entries) as PersistedPromotionRows;
+}
+
+/** Owner-scoped authoritative snapshot used only to derive trusted RPC inputs. */
+export async function readOwnedValidationPromotionRows(ownerId: string, db: SupabaseAdminClient = createSupabaseAdminClient()): Promise<PersistedPromotionRows> {
+  const entries = await Promise.all(Object.entries(projections).map(async ([key, [table, columns]]) => {
+    const globalRegistry = key === "canonicalProblems" || key === "aliases";
+    return [key, await (globalRegistry ? readAll(db, table, columns) : readOwned(db, table, columns, ownerId))] as const;
+  }));
   return Object.fromEntries(entries) as PersistedPromotionRows;
 }
 
