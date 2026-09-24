@@ -124,6 +124,8 @@ type Workspace = {
     origin: string;
     modality: string;
     observed_at: string;
+    promotion_candidate: boolean;
+    promoted: boolean;
   }>;
   classifications: Array<{
     id: string;
@@ -173,6 +175,8 @@ export default function WorkspacePage({
   const [transitionFeedback, setTransitionFeedback] = useState<
     Record<string, TransitionFeedback>
   >({});
+  const [promotionPending, setPromotionPending] = useState<Record<string, boolean>>({});
+  const [promotionFeedback, setPromotionFeedback] = useState<Record<string, TransitionFeedback>>({});
   const [planDraftHandoff, setPlanDraftHandoff] =
     useState<PlanDraftHandoff | null>(null);
   const refresh = useMemo(
@@ -296,6 +300,20 @@ export default function WorkspacePage({
         delete next[v.id];
         return next;
       });
+    }
+  }
+  async function promoteObservation(observationId: string) {
+    if (promotionPending[observationId]) return;
+    setPromotionPending((state) => ({ ...state, [observationId]: true }));
+    setPromotionFeedback((state) => { const next={...state}; delete next[observationId]; return next; });
+    try {
+      await validationRequest(`/api/validation/observations/${observationId}/promote`, { method: "POST" });
+      await reloadAfterCommand();
+      setPromotionFeedback((state) => ({ ...state, [observationId]: { tone: "success", message: "Reviewed evidence was contributed to the shared evidence layer." } }));
+    } catch (cause) {
+      setPromotionFeedback((state) => ({ ...state, [observationId]: { tone: "error", message: validationErrorMessage(cause, "Reviewed evidence could not be contributed.") } }));
+    } finally {
+      setPromotionPending((state) => ({ ...state, [observationId]: false }));
     }
   }
   if (!data && !error)
@@ -665,6 +683,15 @@ export default function WorkspacePage({
                       {o.modality.replaceAll("_", " ")} ·{" "}
                       {displayDate(o.observed_at)}
                     </span>
+                    {(o.promotion_candidate || o.promoted) && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs leading-5 text-slate-400">Only the exact human-reviewed statement will be shared. This does not create a canonical problem or update downstream intelligence.</p>
+                        <Button variant="secondary" disabled={o.promoted || promotionPending[o.id]} onClick={() => void promoteObservation(o.id)}>
+                          {o.promoted ? "Reviewed evidence contributed" : promotionPending[o.id] ? "Contributing reviewed evidence…" : "Contribute reviewed evidence"}
+                        </Button>
+                        {promotionFeedback[o.id] && <p role={promotionFeedback[o.id].tone === "error" ? "alert" : "status"} aria-live="polite" className={promotionFeedback[o.id].tone === "error" ? "text-xs text-rose-200" : "text-xs text-emerald-200"}>{promotionFeedback[o.id].message}</p>}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
