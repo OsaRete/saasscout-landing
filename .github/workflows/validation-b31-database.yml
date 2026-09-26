@@ -1,0 +1,42 @@
+name: Validation B3.1 Database
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "tests/sql/validation-b31.sql"
+      - "scripts/validation-b31-db.ts"
+      - ".github/workflows/validation-b31-database.yml"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+jobs:
+  database:
+    name: database
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.39.2
+      - name: Verify disposable tooling
+        run: |
+          supabase --version
+          docker --version
+          psql --version
+      - name: Start disposable Supabase
+        run: supabase start
+      - name: Apply complete migration chain
+        run: supabase db reset --local --no-seed
+      - name: Execute mandatory B3.1 PostgreSQL suite
+        env:
+          VALIDATION_B31_DB_REQUIRED: "1"
+          VALIDATION_B31_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: npm run test:validation-b31-db
