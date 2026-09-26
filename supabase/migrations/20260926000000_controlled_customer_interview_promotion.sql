@@ -567,7 +567,7 @@ begin
       candidate.owner_id = p_owner_id
       and candidate.participant_id = o.participant_id
       and candidate.experiment_version_id is not null
-    order by candidate.experiment_version_id::text
+    order by candidate.experiment_version_id;
   loop
     perform public.validation_b31_lock(
       'experiment',
