@@ -86,7 +86,8 @@ test("return diagnostics distinguish insert winner from exact replay truthfully"
 test("shareable record is allowlisted and cannot copy private context or caller authority",()=>{
   const table=migration.slice(migration.indexOf("create table public.validation_customer_interview_shareable_evidence"),migration.indexOf("comment on table"));
   for(const privateField of ["participant_id","interview_session_id","session_notes","classification_rationale","metadata","observation_content"])assert.doesNotMatch(table,new RegExp(privateField));
-  assert.doesNotMatch(serviceSource,/p_owner_id\s*:\s*input|canonicalProblemId|promotion/);
+  const observationCommand=serviceSource.slice(serviceSource.indexOf("recordInterviewObservation"),serviceSource.indexOf("promoteInterviewEvidence"));
+  assert.doesNotMatch(observationCommand,/p_owner_id\s*:\s*input|canonicalProblemId|promotion/);
   assert.match(repositorySource,/p_owner_id:ownerId/);
   assert.doesNotMatch(migration,/insert into public\.(problem_observations|validation_evidence_promotions|canonical_problems|problem_aliases|problem_intelligence|problem_evolution_snapshots|opportunities|recommendations)/i);
   assert.doesNotMatch([migration,serviceSource,repositorySource,ui].join("\n"),/openrouter|openai|embedding|generateText|generateObject/i);

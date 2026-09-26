@@ -1,5 +1,6 @@
 export const VALIDATION_PROMOTION_POLICY_VERSION = "v8-b1.2" as const;
 export const VALIDATION_CANONICAL_RESOLVER_VERSION = "v8-b3.0.2-exact.1" as const;
+export const VALIDATION_PROMOTION_PROJECTION_VERSION = "v8-b3.1-projection.1" as const;
 
 export type ValidationPolarity = "supporting" | "contradicting" | "mixed" | "neutral" | "inconclusive";
 export type PromotionEligibilityReason =
