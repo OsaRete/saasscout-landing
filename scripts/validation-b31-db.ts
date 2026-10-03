@@ -212,12 +212,32 @@ async function race(
   );
 }
 
+const concurrencyFingerprintDigits: Record<number, string> = {
+  7: "a",
+  8: "b",
+  9: "c",
+  10: "d",
+  11: "e",
+  12: "f",
+  14: "6",
+  15: "7",
+};
+
 const promote = (
   i: number,
   polarity = "supporting",
-  digit = String(i % 10),
-) =>
-  `select public.b31_test_promote(${i},'${polarity}',repeat('${digit}',64));`;
+) => {
+  const digit =
+    concurrencyFingerprintDigits[i];
+
+  if (!digit) {
+    throw new Error(
+      `missing concurrency fingerprint for observation ${i}`,
+    );
+  }
+
+  return `select public.b31_test_promote(${i},'${polarity}',repeat('${digit}',64));`;
+};
 
 
 /*
