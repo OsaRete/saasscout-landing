@@ -131,6 +131,12 @@ type Workspace = {
     polarity: string;
     rationale?: string;
   }>;
+  promotions: Array<{
+    id: string;
+    observation_id: string;
+    problem_observation_id: string;
+    polarity: string;
+  }>;
 };
 type TransitionFeedback = { tone: "success" | "error"; message: string };
 const transitions = {
@@ -171,6 +177,10 @@ export default function WorkspacePage({
     Record<string, string>
   >({});
   const [transitionFeedback, setTransitionFeedback] = useState<
+    Record<string, TransitionFeedback>
+  >({});
+  const [promotionPending, setPromotionPending] = useState<string>();
+  const [promotionFeedback, setPromotionFeedback] = useState<
     Record<string, TransitionFeedback>
   >({});
   const [planDraftHandoff, setPlanDraftHandoff] =
@@ -296,6 +306,37 @@ export default function WorkspacePage({
         delete next[v.id];
         return next;
       });
+    }
+  }
+  async function promote(observationId: string) {
+    if (promotionPending) return;
+    setPromotionPending(observationId);
+    try {
+      await validationRequest("/api/validation/promotions", {
+        method: "POST",
+        body: JSON.stringify({ observationId }),
+      });
+      await reloadAfterCommand();
+      setPromotionFeedback((current) => ({
+        ...current,
+        [observationId]: {
+          tone: "success",
+          message: "Reviewed evidence was shared with the Data Moat.",
+        },
+      }));
+    } catch (cause) {
+      setPromotionFeedback((current) => ({
+        ...current,
+        [observationId]: {
+          tone: "error",
+          message: validationErrorMessage(
+            cause,
+            "This private evidence is not promotable.",
+          ),
+        },
+      }));
+    } finally {
+      setPromotionPending(undefined);
     }
   }
   if (!data && !error)
@@ -665,6 +706,41 @@ export default function WorkspacePage({
                       {o.modality.replaceAll("_", " ")} ·{" "}
                       {displayDate(o.observed_at)}
                     </span>
+                    {o.origin === "human_interview" && (
+                      <div className="mt-3 border-t border-white/10 pt-3">
+                        {data.promotions.some(
+                          (promotion) => promotion.observation_id === o.id,
+                        ) ? (
+                          <Badge tone="green">Shared Data Moat evidence</Badge>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            disabled={Boolean(promotionPending)}
+                            onClick={() => void promote(o.id)}
+                          >
+                            {promotionPending === o.id
+                              ? "Promoting…"
+                              : "Promote reviewed evidence"}
+                          </Button>
+                        )}
+                        <p className="mt-2 text-xs text-slate-500">
+                          Private Validation evidence stays private; only its
+                          approved reviewed statement can be shared.
+                        </p>
+                        {promotionFeedback[o.id] && (
+                          <p
+                            role={
+                              promotionFeedback[o.id].tone === "error"
+                                ? "alert"
+                                : "status"
+                            }
+                            className={`mt-2 text-xs ${promotionFeedback[o.id].tone === "error" ? "text-rose-200" : "text-emerald-200"}`}
+                          >
+                            {promotionFeedback[o.id].message}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
