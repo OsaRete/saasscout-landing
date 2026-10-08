@@ -1,8 +1,9 @@
 # V8-B4.1 — Trusted qualified evidence read boundary
 
-**B4.1-B integration suite added. BLOCKED — DATABASE VERIFICATION REQUIRED.**
-Do not merge or deploy until the independent B4.1-B disposable database gate
-below passes. Mocked responses are not proof of PostgreSQL security.
+**B4.1-B passed disposable PostgreSQL/PostgREST verification in GitHub Actions.**
+**DO NOT MERGE OR DEPLOY — SECURITY REVIEW REQUIRED.**
+The exact tested code commit and evidence are recorded below. Mocked responses
+are not proof of PostgreSQL security.
 
 ## Architecture and scope
 
@@ -207,10 +208,11 @@ a disposable PostgreSQL/Supabase instance, including PostgREST. Record:
    relationship errors match the runtime narrowing contract. Check actual
    responses/errors for private lineage leaks through the reader.
 
-No live database verification was performed in B4.1-A. The original environment
+At completion of B4.1-A, no live database verification had been performed. The original environment
 had no disposable database URL or PostgreSQL tools and denied Docker socket
-access. Database security is therefore **unverified**, and this implementation
-is not merge-ready.
+access. Database security was therefore **unverified** at that gate. The B4.1-B
+CI evidence below supersedes that historical status; security review remains
+required and this implementation is not merge-ready.
 
 ### B4.1-A validation record
 
@@ -279,7 +281,7 @@ Coverage distinguishes:
   guarantee or new trust contract is introduced to conceal this finding.
 
 Local suite execution fails at disposable prerequisites in this sandbox.
-The current branch's actual GitHub Actions outcome is pending execution.
+The actual GitHub Actions outcome is recorded below.
 Do not treat historical B3.1 success or the new suite's existence as B4.1-B
 verification. No production mutation, migrations or deployment were performed.
 
@@ -289,3 +291,35 @@ B4.1-B local checks before CI: 55 focused tests passed; `npm test` reported
 passed; targeted strict TypeScript checking of the integration runner and
 focused tests passed; `git diff --check` passed. Local `test:validation-b41-db`
 exited 1 at disposable prerequisites (no skip and no database-pass claim).
+
+
+### Actual B4.1-B verification evidence
+
+Tested implementation commit: `bf4b6fc16c823cda8fa5dcc9274c0fbe7120c377`.
+[Database workflow run 37768319119](https://github.com/OsaRete/saasscout-landing/actions/runs/37768319119),
+job `database` (`113281316566`), completed successfully. Its recorded successful
+steps include the full migration chain, unchanged B3.1 suite, independent local
+reset and mandatory B4.1-B suite. Decoded job logs were inspected and confirmed:
+
+- all eight B3.1 independent-connection concurrency scenarios and static assertions;
+- actual TypeScript service promotion, exact composite embedding, all three
+  polarities and sanitized output;
+- service SELECT, RLS, actual browser-role restrictions and existing RPC catalog
+  privileges/ownership/fixed search path;
+- source/prefix/metadata impersonation without ledger, legacy and null polarity
+  exclusion;
+- FK/CHECK/unique/append-only constraint rejection and exclusion of SQL-permitted
+  inconsistent/nonfinal records;
+- exact PostgREST count returning `complete=false` for the candidate-limit case;
+- **confirmed limitation:** service-role changes to linked statement/title/time
+  remain qualified. No claim of cryptographic content provenance is made.
+
+[Playwright run 37768319060](https://github.com/OsaRete/saasscout-landing/actions/runs/37768319060)
+also completed successfully for the tested implementation commit.
+
+The subsequent evidence-recording commit changes this document only. It does
+not change the tested implementation or database runner. PR #215 remains draft;
+security review must decide whether the trusted-writer content boundary and
+persisted canonical lifecycle policy are acceptable before any merge. Stronger
+shared-field tamper detection would need a separately approved contract; it was
+not introduced here. No production mutation, merge or deployment occurred.
