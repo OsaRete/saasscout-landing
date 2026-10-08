@@ -7,6 +7,8 @@ on:
       - "tests/sql/validation-b31.sql"
       - "scripts/validation-b31-db.ts"
       - "scripts/validation-b41-db.ts"
+      - "scripts/validation-b42-db.ts"
+      - "tests/qualified-evidence-integrity.test.ts"
       - "lib/validation/promotion/**"
       - "lib/supabase/server-admin.ts"
       - "tests/trusted-qualified-evidence-reader.test.ts"
@@ -44,9 +46,9 @@ jobs:
           VALIDATION_B31_DB_REQUIRED: "1"
           VALIDATION_B31_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npm run test:validation-b31-db
-      - name: Reset disposable database for independent B4.1-B suite
+      - name: Reset disposable database for independent B4.2-B1 suite
         run: supabase db reset --local --no-seed
-      - name: Execute mandatory B4.1-B PostgreSQL and PostgREST suite
+      - name: Execute mandatory B4.2-B1 PostgreSQL and PostgREST suite
         env:
-          VALIDATION_B41_DISPOSABLE: "1"
-        run: npm run test:validation-b41-db
+          VALIDATION_B42_DISPOSABLE: "1"
+        run: npm run test:validation-b42-db

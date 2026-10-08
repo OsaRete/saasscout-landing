@@ -25,7 +25,7 @@ export type TrustedQualifiedValidationEvidence = Readonly<{
 
 export type TrustedQualifiedValidationEvidenceResult = Readonly<{
   observations: readonly TrustedQualifiedValidationEvidence[];
-  /** False when the bounded read did not examine every matching candidate. */
+  /** Successful reads are complete; incomplete bounded reads throw. */
   complete: boolean;
 }>;
 
@@ -35,7 +35,7 @@ const SOURCE_TYPE = "customer_interview_human_reviewed";
 // The composite FK binds BOTH result ID and canonical ID. The older
 // single-column FK must not be selected implicitly by PostgREST.
 const PROJECTION = [
-  "observation_id,classification_id,participant_id",
+  "id,observation_id,classification_id,participant_id",
   "policy_version,eligible,eligibility_reasons",
   "independence_kind,independence_private_id,polarity",
   "representative_group_key,representative_selected",
@@ -45,6 +45,10 @@ const PROJECTION = [
   "shared:problem_observations!validation_promotions_result_canonical_fk!inner(" +
     "id,canonical_problem_id,problem_title,source_evidence,source_type," +
     "evidence_polarity,observed_at,observation_fingerprint,metadata)",
+  "snapshot:validation_qualified_evidence_snapshots!validation_snapshots_promotion_fk(" +
+    "promotion_id,problem_observation_id,canonical_problem_id,problem_title,source_evidence," +
+    "source_type,evidence_polarity,observed_at,observation_fingerprint,promotion_fingerprint," +
+    "projection_version,attestation_version)",
 ].join(",");
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -74,8 +78,19 @@ function qualify(
   row: unknown,
   canonicalProblemId: string,
 ): TrustedQualifiedValidationEvidence | null {
-  if (!object(row) || !object(row.shared)) return null;
+  if (!object(row) || !object(row.shared) || !object(row.snapshot)) return null;
   const shared = row.shared;
+  const snapshot = row.snapshot;
+  // A left embed preserves unattested historical candidates in the exact count.
+  // Missing/unsupported snapshots never fall back to mutable shared content.
+  if (!uuid(row.id) || snapshot.promotion_id !== row.id ||
+    snapshot.attestation_version !== "v8-b4.2-b1-snapshot.1" ||
+    snapshot.problem_observation_id !== row.problem_observation_id ||
+    snapshot.promotion_fingerprint !== row.promotion_fingerprint ||
+    snapshot.projection_version !== row.projection_version ||
+    ["canonical_problem_id", "problem_title", "source_evidence", "source_type",
+      "evidence_polarity", "observed_at", "observation_fingerprint"]
+      .some((field) => snapshot[field] !== shared[field])) return null;
 
   // B3.1 has no status column: finality is the persisted result linkage.
   // Corrections/deactivation are outside this supported promotion contract.
@@ -144,7 +159,7 @@ function qualify(
  * Bounded SELECT-only boundary; no endpoint or downstream integration.
  * The optional admin client is server-side dependency injection only.
  * At most 100 final candidates for ONE persisted canonical identity are read.
- * B4.1-B must verify the real PostgREST/DB relationship and privileges before merge.
+ * B4.2-B1 requires immutable snapshots; incomplete reads throw a generic error.
  */
 export async function readTrustedQualifiedValidationEvidence(
   canonicalProblemId: string,
@@ -175,6 +190,8 @@ export async function readTrustedQualifiedValidationEvidence(
       !Number.isSafeInteger(result.count) || result.count! < result.data.length) {
       throw new Error("invalid_read_result");
     }
+    // B4.2-B1: incomplete reads cannot expose a partially verified subset.
+    if (result.count !== result.data.length) throw new Error("incomplete_read_result");
 
     const qualified = result.data
       .map((row: unknown) => qualify(row, canonicalProblemId))

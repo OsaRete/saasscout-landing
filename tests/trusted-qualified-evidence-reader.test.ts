@@ -25,7 +25,8 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
   const fingerprint = createHash("sha256").update(JSON.stringify(
     Object.fromEntries(Object.entries(contract).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
   )).digest("hex");
-  return {
+  const row = {
+    id: "66666666-6666-4666-8666-666666666666",
     observation_id: contract.observationId,
     classification_id: contract.classificationId,
     participant_id: "55555555-5555-4555-8555-555555555555",
@@ -58,6 +59,14 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
       metadata: { projectionVersion: contract.projectionVersion },
     },
   };
+  return { ...row, snapshot: {
+    ...row.shared,
+    promotion_id: row.id,
+    problem_observation_id: resultId,
+    promotion_fingerprint: fingerprint,
+    projection_version: contract.projectionVersion,
+    attestation_version: "v8-b4.2-b1-snapshot.1",
+  } };
 }
 
 function databaseResponse(data: unknown, options: { status?: number; throws?: boolean; count?: number; omitCount?: boolean } = {}) {
@@ -201,7 +210,7 @@ test("select is bounded, canonical-scoped, explicit composite-FK embedding; no w
   assert.equal(request.url.searchParams.get("order"), "problem_observation_id.asc");
   const select = request.url.searchParams.get("select")!;
   assert.equal(select, [
-    "observation_id,classification_id,participant_id",
+    "id,observation_id,classification_id,participant_id",
     "policy_version,eligible,eligibility_reasons",
     "independence_kind,independence_private_id,polarity",
     "representative_group_key,representative_selected",
@@ -209,6 +218,7 @@ test("select is bounded, canonical-scoped, explicit composite-FK embedding; no w
     "problem_observation_id,promotion_fingerprint,projection_version",
     "supersedes_promotion_id,deactivation_reason",
     "shared:problem_observations!validation_promotions_result_canonical_fk!inner(id,canonical_problem_id,problem_title,source_evidence,source_type,evidence_polarity,observed_at,observation_fingerprint,metadata)",
+    "snapshot:validation_qualified_evidence_snapshots!validation_snapshots_promotion_fk(promotion_id,problem_observation_id,canonical_problem_id,problem_title,source_evidence,source_type,evidence_polarity,observed_at,observation_fingerprint,promotion_fingerprint,projection_version,attestation_version)",
   ].join(","));
   assert.equal(select.includes("*"), false);
 });
@@ -224,8 +234,9 @@ test("extra private fields in mocked joined rows cannot leak through objects, lo
     "hypothesis_id", "classification_id", "source_observation_id", "command_id",
     "private_notes", "raw_interview_text", "review_metadata", "ai_drafts", "ledger_id",
   ].map((key) => [key, privateMarker]));
-  Object.assign(row, { id: privateMarker, private_notes: privateMarker, owner_id: privateMarker });
+  Object.assign(row, { ledger_id: privateMarker, private_notes: privateMarker, owner_id: privateMarker });
   Object.assign(row.shared, privateFields);
+  Object.assign(row.snapshot, privateFields);
   Object.assign(row.shared.metadata, privateFields);
   const { db } = databaseResponse([row]);
   const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
@@ -272,16 +283,18 @@ test("invalid canonical ID is rejected before any database request", async () =>
   assert.deepEqual(requests, []);
 });
 
-test("exact candidate count exposes incomplete results before qualification filtering", async () => {
-  const malformed = { ...fixture(), promotion_fingerprint: "0".repeat(64) };
-  const { db } = databaseResponse(Array.from({ length: 100 }, () => malformed), { count: 101 });
-  assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), {
-    observations: [], complete: false,
-  });
+test("incomplete bounded or server-truncated reads reject even with valid evidence", async () => {
+  for (const [rows, count] of [
+    [[fixture()], 2], [[], 1],
+    [Array.from({ length: 100 }, () => fixture()), 101],
+  ] as [unknown[], number][]) {
+    const { db } = databaseResponse(rows, { count });
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), {
+      message: "trusted_qualified_evidence_read_failed",
+    });
+  }
   const full = databaseResponse([fixture()], { count: 1 });
   assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, full.db)).complete, true);
-  const serverTruncated = databaseResponse([fixture()], { count: 100 });
-  assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, serverTruncated.db)).complete, false);
 });
 
 test("missing or inconsistent exact candidate counts fail closed", async () => {
@@ -307,3 +320,28 @@ test("browser-condition import executes the existing server-only guard", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /server-only modules must not be imported from browser or Client Component code/);
 });
+
+for (const [name, mutate] of [
+  ["historical missing attestation", (row: Row) => { row.snapshot = null; }],
+  ["omitted snapshot relation", (row: Row) => { delete row.snapshot; }],
+  ["snapshot array", (row: Row) => { row.snapshot = [row.snapshot]; }],
+  ["unsupported attestation", (row: Row) => { (row.snapshot as Row).attestation_version = "future"; }],
+  ["snapshot linked to another ledger", (row: Row) => { (row.snapshot as Row).promotion_id = otherId; }],
+  ["snapshot linked to another shared row", (row: Row) => { (row.snapshot as Row).problem_observation_id = otherId; }],
+  ["snapshot qualification fingerprint mismatch", (row: Row) => { (row.snapshot as Row).promotion_fingerprint = "0".repeat(64); }],
+  ["snapshot projection mismatch", (row: Row) => { (row.snapshot as Row).projection_version = "future"; }],
+] as const) {
+  test(`excludes ${name} without fallback`, async () => {
+    const row: Row = fixture(); mutate(row);
+    const { db } = databaseResponse([row]);
+    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
+  });
+}
+for (const field of ["canonical_problem_id", "problem_title", "source_evidence", "source_type",
+  "evidence_polarity", "observed_at", "observation_fingerprint"]) {
+  test(`snapshot detects shared ${field} replacement`, async () => {
+    const row: Row = fixture(); (row.shared as Row)[field] = "replacement";
+    const { db } = databaseResponse([row]);
+    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
+  });
+}
