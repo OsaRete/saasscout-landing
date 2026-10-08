@@ -42,4 +42,26 @@ The disposable suite deliberately demonstrates service-role selection of an othe
 
 ## Verification record
 
-Execution evidence and workflow run IDs will be appended after testing the correction SHA. Mandatory database tests must run against a fresh fixed-loopback disposable Supabase database; the runner fails rather than skips missing prerequisites. No production/staging execution or `supabase db push` is authorized. Merge remains NO-GO until real mandatory suites pass and a new independent security review approves the corrected boundary.
+Tested executable correction SHA: `e1c0dd18c47e3316be817863815c8e83b80b6b8b`. GitHub's PR checkout was merge commit `8b097da68db738fd47f5fbab4661b83f5a822821` against unchanged base `fe5f4fd5b8e15d7be88500068eb9618e2c07ed24`. Run metadata and decoded job logs were accessed directly; these are real disposable database results, not mock claims.
+
+| Check | Evidence | Actual result |
+| --- | --- | --- |
+| Disposable database CI | [Run 37788116732](https://github.com/OsaRete/saasscout-landing/actions/runs/37788116732), job `113348044383`, attempt 1 | PASS full migration chain, mandatory B3.1 and B4.2 suites; no skipped steps |
+| Playwright CI | [Run 37788116838](https://github.com/OsaRete/saasscout-landing/actions/runs/37788116838), job `113348045732`, attempt 1 | PASS all 6 tests; no skipped steps |
+| Focused local tests | Reader 78, RPC preservation 2, promotion foundation 14/dry-run 11, observation store 5/problem observations 6, bootstrap 28/activation 22 | 166 PASS; 0 failures/skips |
+| Broader local `npm test` | Node test runner | 105 passing file-level results; 0 failures/skips; overlaps focused checks |
+| Lint | `npm run lint` | 0 errors; 4 existing warnings in discover/saved/scans pages |
+| Targeted strict TypeScript | Bundler resolution, ES2022, strict, no emit, reader/integrity tests and database runner | PASS |
+| Webpack production build | `npm run build -- --webpack` | PASS compilation, TypeScript and route generation |
+| Default Turbopack build | `npm run build` | FAIL sandbox process/port binding: operation not permitted |
+| Local disposable database attempt | Explicit disposable opt-in and fixed loopback runner | FAIL prerequisite: disposable Supabase status unavailable; `psql` absent, Docker daemon socket denied. No local database pass or silent skip claimed |
+
+Decoded database logs confirm all eight unchanged B3.1 independent-connection concurrency scenarios, and the following B4.2 checks: valid supporting/contradicting/mixed promotions; actual persisted defaults/trigger values and lossless native codec; exact eight-field output; browser privacy/RLS and RPC denial; direct service-role canonical selection documenting the application trust assumption; shared-only impersonation and demonstrably unsupported ledger exclusion; Discovery ingestion/duplicate-ignore and canonical bootstrap/retries; runtime shared mutation and private proof fabrication/DML/TRUNCATE rejection; atomic rollback after snapshot failure; six concurrent exact retries with competing mutation rejection; historical-only and mixed qualified populations failing generically with unchanged historical retry/mutability; mismatched shared rows; all 31 protected snapshot fields altered independently; unsupported old version, malformed codec and schema drift; exact count/truncated-result failure. Administrator fault injection and temporary schema changes occurred only inside the fresh CI disposable database and were removed/restored.
+
+Failures retained: the first local reader regression run had three outdated test expectations; the next had one fixture-table typo, all corrected before the final 166-test pass. Initial publication `a6a2a449a919537db9712f3a5e81c32d7a554145` transferred a truncated runner. Hash comparison caught the defect; `e1c0dd18c47e3316be817863815c8e83b80b6b8b` restores the exact local tree. [Discarded database run 37787919292](https://github.com/OsaRete/saasscout-landing/actions/runs/37787919292), job `113347364867`, passed migrations/B3.1 then failed B4.2 with `ERR_INVALID_TYPESCRIPT_SYNTAX`; post setup-node cleanup was skipped after failure. No mandatory suite was silently skipped and this run is not accepted as B4.2 verification.
+
+## Recommendation and remaining risks
+
+GO for a new independent B4.2-C review of the corrected implementation. NO-GO for merge/deployment until that review approves it. Keep PR #216 draft and do not merge. Final evidence-documentation commits must be distinguished from the executable SHA above; PR metadata records any additional exact-HEAD CI results.
+
+Residual risks: compromised trusted service credentials can bypass TypeScript selection/ranking through the allowed RPC; administrators can alter proofs/disable guards; qualifying historical or version-1 populations now deliberately block complete reads; schema changes require an explicitly reviewed snapshot version; no historical remediation or correction workflow exists in this scope. These limitations are not resolved by a passing integrity suite. No production/staging writes, deployment, migration push, historical attestation or Knowledge Evolution integration occurred.
