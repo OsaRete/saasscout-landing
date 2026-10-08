@@ -1,8 +1,9 @@
 # V8-B4.2-B1 — Qualified human evidence integrity
 
-Status: implementation prepared; **NO-GO for merge/deployment until disposable
-PostgreSQL/PostgREST verification and security review pass**. No migration was
-executed against production or staging.
+Status: **GO for B4.2-B1 security review**. Disposable PostgreSQL/PostgREST and
+Playwright verification passed on implementation commit
+`9e0a7059c50878dce3cec3ecc433303b36ed78c3`. **NO-GO for merge/deployment pending
+security review**. PR #216 remains draft. No production or staging migration ran.
 
 ## Verified baseline
 
@@ -140,14 +141,64 @@ URL overrides are accepted by the new runner.
   Task UID is 1000; `psql` is absent. No environment recovery or remote database
   substitution was attempted.
 
-## Remaining gate
+## Actual disposable CI evidence
 
-Real PostgreSQL execution of the new migration, reverse-embed cardinality,
-transaction rollback, runtime grants and concurrency behavior remains unverified
-locally. The checked-in disposable suite must pass on the exact implementation
-commit before GO. Security review must assess the postgres-owned writer boundary,
-historical exclusion and incomplete-read behavior. Default Turbopack is still
-blocked locally; the Webpack result does not claim that default build passed.
+Tested implementation: `9e0a7059c50878dce3cec3ecc433303b36ed78c3`.
+[Database run 37782608664](https://github.com/OsaRete/saasscout-landing/actions/runs/37782608664),
+job `113329222345`, completed successfully. Decoded logs were inspected and confirm
+full-chain application of the new migration, all eight independent-connection
+B3.1 concurrency scenarios, an independent reset, and all B4.2 PostgreSQL/PostgREST
+phases. No database suite skipped. Explicit confirmations include:
+
+- Real service promotions, composite one-to-one snapshot embedding, all three
+  polarities and exact sanitized output.
+- Browser-role restrictions, RLS, service grants, RPC owner/search_path and catalog.
+- Shared marker impersonation and legacy exclusion; real FK/CHECK/unique constraints.
+- Actual Discovery persistence/retry, canonical bootstrap/retry, unguarded shared
+  UPDATE/DELETE, and scoped attested mutation rejection.
+- Runtime ledger/snapshot INSERT/UPDATE/DELETE/TRUNCATE rejection; shared TRUNCATE
+  protection via FKs/private permissions; authenticator owner-role isolation.
+- Injected snapshot failure after prior shared/ledger writes rolls back all state.
+- Six concurrent promotion HTTP requests produce one final snapshot and five
+  duplicates; competing shared UPDATE/DELETE fail while an exact retry succeeds.
+- Genuine historical controlled B3.1 evidence stays stored, remains unattested
+  after retry, is excluded by the reader, and retains historical shared mutability.
+- Administrator-only shared tampering is excluded by actual snapshot verification.
+- Actual PostgREST candidate counts cause a generic incomplete-read failure.
+
+[Playwright run 37782608610](https://github.com/OsaRete/saasscout-landing/actions/runs/37782608610),
+job `113329221941`, passed all six tests on the same implementation commit. Its
+summary was inspected: 6 passed, no reported skipped or failed tests.
+
+Earlier database runs are failures, not omitted evidence:
+
+- Runs `37781270547` and `37781722483` passed migrations/B3.1 and early B4.2 phases,
+  then failed because the new SQL fixture allowlist omitted `canonical_problems`.
+- Run `37782024698` also passed SQL constraint tests, then failed an invalid test
+  assumption: SET ROLE within a postgres-authenticated session retains the session
+  owner's switching authority. The corrected test uses SET SESSION AUTHORIZATION
+  authenticator, checks role membership and rejects SET ROLE postgres from the
+  runtime session. No owner-membership vulnerability was demonstrated.
+- Both harness problems were fixed and the full final run above passed.
+
+Local prerequisite failures remain accurate local results; the isolated CI result
+supersedes the absence of database verification. The final evidence-only update
+changes documentation only; the executable code tested at the SHA above is intact.
+
+## Remaining gate and recommendation
+
+**GO for review of the prepared narrow B4.2-B1 implementation; NO-GO for merge or
+production deployment until security review.** Preserve PR #216 as draft and do
+not merge automatically.
+
+Local database reproduction still requires restored Docker socket access and
+PostgreSQL tooling. The default Turbopack build remains sandbox-blocked; Webpack
+and CI Playwright passed. Administrators remain trusted; snapshots do not prove
+real-world human independence, current classification eligibility after promotion,
+or freedom from PII in the previously approved shareable statement. Historical
+unattested evidence has no new integrity guarantee and may exhaust the read cap.
+No downstream consumers exist, and any future consumer must handle generic read
+failure rather than interpret it as zero evidence.
 
 No production/staging writes, `supabase db push`, historical backfill, automatic
 merge, correction/withdrawal workflow, canonical reassignment workflow, legacy
