@@ -395,7 +395,133 @@ async function run() {
     check(changed.error?.code === "55000", "runtime changed an attested row");
   }
   check((await admin.from("problem_observations").delete().eq("id", original.id)).error?.code === "55000", "attested DELETE permitted");
-  check((await admin.from("vali…3059 tokens truncated…nd schema drift fail closed");
+  check((await admin.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "runtime ledger fabrication permitted");
+  const snap = await admin.from("validation_qualified_evidence_snapshots").select("*").eq("problem_observation_id", original.id).single();
+  check(!snap.error && snap.data, "private snapshot unavailable to trusted reader");
+  check((await admin.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "runtime snapshot fabrication permitted");
+  for (const client of [anonymous, authenticated]) {
+    check((await client.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "browser ledger fabrication permitted");
+    check((await client.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "browser snapshot fabrication permitted");
+  }
+  for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
+    check((await admin.from(table).update({ projection_version: "replacement" }).neq("projection_version", "replacement")).error?.code === "42501", "runtime private UPDATE permitted");
+    check((await admin.from(table).delete().neq("projection_version", "replacement")).error?.code === "42501", "runtime private DELETE permitted");
+  }
+  check(sqlCode("set role service_role; truncate public.problem_observations;") === "0A000", "shared FK truncate protection absent");
+  check(sqlCode("set role service_role; truncate public.problem_observations cascade;") === "42501", "runtime shared CASCADE TRUNCATE permitted");
+  for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
+    check(sqlCode(`set role service_role; truncate public.${table};`) === "42501", "runtime private TRUNCATE permitted");
+  }
+  check(sqlCode(`update public.validation_qualified_evidence_snapshots set problem_title='changed' where problem_observation_id='${original.id}';`) === "55000", "snapshot immutability trigger absent");
+  check(sqlCode(`delete from public.validation_qualified_evidence_snapshots where problem_observation_id='${original.id}';`) === "55000", "snapshot DELETE trigger absent");
+  // SET ROLE alone inside a postgres-authenticated session retains the session
+  // owner's switching authority. Use the actual PostgREST authenticator identity.
+  check(sql(`select not pg_has_role('service_role','postgres','MEMBER')
+    and not pg_has_role('authenticator','postgres','MEMBER');`, phase) === "t", "runtime has owner membership");
+  check(sqlCode("set session authorization authenticator; set role service_role; set role postgres;") === "42501", "runtime can assume owner role");
+  await unchanged();
+  console.log("PASS runtime shared mutation rejection, private fabrication/DML/TRUNCATE rejection and owner boundary");
+
+  phase = "atomic rollback after shared and ledger writes";
+  sql(`create function public.b42_test_reject_snapshot() returns trigger language plpgsql as $$
+    begin raise exception 'synthetic snapshot failure' using errcode='23514'; end $$;
+    create trigger b42_test_snapshot_failure before insert on public.validation_qualified_evidence_snapshots
+    for each row execute function public.b42_test_reject_snapshot();`, phase);
+  let failed = false;
+  try { await promoteCustomerInterviewEvidence(owner, source(17), admin); } catch { failed = true; }
+  sql("drop trigger b42_test_snapshot_failure on public.validation_qualified_evidence_snapshots; drop function public.b42_test_reject_snapshot();", phase);
+  check(failed, "injected snapshot failure did not reject promotion");
+  check(sql(`select not exists(select 1 from public.validation_evidence_promotions where observation_id='${source(17)}')
+    and not exists(select 1 from public.problem_observations where observation_fingerprint='validation-promotion:${fingerprint(17)}')
+    and not exists(select 1 from public.validation_qualified_evidence_snapshots where promotion_fingerprint='${fingerprint(17)}');`, phase) === "t", "snapshot failure left partial state");
+  console.log("PASS injected snapshot failure rolls back shared, ledger and snapshot atomically");
+
+  phase = "independent HTTP concurrent promotion and retries";
+  const raced = await Promise.all(Array.from({ length: 6 }, () => promoteCustomerInterviewEvidence(owner, source(18), admin)));
+  check(raced.filter((row) => row.duplicate === false).length === 1 && raced.filter((row) => row.duplicate === true).length === 5, "concurrent retry outcomes incorrect");
+  check(new Set(raced.map((row) => row.problemObservationId)).size === 1, "concurrent promotion duplicated shared state");
+  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots where promotion_fingerprint='${fingerprint(18)}';`, phase) === "1", "concurrent snapshot duplication");
+  // Keep the three-positive fixture count for subsequent capped-read checks.
+  const raceId = raced[0].problemObservationId;
+  const concurrentWrites = await Promise.all([
+    admin.from("problem_observations").update({ source_evidence: "racing mutation" }).eq("id", raceId),
+    admin.from("problem_observations").delete().eq("id", raceId),
+    promoteCustomerInterviewEvidence(owner, source(18), admin),
+  ]);
+  check("error" in concurrentWrites[0] && concurrentWrites[0].error?.code === "55000" &&
+    "error" in concurrentWrites[1] && concurrentWrites[1].error?.code === "55000" &&
+    "duplicate" in concurrentWrites[2] && concurrentWrites[2].duplicate === true, "mutation/retry race escaped boundary");
+  console.log("PASS concurrent exact retries produce one snapshot and reject competing runtime mutation");
+
+  phase = "historical controlled promotion without automatic attestation";
+  // Reproduce an actual pre-B4.2 promotion using the verified B3.1 RPC body,
+  // solely in this fixed disposable database, then restore the migrated body.
+  const history = await historicalPromotion();
+  const historicalRetry = await promoteCustomerInterviewEvidence(owner, source(19), admin);
+  check(historicalRetry.duplicate === true && historicalRetry.problemObservationId === history.problemObservationId, "historical retry changed B3.1 contract");
+  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots where problem_observation_id='${history.problemObservationId}';`, phase) === "0", "history was automatically attested");
+  await expectReadFailure();
+  check(!(await admin.from("problem_observations").update({ source_evidence: "Historical mutable shared content" }).eq("id", history.problemObservationId)).error, "blanket historical restriction introduced");
+  removeHistorical(19, history.problemObservationId);
+  console.log("PASS mixed historical/new qualified population fails; historical retries/mutability preserved without attestation");
+
+  phase = "tampering detected at read time even after administrator bypass";
+  // Only a trusted disposable administrator can disable the row guard.
+  sql(`begin; alter table public.problem_observations disable trigger problem_observations_b42_integrity;
+    update public.problem_observations set source_evidence='Synthetic admin tamper' where id='${original.id}';
+    alter table public.problem_observations enable trigger problem_observations_b42_integrity; commit;`, phase);
+  await expectReadFailure();
+  sql(`begin; alter table public.problem_observations disable trigger USER;
+    update public.problem_observations po set source_evidence='${original.source_evidence.replaceAll("'", "''")}',
+      updated_at=(s.protected_record::public.problem_observations).updated_at
+      from public.validation_qualified_evidence_snapshots s where po.id='${original.id}' and s.problem_observation_id=po.id;
+    alter table public.problem_observations enable trigger USER; commit;`, phase);
+  check((await readTrustedQualifiedValidationEvidence(canonical, admin)).complete, "restored whole row remains invalid");
+  console.log("PASS real shared-row mismatch fails generically without exposing private lineage");
+
+  phase = "native full-column snapshot comparison";
+  const protectedColumns = ["id", "canonical_problem_id", "observation_fingerprint", "problem_title", "normalized_problem_title", "problem_summary", "source_table", "source_row_id", "source_url", "source_type", "source_evidence", "source_author_id", "source_metrics", "affected_niches", "problem_cluster", "pain_score", "revenue_score", "urgency_score", "trend_score", "buying_signal_score", "frequency_score", "source_quality_score", "opportunity_score", "confidence_score", "evidence_quality", "observed_at", "ingested_at", "metadata", "created_at", "updated_at", "evidence_polarity"];
+  for (const column of protectedColumns) {
+    check(/^[a-z_]+$/.test(column), "unsafe protected column");
+    const value = ["id", "canonical_problem_id"].includes(column) ? otherCanonical
+      : column.endsWith("_score") ? 9.87
+      : ["source_metrics", "metadata"].includes(column) ? { tampered: true }
+      : column === "affected_niches" ? ["tampered"]
+      : ["observed_at", "ingested_at", "created_at", "updated_at"].includes(column) ? "2027-01-01T00:00:00.654321Z"
+      : "tampered";
+    const patch = JSON.stringify({ [column]: value }).replaceAll("'", "''");
+    sql(`begin; alter table public.validation_qualified_evidence_snapshots disable trigger USER;
+      update public.validation_qualified_evidence_snapshots s set protected_record=public.validation_b42_row_record(
+        jsonb_populate_record(po, '${patch}'::jsonb))
+        from public.problem_observations po where po.id='${original.id}' and s.problem_observation_id=po.id;
+      alter table public.validation_qualified_evidence_snapshots enable trigger USER; commit;`, phase);
+    await expectReadFailure();
+    sql(`begin; alter table public.validation_qualified_evidence_snapshots disable trigger USER;
+      update public.validation_qualified_evidence_snapshots s set protected_record=public.validation_b42_row_record(po)
+        from public.problem_observations po where po.id='${original.id}' and s.problem_observation_id=po.id;
+      alter table public.validation_qualified_evidence_snapshots enable trigger USER; commit;`, phase);
+  }
+  for (const corruption of [
+    "attestation_version='v8-b4.2-b1-snapshot.1'",
+    "protected_record='malformed PRIVATE_CODEC_MUST_NOT_ESCAPE'",
+    "protected_schema=array['unsupported']::text[]",
+  ]) {
+    sql(`begin; alter table public.validation_qualified_evidence_snapshots disable trigger USER;
+      update public.validation_qualified_evidence_snapshots set ${corruption} where problem_observation_id='${original.id}';
+      alter table public.validation_qualified_evidence_snapshots enable trigger USER; commit;`, phase);
+    await expectReadFailure();
+    sql(`begin; alter table public.validation_qualified_evidence_snapshots disable trigger USER;
+      update public.validation_qualified_evidence_snapshots s set attestation_version='v8-b4.2-b1-full-row.2',
+        protected_record=public.validation_b42_row_record(po), protected_schema=public.validation_b42_protected_schema()
+        from public.problem_observations po where po.id='${original.id}' and s.problem_observation_id=po.id;
+      alter table public.validation_qualified_evidence_snapshots enable trigger USER; commit;`, phase);
+  }
+  check((await readTrustedQualifiedValidationEvidence(canonical, admin)).complete, "restored snapshot remains invalid");
+  sql("alter table public.problem_observations add column b42_test_schema_drift text;", phase);
+  await expectReadFailure();
+  sql("alter table public.problem_observations drop column b42_test_schema_drift;", phase);
+  check((await readTrustedQualifiedValidationEvidence(canonical, admin)).complete, "schema restoration remains invalid");
+  console.log("PASS all 31 protected columns compared natively; unsupported version, malformed codec and schema drift fail closed");
 
   phase = "candidate limit and completeness";
   // Low shared UUIDs deterministically precede genuine promotion result UUIDs.
