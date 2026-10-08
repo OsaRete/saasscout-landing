@@ -320,7 +320,11 @@ async function run() {
   }
   check(sqlCode(`update public.validation_qualified_evidence_snapshots set problem_title='changed' where problem_observation_id='${original.id}';`) === "55000", "snapshot immutability trigger absent");
   check(sqlCode(`delete from public.validation_qualified_evidence_snapshots where problem_observation_id='${original.id}';`) === "55000", "snapshot DELETE trigger absent");
-  check(sqlCode("set role service_role; set role postgres;") === "42501", "runtime can assume owner role");
+  // SET ROLE alone inside a postgres-authenticated session retains the session
+  // owner's switching authority. Use the actual PostgREST authenticator identity.
+  check(sql(`select not pg_has_role('service_role','postgres','MEMBER')
+    and not pg_has_role('authenticator','postgres','MEMBER');`, phase) === "t", "runtime has owner membership");
+  check(sqlCode("set session authorization authenticator; set role service_role; set role postgres;") === "42501", "runtime can assume owner role");
   await unchanged();
   console.log("PASS runtime shared mutation rejection, private fabrication/DML/TRUNCATE rejection and owner boundary");
 
