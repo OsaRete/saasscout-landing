@@ -19,9 +19,14 @@ const participant = (i: number) => uuid("9", i);
 const classification = (i: number) => uuid("c", i);
 const sharedId = (i: number) => uuid("d", i);
 let phase = "disposable prerequisites";
+let failedAssertion = "unexpected error";
 
 function check(condition: unknown, label: string): asserts condition {
-  if (!condition) throw new Error(label);
+  if (!condition) {
+    // Labels are fixed test descriptions/SQLSTATEs, never row data or DB errors.
+    failedAssertion = label;
+    throw new Error(label);
+  }
 }
 
 function sql(statement: string, label: string): string {
@@ -171,7 +176,7 @@ async function run() {
     // disposable database administrator to exercise SQL-impossible states.
     const keys = Object.keys(row);
     check(keys.every((key) => /^[a-z_]+$/.test(key)), "unsafe fixture column");
-    check(["problem_observations", "validation_evidence_promotions"].includes(table), "unsafe fixture table");
+    check(["problem_observations", "validation_evidence_promotions", "canonical_problems"].includes(table), "unsafe fixture table");
     const columns = keys.join(",");
     return `insert into public.${table} (${columns}) select ${columns} from
       jsonb_populate_record(null::public.${table}, '${JSON.stringify(row).replaceAll("'", "''")}'::jsonb);`;
@@ -248,7 +253,7 @@ async function run() {
     ["unresolved final", { resolution_status: "unmatched", canonical_problem_id: null }, "23514"],
   ] as const) {
     const result = sqlCode(insertStatement("validation_evidence_promotions", ledger(5, extra)));
-    check(result === code, `${label}: expected real SQL constraint rejection`);
+    check(result === code, `${label}: expected ${code}, received ${result}`);
   }
   const duplicate = await admin.from("problem_observations").insert(shared(135, { observation_fingerprint: shared(5).observation_fingerprint }));
   check(duplicate.error?.code === "23505", "shared fingerprint uniqueness missing");
@@ -405,6 +410,6 @@ async function run() {
 
 try { await run(); }
 catch {
-  console.error(`FAIL B4.2-B1: ${phase}; details suppressed to protect private qualification data`);
+  console.error(`FAIL B4.2-B1: ${phase}; ${failedAssertion}; database/private details suppressed`);
   process.exitCode = 1;
 }
