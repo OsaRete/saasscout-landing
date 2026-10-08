@@ -75,9 +75,9 @@ create trigger problem_observations_b42_integrity
 before update or delete on public.problem_observations
 for each row execute function public.validation_b42_guard_attested_observation();
 
--- TRUNCATE has no per-row guard. Keep ordinary Discovery/bootstrap DML grants;
--- remove only the table-wide erasure path that bypasses scoped row triggers.
-revoke truncate on public.problem_observations from public, anon, authenticated, service_role;
+-- Shared grants remain unchanged. Its inbound ledger/snapshot FKs prohibit
+-- TRUNCATE without CASCADE; CASCADE also requires private-table TRUNCATE, which
+-- runtime roles do not have. No blanket shared-table privilege restriction.
 
 comment on table public.validation_qualified_evidence_snapshots is
   'Private immutable attestation for newly controlled B3.1 promotions only; no private source text or automatic historical attestation.';

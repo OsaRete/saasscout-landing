@@ -54,9 +54,10 @@ its postgres owner. New guard EXECUTE is revoked from all runtime roles.
 A postgres-owned SECURITY DEFINER row trigger checks private snapshot existence
 before UPDATE/DELETE of a shared observation. It rejects any change to an
 attested row with fixed SQLSTATE 55000, including canonical reassignment.
-Ordinary shared rows retain their existing DML privileges. Shared TRUNCATE is
-revoked because it bypasses per-row guards; this operation cannot be selectively
-permitted while protecting attested rows. No shared INSERT restriction is added.
+All existing shared-table grants remain unchanged. Its inbound ledger/snapshot
+FKs prohibit TRUNCATE without CASCADE, and CASCADE requires TRUNCATE on the private
+tables, which runtime roles do not have. No blanket shared privilege restriction
+or shared INSERT restriction is added.
 A source/prefix/metadata-only impersonation still cannot create private authority.
 
 Administrators and migration owners remain trusted and can disable controls.

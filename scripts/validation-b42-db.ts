@@ -300,11 +300,16 @@ async function run() {
   const snap = await admin.from("validation_qualified_evidence_snapshots").select("*").eq("problem_observation_id", original.id).single();
   check(!snap.error && snap.data, "private snapshot unavailable to trusted reader");
   check((await admin.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "runtime snapshot fabrication permitted");
+  for (const client of [anonymous, authenticated]) {
+    check((await client.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "browser ledger fabrication permitted");
+    check((await client.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "browser snapshot fabrication permitted");
+  }
   for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
     check((await admin.from(table).update({ projection_version: "replacement" }).neq("projection_version", "replacement")).error?.code === "42501", "runtime private UPDATE permitted");
     check((await admin.from(table).delete().neq("projection_version", "replacement")).error?.code === "42501", "runtime private DELETE permitted");
   }
-  check(sqlCode("set role service_role; truncate public.problem_observations;") === "42501", "runtime shared TRUNCATE permitted");
+  check(sqlCode("set role service_role; truncate public.problem_observations;") === "0A000", "shared FK truncate protection absent");
+  check(sqlCode("set role service_role; truncate public.problem_observations cascade;") === "42501", "runtime shared CASCADE TRUNCATE permitted");
   for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
     check(sqlCode(`set role service_role; truncate public.${table};`) === "42501", "runtime private TRUNCATE permitted");
   }
