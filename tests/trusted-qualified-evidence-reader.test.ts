@@ -60,17 +60,20 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
   };
 }
 
-function databaseResponse(data: unknown, options: { status?: number; throws?: boolean } = {}) {
-  const requests: { url: URL; method: string; body: unknown }[] = [];
+function databaseResponse(data: unknown, options: { status?: number; throws?: boolean; count?: number; omitCount?: boolean } = {}) {
+  const requests: { url: URL; method: string; body: unknown; prefer: string | null }[] = [];
   const db = createClient("https://mock-database.invalid", "mock-service-role", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: {
       fetch: async (input, init) => {
-        requests.push({ url: new URL(String(input)), method: init?.method ?? "GET", body: init?.body });
+        requests.push({ url: new URL(String(input)), method: init?.method ?? "GET", body: init?.body,
+          prefer: new Headers(init?.headers).get("prefer") });
         if (options.throws) throw new Error(privateMarker);
         return new Response(JSON.stringify(data), {
           status: options.status ?? 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json",
+            ...(!options.omitCount && Array.isArray(data) ? { "Content-Range": `*/${options.count ?? data.length}` } : {}),
+          },
         });
       },
     },
@@ -82,7 +85,7 @@ test("valid persisted B3.1 linkage returns only the sanitized allowlist", async 
   const row = fixture();
   assert.equal(row.promotion_fingerprint, "5fc08cc960f917a79e1cab31e916daa4b641fba668fcb571f543afd90330097f");
   const { db } = databaseResponse([row]);
-  const evidence = await readTrustedQualifiedValidationEvidence(canonicalId, db);
+  const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
   assert.deepEqual(evidence, [{
     id: resultId,
     canonical_problem_id: canonicalId,
@@ -100,7 +103,7 @@ test("valid persisted B3.1 linkage returns only the sanitized allowlist", async 
 for (const value of ["supporting", "contradicting", "mixed"] as const) {
   test(`preserves ${value} without classification or weights`, async () => {
     const { db } = databaseResponse([fixture(value)]);
-    const evidence = await readTrustedQualifiedValidationEvidence(canonicalId, db);
+    const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
     assert.equal(evidence[0]?.evidence_polarity, value);
     assert.equal("score" in evidence[0], false);
   });
@@ -165,14 +168,14 @@ for (const [name, mutate] of rejectedProofs) {
     const row: Row = fixture();
     mutate(row);
     const { db } = databaseResponse([row]);
-    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), []);
+    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
   });
 }
 
 test("zero ledger candidates and malformed candidate rows fabricate no evidence", async () => {
   for (const rows of [[], [null, {}, "malformed"], [fixture(), null]]) {
     const { db } = databaseResponse(rows);
-    const evidence = await readTrustedQualifiedValidationEvidence(canonicalId, db);
+    const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
     assert.equal(evidence.length, rows.length === 2 ? 1 : 0);
   }
 });
@@ -184,6 +187,7 @@ test("select is bounded, canonical-scoped, explicit composite-FK embedding; no w
   const request = requests[0];
   assert.equal(request.method, "GET");
   assert.equal(request.body, undefined);
+  assert.equal(request.prefer, "count=exact");
   assert.equal(request.url.pathname, "/rest/v1/validation_evidence_promotions");
   assert.equal(request.url.searchParams.get("canonical_problem_id"), `eq.${canonicalId}`);
   assert.equal(request.url.searchParams.get("eligible"), "eq.true");
@@ -224,7 +228,7 @@ test("extra private fields in mocked joined rows cannot leak through objects, lo
   Object.assign(row.shared, privateFields);
   Object.assign(row.shared.metadata, privateFields);
   const { db } = databaseResponse([row]);
-  const evidence = await readTrustedQualifiedValidationEvidence(canonicalId, db);
+  const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
   assert.equal(evidence.length, 1);
   assert.equal(JSON.stringify(evidence).includes(privateMarker), false);
   assert.equal(JSON.stringify(evidence).includes(row.observation_id), false);
@@ -266,6 +270,27 @@ test("invalid canonical ID is rejected before any database request", async () =>
     message: "trusted_qualified_evidence_invalid_canonical_id",
   });
   assert.deepEqual(requests, []);
+});
+
+test("exact candidate count exposes incomplete results before qualification filtering", async () => {
+  const malformed = { ...fixture(), promotion_fingerprint: "0".repeat(64) };
+  const { db } = databaseResponse(Array.from({ length: 100 }, () => malformed), { count: 101 });
+  assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), {
+    observations: [], complete: false,
+  });
+  const full = databaseResponse([fixture()], { count: 1 });
+  assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, full.db)).complete, true);
+  const serverTruncated = databaseResponse([fixture()], { count: 100 });
+  assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, serverTruncated.db)).complete, false);
+});
+
+test("missing or inconsistent exact candidate counts fail closed", async () => {
+  for (const options of [{ omitCount: true }, { count: 0 }]) {
+    const { db } = databaseResponse([fixture()], options);
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), {
+      message: "trusted_qualified_evidence_read_failed",
+    });
+  }
 });
 
 test("browser-condition import executes the existing server-only guard", () => {

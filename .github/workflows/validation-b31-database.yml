@@ -6,6 +6,10 @@ on:
       - "supabase/migrations/**"
       - "tests/sql/validation-b31.sql"
       - "scripts/validation-b31-db.ts"
+      - "scripts/validation-b41-db.ts"
+      - "lib/validation/promotion/**"
+      - "lib/supabase/server-admin.ts"
+      - "tests/trusted-qualified-evidence-reader.test.ts"
       - ".github/workflows/validation-b31-database.yml"
       - "package.json"
       - "package-lock.json"
@@ -40,3 +44,9 @@ jobs:
           VALIDATION_B31_DB_REQUIRED: "1"
           VALIDATION_B31_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npm run test:validation-b31-db
+      - name: Reset disposable database for independent B4.1-B suite
+        run: supabase db reset --local --no-seed
+      - name: Execute mandatory B4.1-B PostgreSQL and PostgREST suite
+        env:
+          VALIDATION_B41_DISPOSABLE: "1"
+        run: npm run test:validation-b41-db

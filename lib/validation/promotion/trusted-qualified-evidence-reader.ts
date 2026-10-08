@@ -23,6 +23,12 @@ export type TrustedQualifiedValidationEvidence = Readonly<{
   projection_version: typeof VALIDATION_PROMOTION_PROJECTION_VERSION;
 }>;
 
+export type TrustedQualifiedValidationEvidenceResult = Readonly<{
+  observations: readonly TrustedQualifiedValidationEvidence[];
+  /** False when the bounded read did not examine every matching candidate. */
+  complete: boolean;
+}>;
+
 const MAX_CANDIDATES = 100;
 const SOURCE_TYPE = "customer_interview_human_reviewed";
 
@@ -143,7 +149,7 @@ function qualify(
 export async function readTrustedQualifiedValidationEvidence(
   canonicalProblemId: string,
   db?: SupabaseAdminClient,
-): Promise<readonly TrustedQualifiedValidationEvidence[]> {
+): Promise<TrustedQualifiedValidationEvidenceResult> {
   if (!uuid(canonicalProblemId)) {
     throw new Error("trusted_qualified_evidence_invalid_canonical_id");
   }
@@ -151,7 +157,7 @@ export async function readTrustedQualifiedValidationEvidence(
   try {
     const result = await (db ?? createSupabaseAdminClient())
       .from("validation_evidence_promotions")
-      .select(PROJECTION)
+      .select(PROJECTION, { count: "exact" })
       .eq("canonical_problem_id", canonicalProblemId)
       .eq("eligible", true)
       .eq("representative_selected", true)
@@ -165,7 +171,8 @@ export async function readTrustedQualifiedValidationEvidence(
 
     // Malformed envelopes and relationship/schema errors must not masquerade
     // as successful reads. Never forward DB error text or attach a cause.
-    if (result.error || !Array.isArray(result.data) || result.data.length > MAX_CANDIDATES) {
+    if (result.error || !Array.isArray(result.data) || result.data.length > MAX_CANDIDATES ||
+      !Number.isSafeInteger(result.count) || result.count! < result.data.length) {
       throw new Error("invalid_read_result");
     }
 
@@ -180,7 +187,10 @@ export async function readTrustedQualifiedValidationEvidence(
       if (ids.has(row.id)) throw new Error("duplicate_read_result");
       ids.add(row.id);
     }
-    return Object.freeze(qualified);
+    return Object.freeze({
+      observations: Object.freeze(qualified),
+      complete: result.count === result.data.length,
+    });
   } catch {
     throw new Error("trusted_qualified_evidence_read_failed");
   }

@@ -1,6 +1,6 @@
 # V8-B4.1 — Trusted qualified evidence read boundary
 
-**B4.1-A implementation only. BLOCKED — DATABASE VERIFICATION REQUIRED.**
+**B4.1-B integration suite added. BLOCKED — DATABASE VERIFICATION REQUIRED.**
 Do not merge or deploy until the independent B4.1-B disposable database gate
 below passes. Mocked responses are not proof of PostgreSQL security.
 
@@ -14,10 +14,13 @@ ordered by `problem_observation_id`. The injected client is for trusted server
 code/tests, never browser input. There are no callers, endpoints or integrations
 in this phase.
 
-The cap applies **before** application qualification. This is a bounded subset,
-not an exhaustive export or count: invalid candidates can reduce the output,
-and more than 100 candidates are truncated. Empty output means no qualified
-evidence in that subset, not proof that no qualified evidence exists elsewhere.
+The cap applies **before** application qualification. B4.1-B therefore changes
+the return contract to `{ observations, complete }`: PostgREST's exact filtered
+candidate count determines `complete`. It is false whenever fewer candidates
+were examined than exist, including server-side truncation. Missing/inconsistent
+counts fail closed. Consumers must check `complete`; an incomplete empty result
+does not mean no qualified evidence exists. No candidate or human count is
+exposed. This remains a bounded subset, not an exhaustive export.
 Missing, malformed, incomplete or unsupported candidate proof is excluded.
 Database errors, invalid response envelopes, oversized responses and duplicate
 qualified result IDs fail the whole read with a fixed generic error. The reader
@@ -232,3 +235,57 @@ is not merge-ready.
 The default Turbopack build remains blocked by the sandbox; the successful
 Webpack fallback does not claim that default invocation passed. No database,
 production or migration commands were run.
+
+## B4.1-B integration execution and risk review
+
+Existing infrastructure was verified via GitHub: PR #214's final commit
+`a05f1aed3a691e784388d8991fbbfe59fbb86389` passed
+[Validation B3.1 Database run 37117505065](https://github.com/OsaRete/saasscout-landing/actions/runs/37117505065).
+Its successful steps included disposable Supabase startup, full local migration
+reset and the existing PostgreSQL/concurrency runner. Those steps and the B3.1
+suite remain intact. The workflow now resets the disposable database again and
+runs `npm run test:validation-b41-db` as an independent mandatory step.
+
+`scripts/validation-b41-db.ts` requires `VALIDATION_B41_DISPOSABLE=1` and verifies
+fixed loopback API/database addresses reported by the local Supabase CLI.
+It discovers only local test credentials and fails rather than skips if tooling,
+credentials, connectivity or assertions are unavailable. No URL override or
+production credential input is accepted. The test runs through the actual SDK,
+PostgREST, migrations, TypeScript promotion service and reader; no fetch mocks
+are used. B3.1's relational seed fixture is reused with additional participants,
+without creating its test helper RPC or changing production migrations.
+
+Coverage distinguishes:
+
+- genuine positives created by the existing B3.1 TypeScript service and atomic
+  promotion RPC, preserving supporting/contradicting/mixed;
+- SQL-impossible final canonical mismatches (FK), ineligible/nonrepresentative
+  or unresolved final states (CHECK), duplicate shared/final data (unique), and
+  ledger updates (append-only trigger);
+- SQL-possible shared-only marker impersonation, wrong fingerprints, unsupported
+  versions, nonfinal/ineligible/nonrepresentative/unresolved evaluations, shared
+  polarity/metadata mismatch, legacy/null polarity, all excluded by the reader;
+- live service-role SELECT, RLS, anonymous and locally signed authenticated HTTP
+  restrictions, existing promotion RPC EXECUTE/ownership/search_path review,
+  unchanged public RPC catalog, sanitized output and empty results;
+- 100 invalid-fingerprint but SQL-permitted final candidates ordered before
+  genuine positives, proving exact count must return `complete=false` rather
+  than silently present empty evidence as complete;
+- a service-role update to an already qualified shared statement, display title
+  and timestamp, followed by a read confirming the qualification fingerprint
+  remains valid. This is explicitly a **confirmed trusted-writer limitation**
+  when the suite passes, not a tamper-resistance success. Browser writes are
+  prohibited; arbitrary service-role writers are trusted. No content-integrity
+  guarantee or new trust contract is introduced to conceal this finding.
+
+Local suite execution fails at disposable prerequisites in this sandbox.
+The current branch's actual GitHub Actions outcome is pending execution.
+Do not treat historical B3.1 success or the new suite's existence as B4.1-B
+verification. No production mutation, migrations or deployment were performed.
+
+B4.1-B local checks before CI: 55 focused tests passed; `npm test` reported
+104 passing file-level results; lint passed with the same four existing warnings;
+`npm run build` failed on sandbox port binding; `npm run build -- --webpack`
+passed; targeted strict TypeScript checking of the integration runner and
+focused tests passed; `git diff --check` passed. Local `test:validation-b41-db`
+exited 1 at disposable prerequisites (no skip and no database-pass claim).
