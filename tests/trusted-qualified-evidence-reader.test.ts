@@ -25,7 +25,8 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
   const fingerprint = createHash("sha256").update(JSON.stringify(
     Object.fromEntries(Object.entries(contract).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
   )).digest("hex");
-  return {
+  const row = {
+    id: "66666666-6666-4666-8666-666666666666",
     observation_id: contract.observationId,
     classification_id: contract.classificationId,
     participant_id: "55555555-5555-4555-8555-555555555555",
@@ -58,6 +59,14 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
       metadata: { projectionVersion: contract.projectionVersion },
     },
   };
+  return { ...row, integrity_verified: true, snapshot: {
+    ...row.shared,
+    promotion_id: row.id,
+    problem_observation_id: resultId,
+    promotion_fingerprint: fingerprint,
+    projection_version: contract.projectionVersion,
+    attestation_version: "v8-b4.2-b1-full-row.2",
+  } };
 }
 
 function databaseResponse(data: unknown, options: { status?: number; throws?: boolean; count?: number; omitCount?: boolean } = {}) {
@@ -168,7 +177,11 @@ for (const [name, mutate] of rejectedProofs) {
     const row: Row = fixture();
     mutate(row);
     const { db } = databaseResponse([row]);
-    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
+    if (name.includes("shared") || ["ambiguous joined relationship array", "missing projection metadata", "polarity mismatch", "result observation mismatch", "legacy source", "missing approved statement", "empty statement", "oversized statement", "missing canonical display title", "malformed authoritative time", "impossible authoritative date", "timestamp without timezone"].includes(name)) {
+      await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), { message: "trusted_qualified_evidence_read_failed" });
+    } else {
+      assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
+    }
   });
 }
 
@@ -201,14 +214,16 @@ test("select is bounded, canonical-scoped, explicit composite-FK embedding; no w
   assert.equal(request.url.searchParams.get("order"), "problem_observation_id.asc");
   const select = request.url.searchParams.get("select")!;
   assert.equal(select, [
-    "observation_id,classification_id,participant_id",
+    "id,observation_id,classification_id,participant_id",
+    "integrity_verified:validation_b42_snapshot_verified",
     "policy_version,eligible,eligibility_reasons",
     "independence_kind,independence_private_id,polarity",
     "representative_group_key,representative_selected",
     "canonical_problem_id,resolution_status,resolution_reason,resolver_version",
     "problem_observation_id,promotion_fingerprint,projection_version",
     "supersedes_promotion_id,deactivation_reason",
-    "shared:problem_observations!validation_promotions_result_canonical_fk!inner(id,canonical_problem_id,problem_title,source_evidence,source_type,evidence_polarity,observed_at,observation_fingerprint,metadata)",
+    "shared:problem_observations!validation_promotions_result_canonical_fk(id,canonical_problem_id,problem_title,source_evidence,source_type,evidence_polarity,observed_at,observation_fingerprint,metadata)",
+    "snapshot:validation_qualified_evidence_snapshots!validation_snapshots_promotion_fk(promotion_id,problem_observation_id,canonical_problem_id,problem_title,source_evidence,source_type,evidence_polarity,observed_at,observation_fingerprint,promotion_fingerprint,projection_version,attestation_version)",
   ].join(","));
   assert.equal(select.includes("*"), false);
 });
@@ -224,8 +239,9 @@ test("extra private fields in mocked joined rows cannot leak through objects, lo
     "hypothesis_id", "classification_id", "source_observation_id", "command_id",
     "private_notes", "raw_interview_text", "review_metadata", "ai_drafts", "ledger_id",
   ].map((key) => [key, privateMarker]));
-  Object.assign(row, { id: privateMarker, private_notes: privateMarker, owner_id: privateMarker });
+  Object.assign(row, { ledger_id: privateMarker, private_notes: privateMarker, owner_id: privateMarker });
   Object.assign(row.shared, privateFields);
+  Object.assign(row.snapshot, privateFields);
   Object.assign(row.shared.metadata, privateFields);
   const { db } = databaseResponse([row]);
   const { observations: evidence } = await readTrustedQualifiedValidationEvidence(canonicalId, db);
@@ -272,16 +288,18 @@ test("invalid canonical ID is rejected before any database request", async () =>
   assert.deepEqual(requests, []);
 });
 
-test("exact candidate count exposes incomplete results before qualification filtering", async () => {
-  const malformed = { ...fixture(), promotion_fingerprint: "0".repeat(64) };
-  const { db } = databaseResponse(Array.from({ length: 100 }, () => malformed), { count: 101 });
-  assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), {
-    observations: [], complete: false,
-  });
+test("incomplete bounded or server-truncated reads reject even with valid evidence", async () => {
+  for (const [rows, count] of [
+    [[fixture()], 2], [[], 1],
+    [Array.from({ length: 100 }, () => fixture()), 101],
+  ] as [unknown[], number][]) {
+    const { db } = databaseResponse(rows, { count });
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), {
+      message: "trusted_qualified_evidence_read_failed",
+    });
+  }
   const full = databaseResponse([fixture()], { count: 1 });
   assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, full.db)).complete, true);
-  const serverTruncated = databaseResponse([fixture()], { count: 100 });
-  assert.equal((await readTrustedQualifiedValidationEvidence(canonicalId, serverTruncated.db)).complete, false);
 });
 
 test("missing or inconsistent exact candidate counts fail closed", async () => {
@@ -306,4 +324,80 @@ test("browser-condition import executes the existing server-only guard", () => {
   ], { encoding: "utf8", timeout: 15000 });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /server-only modules must not be imported from browser or Client Component code/);
+});
+
+for (const [name, mutate] of [
+  ["historical missing attestation", (row: Row) => { row.snapshot = null; }],
+  ["omitted snapshot relation", (row: Row) => { delete row.snapshot; }],
+  ["snapshot array", (row: Row) => { row.snapshot = [row.snapshot]; }],
+  ["unsupported attestation", (row: Row) => { (row.snapshot as Row).attestation_version = "future"; }],
+  ["snapshot linked to another ledger", (row: Row) => { (row.snapshot as Row).promotion_id = otherId; }],
+  ["snapshot linked to another shared row", (row: Row) => { (row.snapshot as Row).problem_observation_id = otherId; }],
+  ["snapshot qualification fingerprint mismatch", (row: Row) => { (row.snapshot as Row).promotion_fingerprint = "0".repeat(64); }],
+  ["snapshot projection mismatch", (row: Row) => { (row.snapshot as Row).projection_version = "future"; }],
+] as const) {
+  test(`fails the whole read for ${name}`, async () => {
+    const row: Row = fixture(); mutate(row);
+    const { db } = databaseResponse([row]);
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), { message: "trusted_qualified_evidence_read_failed" });
+  });
+}
+for (const field of ["canonical_problem_id", "problem_title", "source_evidence", "source_type",
+  "evidence_polarity", "observed_at", "observation_fingerprint"]) {
+  test(`snapshot detects shared ${field} replacement`, async () => {
+    const row: Row = fixture(); (row.shared as Row)[field] = "replacement";
+    const { db } = databaseResponse([row]);
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), { message: "trusted_qualified_evidence_read_failed" });
+  });
+}
+
+
+test("historical-only and mixed qualified populations fail without returning a complete subset", async () => {
+  const historical: Row = fixture("contradicting");
+  historical.snapshot = null;
+  for (const rows of [[historical], [fixture(), historical]]) {
+    const { db } = databaseResponse(rows);
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), (error: Error) => {
+      assert.equal(error.message, "trusted_qualified_evidence_read_failed");
+      assert.equal("cause" in error, false);
+      return true;
+    });
+  }
+});
+
+test("demonstrably unsupported qualification is excluded before integrity verification", async () => {
+  for (const mutate of [
+    (row: Row) => { row.eligible = false; },
+    (row: Row) => { row.policy_version = "unsupported"; },
+    (row: Row) => { row.promotion_fingerprint = "0".repeat(64); },
+  ]) {
+    const row: Row = fixture(); mutate(row); row.snapshot = null; row.integrity_verified = false;
+    const { db } = databaseResponse([row]);
+    assert.deepEqual(await readTrustedQualifiedValidationEvidence(canonicalId, db), { observations: [], complete: true });
+  }
+});
+
+for (const verified of [false, null, undefined, "true", 1]) {
+  test(`missing or unsuccessful native full-row verification fails (${String(verified)})`, async () => {
+    const row: Row = fixture(); row.integrity_verified = verified;
+    const { db } = databaseResponse([row]);
+    await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), { message: "trusted_qualified_evidence_read_failed" });
+  });
+}
+
+test("old partial snapshot version is unsupported, with generic errors and no logs", async (t) => {
+  const logs: unknown[][] = [];
+  for (const method of ["log", "warn", "error", "info", "debug"] as const) {
+    t.mock.method(console, method, (...args: unknown[]) => { logs.push(args); });
+  }
+  const row = fixture(); row.snapshot.attestation_version = "v8-b4.2-b1-snapshot.1";
+  Object.assign(row.snapshot, { protected_record: privateMarker });
+  const { db } = databaseResponse([row]);
+  await assert.rejects(readTrustedQualifiedValidationEvidence(canonicalId, db), (error: Error) => {
+    assert.equal(error.message, "trusted_qualified_evidence_read_failed");
+    assert.equal("cause" in error, false);
+    assert.equal(String(error).includes(privateMarker), false);
+    return true;
+  });
+  assert.deepEqual(logs, []);
 });

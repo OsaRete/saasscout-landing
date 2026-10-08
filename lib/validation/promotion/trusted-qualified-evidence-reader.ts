@@ -25,7 +25,7 @@ export type TrustedQualifiedValidationEvidence = Readonly<{
 
 export type TrustedQualifiedValidationEvidenceResult = Readonly<{
   observations: readonly TrustedQualifiedValidationEvidence[];
-  /** False when the bounded read did not examine every matching candidate. */
+  /** Successful reads are complete; incomplete bounded reads throw. */
   complete: boolean;
 }>;
 
@@ -35,16 +35,21 @@ const SOURCE_TYPE = "customer_interview_human_reviewed";
 // The composite FK binds BOTH result ID and canonical ID. The older
 // single-column FK must not be selected implicitly by PostgREST.
 const PROJECTION = [
-  "observation_id,classification_id,participant_id",
+  "id,observation_id,classification_id,participant_id",
+  "integrity_verified:validation_b42_snapshot_verified",
   "policy_version,eligible,eligibility_reasons",
   "independence_kind,independence_private_id,polarity",
   "representative_group_key,representative_selected",
   "canonical_problem_id,resolution_status,resolution_reason,resolver_version",
   "problem_observation_id,promotion_fingerprint,projection_version",
   "supersedes_promotion_id,deactivation_reason",
-  "shared:problem_observations!validation_promotions_result_canonical_fk!inner(" +
+  "shared:problem_observations!validation_promotions_result_canonical_fk(" +
     "id,canonical_problem_id,problem_title,source_evidence,source_type," +
     "evidence_polarity,observed_at,observation_fingerprint,metadata)",
+  "snapshot:validation_qualified_evidence_snapshots!validation_snapshots_promotion_fk(" +
+    "promotion_id,problem_observation_id,canonical_problem_id,problem_title,source_evidence," +
+    "source_type,evidence_polarity,observed_at,observation_fingerprint,promotion_fingerprint," +
+    "projection_version,attestation_version)",
 ].join(",");
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -74,9 +79,9 @@ function qualify(
   row: unknown,
   canonicalProblemId: string,
 ): TrustedQualifiedValidationEvidence | null {
-  if (!object(row) || !object(row.shared)) return null;
-  const shared = row.shared;
-
+  if (!object(row)) return null;
+  // Qualification is established from the immutable private ledger FIRST.
+  // Only demonstrably unsupported/nonqualified B3.1 proof may be excluded.
   // B3.1 has no status column: finality is the persisted result linkage.
   // Corrections/deactivation are outside this supported promotion contract.
   if (
@@ -96,17 +101,7 @@ function qualify(
     row.independence_private_id !== row.participant_id ||
     !polarity(row.polarity) ||
     row.representative_group_key !==
-      `participant:${row.participant_id}|${canonicalProblemId}|${row.polarity}` ||
-    shared.id !== row.problem_observation_id ||
-    shared.canonical_problem_id !== canonicalProblemId ||
-    shared.evidence_polarity !== row.polarity ||
-    shared.source_type !== SOURCE_TYPE ||
-    !object(shared.metadata) ||
-    shared.metadata.projectionVersion !== VALIDATION_PROMOTION_PROJECTION_VERSION ||
-    typeof shared.problem_title !== "string" || !shared.problem_title.trim() ||
-    typeof shared.source_evidence !== "string" || !shared.source_evidence.trim() ||
-    Array.from(shared.source_evidence).length > 500 ||
-    !observedTime(shared.observed_at)
+      `participant:${row.participant_id}|${canonicalProblemId}|${row.polarity}`
   ) return null;
 
   // Same sorted-key JSON contract as promotion-service.ts; never hash titles
@@ -124,9 +119,38 @@ function qualify(
     .update(JSON.stringify(contract))
     .digest("hex");
   if (
-    row.promotion_fingerprint !== fingerprint ||
-    shared.observation_fingerprint !== `validation-promotion:${fingerprint}`
+    row.promotion_fingerprint !== fingerprint
   ) return null;
+
+  // A supported final ledger cannot be silently lost through missing,
+  // historical, unsupported or corrupt integrity proof. Fail the whole read.
+  if (!uuid(row.id) || !object(row.shared) || !object(row.snapshot)) {
+    throw new Error("integrity_proof_failed");
+  }
+  const shared = row.shared;
+  const snapshot = row.snapshot;
+  if (row.integrity_verified !== true ||
+    snapshot.attestation_version !== "v8-b4.2-b1-full-row.2" ||
+    snapshot.promotion_id !== row.id ||
+    snapshot.problem_observation_id !== row.problem_observation_id ||
+    snapshot.canonical_problem_id !== canonicalProblemId ||
+    snapshot.promotion_fingerprint !== fingerprint ||
+    snapshot.projection_version !== row.projection_version ||
+    ["problem_title", "source_evidence", "source_type", "evidence_polarity",
+      "observed_at", "observation_fingerprint"]
+      .some((field) => snapshot[field] !== shared[field]) ||
+    shared.id !== row.problem_observation_id ||
+    shared.canonical_problem_id !== canonicalProblemId ||
+    shared.evidence_polarity !== row.polarity ||
+    shared.source_type !== SOURCE_TYPE ||
+    !object(shared.metadata) ||
+    shared.metadata.projectionVersion !== VALIDATION_PROMOTION_PROJECTION_VERSION ||
+    typeof shared.problem_title !== "string" || !shared.problem_title.trim() ||
+    typeof shared.source_evidence !== "string" || !shared.source_evidence.trim() ||
+    Array.from(shared.source_evidence).length > 500 ||
+    !observedTime(shared.observed_at) ||
+    shared.observation_fingerprint !== `validation-promotion:${fingerprint}`
+  ) throw new Error("integrity_proof_failed");
 
   return Object.freeze({
     id: row.problem_observation_id,
@@ -144,7 +168,7 @@ function qualify(
  * Bounded SELECT-only boundary; no endpoint or downstream integration.
  * The optional admin client is server-side dependency injection only.
  * At most 100 final candidates for ONE persisted canonical identity are read.
- * B4.1-B must verify the real PostgREST/DB relationship and privileges before merge.
+ * B4.2-B1 requires immutable snapshots; incomplete reads throw a generic error.
  */
 export async function readTrustedQualifiedValidationEvidence(
   canonicalProblemId: string,
@@ -175,6 +199,8 @@ export async function readTrustedQualifiedValidationEvidence(
       !Number.isSafeInteger(result.count) || result.count! < result.data.length) {
       throw new Error("invalid_read_result");
     }
+    // B4.2-B1: incomplete reads cannot expose a partially verified subset.
+    if (result.count !== result.data.length) throw new Error("incomplete_read_result");
 
     const qualified = result.data
       .map((row: unknown) => qualify(row, canonicalProblemId))

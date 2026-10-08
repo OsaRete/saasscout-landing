@@ -18,7 +18,8 @@
     "test:scan-artifact-shadow": "node --loader ./tests/support/server-only-loader.mjs --test tests/scan-artifact-persistence-shadow.test.ts",
     "test:scan-artifact-db": "node --loader ./tests/support/server-only-loader.mjs --test tests/scan-artifact-persistence-db.ts",
     "test:validation-b31-db": "node scripts/validation-b31-db.ts",
-    "test:validation-b41-db": "node scripts/validation-b41-db.ts"
+    "test:validation-b41-db": "node scripts/validation-b41-db.ts",
+    "test:validation-b42-db": "node scripts/validation-b42-db.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
