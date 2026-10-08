@@ -1,205 +1,45 @@
-# V8-B4.2-B1 — Qualified human evidence integrity
+# B4.2-B1 integrity boundary — B4.2-C corrections
 
-Status: **GO for B4.2-B1 security review**. Disposable PostgreSQL/PostgREST and
-Playwright verification passed on implementation commit
-`9e0a7059c50878dce3cec3ecc433303b36ed78c3`. **NO-GO for merge/deployment pending
-security review**. PR #216 remains draft. No production or staging migration ran.
+## Baseline and scope
 
-## Verified baseline
+Correction branch: `codex/b42-b1-integrity`, existing draft PR #216. The local branch and GitHub PR both matched the reviewed full HEAD `8f4fdba86a9b43d59e4b9eab5be452c9971add3d` with a clean working tree before edits. Original implementation baseline: `fe5f4fd5b8e15d7be88500068eb9618e2c07ed24`. B4.1 reader and B3.1 promotion migration were inspected locally. The original B3.1 migration remains unchanged.
 
-Repository: OsaRete/saasscout-landing. Initial local branch: `work`. Initial HEAD:
-`fe5f4fd5b8e15d7be88500068eb9618e2c07ed24`. The initial working tree was clean.
-Implementation branch: `codex/b42-b1-integrity`, created explicitly from that SHA.
+This report supersedes the earlier historical-exclusion and selected-field snapshot claims. Scope remains newly promoted qualified human evidence, atomic private attestations, scoped shared-row immutability and the server-only reader. No historical backfill, canonical lifecycle change, correction/withdrawal, Knowledge Evolution consumer or legacy ingestion redesign.
 
-The baseline reader blob was `8881ec87770147bad4db65dbecc69733dd527cb0`;
-the B3.1 migration blob was `401d034eed08cede4cb0103c55796a42b1aab94a`.
-Both working files matched their baseline Git objects before modification.
-The B3.1 migration remains unchanged. Shell `git ls-remote` failed to connect
-to proxy port 8080; fresh GitHub connector inspection resolved `main` to the
-required SHA. That connector result does not establish shell Git connectivity.
+## Qualification before integrity; historical compatibility
 
-## Narrow database boundary
+The reader first checks the supported B3.1 immutable ledger contract and its exact sorted-key SHA-256 fingerprint. Demonstrably nonqualified/unsupported ledger records are excluded, including unsupported policy/resolver/projection, nonfinal state, invalid fingerprint, missing eligibility or representative authority. A shared-only marker cannot establish qualification.
 
-`20261008000000_qualified_evidence_integrity.sql` adds the private, RLS-enabled
-`validation_qualified_evidence_snapshots` table. Its immutable payload contains
-only the approved shared projection, qualification fingerprint, version, and
-private linkage IDs. It stores no raw interview text, review notes, AI drafts,
-owner, participant, session, or classification data.
+Once a final ledger satisfies that contract, its integrity proof is mandatory. Missing shared rows or snapshots, ambiguous embeds, unsupported attestation versions, native full-row mismatch, invalid public fields or inconsistent snapshot linkage cause the entire read to throw `trusted_qualified_evidence_read_failed`. Errors carry no cause or private values; the reader does not log. Left shared embedding prevents SQL joins from concealing qualified candidates. Exact count checks occur before qualification: omitted, inconsistent or truncated results are non-consumable.
 
-A composite foreign key binds the snapshot to the final ledger's ID, shared
-result ID, canonical ID, promotion fingerprint and projection version. Another
-composite FK binds the shared result/canonical pair. Exact FK-column uniqueness
-supports an explicit one-to-one PostgREST reverse embed.
+Historical qualifying promotions with no snapshot now fail a historical-only or mixed read, rather than returning an empty or partial supposedly complete result. Existing version-1 snapshots are retained but deliberately unsupported by the version-2 reader. They are not upgraded or re-attested. B3.1 exact duplicate exits are unchanged and create no missing attestations. Historical/unattested shared rows retain existing mutation behavior. This availability consequence is intentional fail-closed behavior and needs release review; this PR provides no historical remediation workflow.
 
-The existing postgres-owned SECURITY DEFINER promotion RPC receives one final
-snapshot INSERT after its shared and ledger INSERTs. All three writes occur in
-one transaction. A snapshot constraint/permission/trigger failure rolls back
-all three. Both duplicate exits remain before snapshot creation. The complete
-old RPC body, minus only the added INSERT block, is checked against the baseline
-by `tests/qualified-evidence-integrity.test.ts`.
+Successful observations still expose exactly: `id`, `canonical_problem_id`, `problem_title`, `source_evidence`, `source_type`, `evidence_polarity`, `observed_at`, `projection_version`. Supporting, contradicting and mixed polarities remain intact.
 
-B3.1 eligibility, TypeScript exact resolution and representative selection,
-policy/resolver/projection versions, fingerprint serialization, freshness proof,
-and canonical -> sorted experiments -> participant -> representative-group lock
-order are unchanged. A new shared row is invisible to competing writers until
-the transaction also commits its snapshot. Exact concurrent retries serialize
-on the existing locks/uniqueness and return the same result without a new snapshot.
-No separate snapshot locking or caller-settable GUC authorization is introduced.
+## Actual persisted whole-row contract
 
-Runtime PUBLIC/anon/authenticated roles have no private table access. The
-service role has SELECT only on ledger and snapshots; direct INSERT, UPDATE,
-DELETE, TRUNCATE, REFERENCES and TRIGGER privileges are revoked. Only the
-existing controlled RPC retains service EXECUTE and performs private writes as
-its postgres owner. New guard EXECUTE is revoked from all runtime roles.
+Additive migration `20261008010000_qualified_evidence_snapshot_v2.sql` preserves the original migration and historical rows. New promotions insert an attestation after the existing shared and ledger inserts in the same transaction, selecting the actual persisted `problem_observations` row. Defaults and trigger changes are captured. An inability to create the complete version-2 attestation rolls the entire promotion back.
 
-A postgres-owned SECURITY DEFINER row trigger checks private snapshot existence
-before UPDATE/DELETE of a shared observation. It rejects any change to an
-attested row with fixed SQLSTATE 55000, including canonical reassignment.
-All existing shared-table grants remain unchanged. Its inbound ledger/snapshot
-FKs prohibit TRUNCATE without CASCADE, and CASCADE requires TRUNCATE on the private
-tables, which runtime roles do not have. No blanket shared privilege restriction
-or shared INSERT restriction is added.
-A source/prefix/metadata-only impersonation still cannot create private authority.
+`v8-b4.2-b1-full-row.2` explicitly covers all 31 persisted columns protected by the existing whole-row UPDATE/DELETE guard: identity/canonical/fingerprint, title/normalized title/summary, source table/row/URL/type/evidence/author/metrics, niches/cluster, all nine numeric scores, evidence quality, observed/ingested/created/updated timestamps, metadata and polarity. `protected_schema` records their ordered names and PostgreSQL types. New or changed columns fail closed and require a reviewed new contract version; coverage is not narrowed automatically.
 
-Administrators and migration owners remain trusted and can disable controls.
-Snapshots are an immutable relational attestation, not a digital signature.
-Other postgres-owned functions must not become arbitrary SQL/private-table
-write gateways. No generic private writer or new promotion RPC is introduced.
+`protected_record` uses PostgreSQL's native composite text codec with fixed UTC and ISO date settings. Decoding to the explicit table row type and native `IS NOT DISTINCT FROM` compares the full row, preserving SQL NULL versus empty text versus JSON null, exact JSONB/numeric values, array dimensions/lower bounds and timestamp microseconds. JavaScript does not serialize or compare this record. The invoker-rights, STABLE computed field `validation_b42_snapshot_verified` returns only a boolean in the same PostgREST SELECT snapshot. Malformed codecs return false without exposing PostgreSQL parsing errors. The public application projection remains eight fields.
 
-## Read contract and history
+The codec is tied to this ordered PostgreSQL schema. Future DDL must deliberately update the versioned contract. No added typed snapshot-table column blocks ordinary shared-table migration; drift instead causes reads and new attestations to fail closed until reviewed.
 
-The reader keeps its existing private ledger qualification and fingerprint
-verification. It explicitly embeds the snapshot without an inner filter, so
-unattested historical rows remain visible to exact candidate counting. Every
-snapshot linkage/version and projected content field must match the ledger and
-shared observation. Missing, malformed, unsupported or mismatched snapshots are
-excluded without a shared-content fallback. The same eight output fields are
-explicitly constructed/frozen; private IDs, metadata and snapshot internals never
-leave the reader. Timestamps must match exact PostgREST serialization, including
-microseconds; no lossy Date equality is used for snapshot verification.
+## Privileges and concurrency
 
-The existing 100-candidate cap remains. Missing/inconsistent counts, server
-truncation or any count exceeding the returned candidate length cause the same
-generic read failure, with no partial evidence returned. Successful reads retain
-`{ observations, complete: true }`; incomplete reads now throw. There are no
-runtime callers or Knowledge Evolution consumers to migrate in this repository.
+Existing ledger and snapshot runtime privileges remain SELECT-only for `service_role`; direct INSERT/UPDATE/DELETE/TRUNCATE are denied. Browser `anon` and `authenticated` roles have no private proof read/write grants and no promotion execution grants. Shared table grants are unchanged. The SECURITY DEFINER shared-row guard, owned by postgres, rejects any UPDATE/DELETE only when a snapshot attests that row. Inbound FKs and private TRUNCATE revocations prevent runtime shared CASCADE/TRUNCATE bypass. Snapshot UPDATE/DELETE immutability remains enforced. Read-only version-2 helpers revoke PUBLIC/anon/authenticated execution and grant service_role execution; they are invoker-rights, not privileged writers.
 
-No historical rows are copied, changed, deleted or automatically attested.
-Historical exact retries remain duplicate successes and create no snapshot.
-Unattested historical human evidence is retained but excluded from this stricter
-trusted reader. Historical shared rows retain their previous mutation behavior;
-this phase supplies no integrity guarantee for them. Historical candidates can
-still exhaust the cap and cause a generic incomplete-read failure.
+B3.1 lock ordering, qualification, authority freshness and uniqueness remain unchanged: canonical coordination, sorted experiments, participant then representative group; competing exact promotions serialize, with one new result and existing duplicate exits. Snapshot creation is inside that existing critical section and transaction. No new lock ordering or retry policy is introduced. Tests compare both replacement RPC bodies to the original B3.1 body after removing only the atomic snapshot block.
 
-## Disposable verification
+## Service-role trust boundary (explicit limitation)
 
-`scripts/validation-b42-db.ts` accepts only explicit disposable opt-in and fixed
-loopback Supabase CLI-discovered endpoints/credentials. It requires a fresh
-reset and fails rather than skips when prerequisites are absent. It reuses the
-B3.1 relational fixture, exercises the actual SDK, PostgREST, TypeScript promotion
-service and SQL constraints. Synthetic invalid ledgers are inserted only by the
-fixed disposable administrator; service attempts are separately required to fail.
-The existing B4.1 command is retained as an alias to the upgraded suite because
-its former mutable-content/incomplete-read expectations are superseded.
+`app/api/validation/promotions/route.ts` uses the authenticated Validation handler, obtains the user identity from `requireUser` and delegates through `ValidationService.promoteInterviewEvidence`. The service accepts an observation ID and rejects caller-supplied authority fields. The server-only `promoteCustomerInterviewEvidence` prepares the owner-scoped persisted corpus, performs representative ranking and exact canonical resolution in TypeScript, and computes the fingerprint before calling the RPC. No browser-supplied owner, representative or canonical choice is forwarded as trusted authority.
 
-Coverage includes all three polarities and the exact output allowlist; browser
-role reads; RLS/grants/owner/search_path; direct ledger/snapshot fabrication;
-private mutation/truncation; scoped shared mutation rejection; actual Discovery
-persistence/retries and canonical bootstrap/retries; injected snapshot-failure
-rollback after the earlier writes; concurrent HTTP promotions/retries; concurrent
-runtime UPDATE/DELETE with a retry; genuine historical B3.1 promotion followed by
-restored B4.2 retries without attestation; administrator-only tamper simulation
-followed by real reader exclusion; exact PostgREST cap failure. Test helper
-functions are removed and the public RPC catalog is checked at completion.
+`validation_promote_customer_interview_evidence` is postgres-owned SECURITY DEFINER with its existing fixed search path. PUBLIC, anon and authenticated execution are revoked; service_role execution is granted. Database administrators/owner retain administrative authority. Ordinary holders of the service-role credential can call this RPC directly with independently supplied observation/classification/canonical/group/fingerprint and current representative/authority snapshots. PostgreSQL independently checks supported versions/polarity, owner-scoped source lineage, human classification, experiment/session/participant criteria, approved shareable statement, current full participant state, current canonical/alias authority snapshot, active selected canonical/title, locks and uniqueness. It does **not** independently perform the TypeScript representative ranking, exact canonical selection or fingerprint recomputation. Equality to current state proves freshness, not correct interpretation of that state.
 
-The existing database workflow still resets a disposable local Supabase and
-executes the unchanged B3.1 eight-scenario concurrency suite. It resets again
-and executes B4.2 as a mandatory separate step. No production credentials or
-URL overrides are accepted by the new runner.
+The disposable suite deliberately demonstrates service-role selection of an otherwise active canonical that the TypeScript exact resolver would not choose, while browser/authenticated direct calls are denied. This is an existing trusted application credential assumption, not a newly enforced database guarantee. No unauthorized browser invocation path was found in the inspected route/service/grants. A compromised service-role credential can bypass trusted preparation and fabricate semantic qualification through the allowed promotion RPC despite being unable to directly fabricate ledger/snapshot rows. A snapshot attests persisted integrity, not the correctness of a malicious trusted caller's selection. Database owners can also disable guards or alter proofs. Eliminating these risks requires separately approved B3.1 authorization/qualification architecture and is outside this correction.
 
-## Actual local execution
+## Verification record
 
-- Focused reader/B3.1/bootstrap/Discovery checks: 130 passed, 0 failed/skipped.
-- Complete B3.1 RPC preservation check: 1 passed, 0 failed/skipped.
-- Final reader/integrity/observation-store regression run: 82 passed, 0 failed/skipped.
-- `npm test`: 105 passing file-level results, 0 failed/skipped reported by the
-  outer runner. This is not proof that live database tests ran.
-- `npm run lint`: passed, 0 errors and 4 pre-existing warnings in Discover,
-  Saved and Scans pages.
-- Targeted strict TypeScript check using ESNext/bundler resolution: passed.
-  An initial NodeNext invocation failed on module-mode/top-level-await diagnostics;
-  the repository's bundler-compatible module mode corrected that invocation.
-- `npm run build`: failed because Turbopack cannot bind a sandbox port while
-  processing `app/globals.css` (Operation not permitted).
-- `npm run build -- --webpack`: passed compilation, TypeScript and page generation.
-- `git diff --check`: passed.
-- Explicit `VALIDATION_B42_DISPOSABLE=1 npm run test:validation-b42-db`: exit 1
-  at disposable prerequisites. **Database verification did not pass.**
-- Explicit mandatory B3.1 DB invocation: exit 1 because the disposable URL is
-  unavailable. No silent skip and no connection to an unverified database.
-- Managed local Docker socket access: denied with Operation not permitted.
-  Task UID is 1000; `psql` is absent. No environment recovery or remote database
-  substitution was attempted.
-
-## Actual disposable CI evidence
-
-Tested implementation: `9e0a7059c50878dce3cec3ecc433303b36ed78c3`.
-[Database run 37782608664](https://github.com/OsaRete/saasscout-landing/actions/runs/37782608664),
-job `113329222345`, completed successfully. Decoded logs were inspected and confirm
-full-chain application of the new migration, all eight independent-connection
-B3.1 concurrency scenarios, an independent reset, and all B4.2 PostgreSQL/PostgREST
-phases. No database suite skipped. Explicit confirmations include:
-
-- Real service promotions, composite one-to-one snapshot embedding, all three
-  polarities and exact sanitized output.
-- Browser-role restrictions, RLS, service grants, RPC owner/search_path and catalog.
-- Shared marker impersonation and legacy exclusion; real FK/CHECK/unique constraints.
-- Actual Discovery persistence/retry, canonical bootstrap/retry, unguarded shared
-  UPDATE/DELETE, and scoped attested mutation rejection.
-- Runtime ledger/snapshot INSERT/UPDATE/DELETE/TRUNCATE rejection; shared TRUNCATE
-  protection via FKs/private permissions; authenticator owner-role isolation.
-- Injected snapshot failure after prior shared/ledger writes rolls back all state.
-- Six concurrent promotion HTTP requests produce one final snapshot and five
-  duplicates; competing shared UPDATE/DELETE fail while an exact retry succeeds.
-- Genuine historical controlled B3.1 evidence stays stored, remains unattested
-  after retry, is excluded by the reader, and retains historical shared mutability.
-- Administrator-only shared tampering is excluded by actual snapshot verification.
-- Actual PostgREST candidate counts cause a generic incomplete-read failure.
-
-[Playwright run 37782608610](https://github.com/OsaRete/saasscout-landing/actions/runs/37782608610),
-job `113329221941`, passed all six tests on the same implementation commit. Its
-summary was inspected: 6 passed, no reported skipped or failed tests.
-
-Earlier database runs are failures, not omitted evidence:
-
-- Runs `37781270547` and `37781722483` passed migrations/B3.1 and early B4.2 phases,
-  then failed because the new SQL fixture allowlist omitted `canonical_problems`.
-- Run `37782024698` also passed SQL constraint tests, then failed an invalid test
-  assumption: SET ROLE within a postgres-authenticated session retains the session
-  owner's switching authority. The corrected test uses SET SESSION AUTHORIZATION
-  authenticator, checks role membership and rejects SET ROLE postgres from the
-  runtime session. No owner-membership vulnerability was demonstrated.
-- Both harness problems were fixed and the full final run above passed.
-
-Local prerequisite failures remain accurate local results; the isolated CI result
-supersedes the absence of database verification. The final evidence-only update
-changes documentation only; the executable code tested at the SHA above is intact.
-
-## Remaining gate and recommendation
-
-**GO for review of the prepared narrow B4.2-B1 implementation; NO-GO for merge or
-production deployment until security review.** Preserve PR #216 as draft and do
-not merge automatically.
-
-Local database reproduction still requires restored Docker socket access and
-PostgreSQL tooling. The default Turbopack build remains sandbox-blocked; Webpack
-and CI Playwright passed. Administrators remain trusted; snapshots do not prove
-real-world human independence, current classification eligibility after promotion,
-or freedom from PII in the previously approved shareable statement. Historical
-unattested evidence has no new integrity guarantee and may exhaust the read cap.
-No downstream consumers exist, and any future consumer must handle generic read
-failure rather than interpret it as zero evidence.
-
-No production/staging writes, `supabase db push`, historical backfill, automatic
-merge, correction/withdrawal workflow, canonical reassignment workflow, legacy
-Knowledge Evolution changes or consumers are included.
+Execution evidence and workflow run IDs will be appended after testing the correction SHA. Mandatory database tests must run against a fresh fixed-loopback disposable Supabase database; the runner fails rather than skips missing prerequisites. No production/staging execution or `supabase db push` is authorized. Merge remains NO-GO until real mandatory suites pass and a new independent security review approves the corrected boundary.

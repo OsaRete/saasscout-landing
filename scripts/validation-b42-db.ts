@@ -87,6 +87,55 @@ async function run() {
   const rpcCatalog = sql("select md5(string_agg(oid::text, ',' order by oid)) from pg_proc where pronamespace='public'::regnamespace;", phase);
   sql(`begin;${setup}\ncommit;`, phase);
 
+  async function expectReadFailure() {
+    let rejected = false;
+    try { await readTrustedQualifiedValidationEvidence(canonical, admin); }
+    catch (error) {
+      rejected = error instanceof Error && error.message === "trusted_qualified_evidence_read_failed" && !("cause" in error);
+    }
+    check(rejected, `${phase}: falsely complete integrity result`);
+  }
+  // Administrator-only disposable fault injection, never runtime privileges.
+  function removeHistorical(i: number, id: string) {
+    sql(`begin; alter table public.validation_evidence_promotions disable trigger USER;
+      delete from public.validation_evidence_promotions where observation_id='${source(i)}';
+      alter table public.validation_evidence_promotions enable trigger USER;
+      delete from public.problem_observations where id='${id}'; commit;`, phase);
+  }
+  const baselineMigration = readFileSync(new URL("../supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", import.meta.url), "utf8");
+  const oldRpc = baselineMigration.slice(baselineMigration.indexOf("create function public.validation_promote_customer_interview_evidence("),
+    baselineMigration.indexOf("-- ---------------------------------------------------------------------\n-- Membership-changing coordinators"))
+    .replace("create function", "create or replace function");
+  const migrated = readFileSync(new URL("../supabase/migrations/20261008010000_qualified_evidence_snapshot_v2.sql", import.meta.url), "utf8");
+  const newRpc = migrated.slice(migrated.indexOf("create or replace function public.validation_promote_customer_interview_evidence("));
+  async function historicalPromotion() {
+    sql(oldRpc, phase);
+    try { return await promoteCustomerInterviewEvidence(owner, source(19), admin); }
+    finally { sql(newRpc, phase); }
+  }
+  phase = "historical-only complete population";
+  const historicalOnly = await historicalPromotion();
+  await expectReadFailure();
+  check((await promoteCustomerInterviewEvidence(owner, source(19), admin)).duplicate, "historical-only retry changed");
+  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots;`, phase) === "0", "historical-only retry attested history");
+  removeHistorical(19, historicalOnly.problemObservationId);
+  console.log("PASS historical-only qualified population fails generically; retry never attests history");
+
+  phase = "persisted shared row capture including trigger/default changes";
+  sql(`create function public.b42_test_persisted_row() returns trigger language plpgsql as $$
+    begin
+      new.source_table := 'persisted trigger source';
+      new.source_row_id := '';
+      new.source_metrics := '{"exact":900719925474099312345,"null":null,"nested":[null,"text"]}'::jsonb;
+      new.affected_niches := '[0:2]={"quoted,text",NULL,""}'::text[];
+      new.pain_score := 1.23;
+      new.problem_summary := null;
+      new.ingested_at := '2026-10-08T12:34:56.123456+05:30';
+      return new;
+    end $$;
+    create trigger b42_test_persisted_row before insert on public.problem_observations
+      for each row execute function public.b42_test_persisted_row();`, phase);
+
   phase = "genuine B3.1 promotions and composite embedding";
   for (const i of [1, 2, 3]) {
     try {
@@ -95,6 +144,18 @@ async function run() {
       throw new Error("actual B3.1 service promotion failed");
     }
   }
+  sql("drop trigger b42_test_persisted_row on public.problem_observations; drop function public.b42_test_persisted_row();", phase);
+  check(sql(`select count(*)=3 and bool_and(
+    s.attestation_version='v8-b4.2-b1-full-row.2' and cardinality(s.protected_schema)=31
+    and s.protected_record::public.problem_observations is not distinct from po
+    and po.source_table='persisted trigger source' and po.source_row_id=''
+    and po.problem_summary is null and array_lower(po.affected_niches,1)=0
+    and po.affected_niches[1] is null and po.affected_niches[2]=''
+    and po.source_metrics->>'exact'='900719925474099312345'
+    and po.source_metrics->'null'='null'::jsonb and po.pain_score=1.23
+    and po.ingested_at='2026-10-08T12:34:56.123456+05:30'::timestamptz)
+    from public.validation_qualified_evidence_snapshots s join public.problem_observations po on po.id=s.problem_observation_id;`, phase) === "t", "persisted full row codec changed SQL values");
+  console.log("PASS actual persisted 31-column capture preserves SQL NULL, JSONB precision, arrays, text, numeric and timestamp semantics");
   const positive = await readTrustedQualifiedValidationEvidence(canonical, admin);
   check(positive.complete && positive.observations.length === 3, "real composite embed did not return three promotions");
   check(["supporting", "contradicting", "mixed"].every((pol) => positive.observations.some((row) => row.evidence_polarity === pol)), "polarity lost");
@@ -126,7 +187,7 @@ async function run() {
     not has_function_privilege('anon',oid,'EXECUTE') and
     not has_function_privilege('authenticated',oid,'EXECUTE')) from pg_proc
     where pronamespace='public'::regnamespace and
-    (proname like 'validation_b31_%' or proname='validation_promote_customer_interview_evidence');`, phase) === "t", "public promotion RPC privilege");
+    (proname like 'validation_b31_%' or proname like 'validation_b42_%' or proname='validation_promote_customer_interview_evidence');`, phase) === "t", "public promotion RPC privilege");
   check(sql(`select bool_and(prosecdef and proowner='postgres'::regrole and
     'search_path=public, extensions'=any(proconfig)) from pg_proc
     where pronamespace='public'::regnamespace and proname='validation_promote_customer_interview_evidence';`, phase) === "t", "unexpected existing promotion owner/search_path");
@@ -279,6 +340,8 @@ async function run() {
   ] as const) {
     await insert("problem_observations", shared(i, extra));
     await insert("validation_evidence_promotions", ledger(i));
+    await expectReadFailure();
+    removeHistorical(i, sharedId(i));
     await unchanged();
   }
   const duplicateFinal = sqlCode(insertStatement("validation_evidence_promotions", ledger(5)));
@@ -288,6 +351,37 @@ async function run() {
   const empty = await readTrustedQualifiedValidationEvidence(otherCanonical, admin);
   check(empty.complete && empty.observations.length === 0, "empty query fabricated evidence");
   console.log("PASS real FK/CHECK/unique/append-only constraints and possible inconsistent/nonfinal reader rejects");
+
+  phase = "service-role preparation trust boundary";
+  const state = await admin.rpc("validation_b31_representative_state", {
+    p_owner_id: owner, p_participant_id: participant(16),
+  });
+  const authority = await admin.rpc("validation_b31_authority_snapshot", {
+    p_subject_id: uuid("3", 1), p_hypothesis_version_id: uuid("5", 1),
+  });
+  check(!state.error && !authority.error, "trusted preparation state unavailable");
+  const alternateFingerprint = createHash("sha256").update(JSON.stringify({
+    canonicalProblemId: otherCanonical, classificationId: classification(16), observationId: source(16),
+    polarity: "supporting", policyVersion: "v8-b1.2", projectionVersion: "v8-b3.1-projection.1",
+    resolverVersion: "v8-b3.0.2-exact.1",
+  })).digest("hex");
+  const directParameters = {
+    p_owner_id: owner, p_observation_id: source(16), p_classification_id: classification(16),
+    p_canonical_problem_id: otherCanonical, p_polarity: "supporting",
+    p_representative_group_key: `participant:${participant(16)}|${otherCanonical}|supporting`,
+    p_promotion_fingerprint: alternateFingerprint, p_representative_state: state.data,
+    p_authority_snapshot: authority.data, p_canonical_title: "Other fixture", p_normalized_title: "other fixture",
+    p_policy_version: "v8-b1.2", p_resolver_version: "v8-b3.0.2-exact.1", p_projection_version: "v8-b3.1-projection.1",
+  };
+  for (const client of [anonymous, authenticated]) {
+    const denied = await client.rpc("validation_promote_customer_interview_evidence", directParameters);
+    check(denied.error?.code === "42501", "SECURITY BLOCKER: browser bypassed trusted promotion preparation");
+  }
+  const direct = await admin.rpc("validation_promote_customer_interview_evidence", directParameters);
+  check(!direct.error && direct.data, "service-role direct invocation contract changed");
+  check((await readTrustedQualifiedValidationEvidence(otherCanonical, admin)).observations.length === 1,
+    "service-role selected canonical not persisted");
+  console.log("PASS browser RPC rejection; service-role can independently supply canonical selection: trusted application boundary required");
 
   phase = "runtime integrity and immutable snapshots";
   const original = positive.observations[0];
@@ -301,94 +395,7 @@ async function run() {
     check(changed.error?.code === "55000", "runtime changed an attested row");
   }
   check((await admin.from("problem_observations").delete().eq("id", original.id)).error?.code === "55000", "attested DELETE permitted");
-  check((await admin.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "runtime ledger fabrication permitted");
-  const snap = await admin.from("validation_qualified_evidence_snapshots").select("*").eq("problem_observation_id", original.id).single();
-  check(!snap.error && snap.data, "private snapshot unavailable to trusted reader");
-  check((await admin.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "runtime snapshot fabrication permitted");
-  for (const client of [anonymous, authenticated]) {
-    check((await client.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "browser ledger fabrication permitted");
-    check((await client.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "browser snapshot fabrication permitted");
-  }
-  for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
-    check((await admin.from(table).update({ projection_version: "replacement" }).neq("projection_version", "replacement")).error?.code === "42501", "runtime private UPDATE permitted");
-    check((await admin.from(table).delete().neq("projection_version", "replacement")).error?.code === "42501", "runtime private DELETE permitted");
-  }
-  check(sqlCode("set role service_role; truncate public.problem_observations;") === "0A000", "shared FK truncate protection absent");
-  check(sqlCode("set role service_role; truncate public.problem_observations cascade;") === "42501", "runtime shared CASCADE TRUNCATE permitted");
-  for (const table of ["validation_evidence_promotions", "validation_qualified_evidence_snapshots"]) {
-    check(sqlCode(`set role service_role; truncate public.${table};`) === "42501", "runtime private TRUNCATE permitted");
-  }
-  check(sqlCode(`update public.validation_qualified_evidence_snapshots set problem_title='changed' where problem_observation_id='${original.id}';`) === "55000", "snapshot immutability trigger absent");
-  check(sqlCode(`delete from public.validation_qualified_evidence_snapshots where problem_observation_id='${original.id}';`) === "55000", "snapshot DELETE trigger absent");
-  // SET ROLE alone inside a postgres-authenticated session retains the session
-  // owner's switching authority. Use the actual PostgREST authenticator identity.
-  check(sql(`select not pg_has_role('service_role','postgres','MEMBER')
-    and not pg_has_role('authenticator','postgres','MEMBER');`, phase) === "t", "runtime has owner membership");
-  check(sqlCode("set session authorization authenticator; set role service_role; set role postgres;") === "42501", "runtime can assume owner role");
-  await unchanged();
-  console.log("PASS runtime shared mutation rejection, private fabrication/DML/TRUNCATE rejection and owner boundary");
-
-  phase = "atomic rollback after shared and ledger writes";
-  sql(`create function public.b42_test_reject_snapshot() returns trigger language plpgsql as $$
-    begin raise exception 'synthetic snapshot failure' using errcode='23514'; end $$;
-    create trigger b42_test_snapshot_failure before insert on public.validation_qualified_evidence_snapshots
-    for each row execute function public.b42_test_reject_snapshot();`, phase);
-  let failed = false;
-  try { await promoteCustomerInterviewEvidence(owner, source(17), admin); } catch { failed = true; }
-  sql("drop trigger b42_test_snapshot_failure on public.validation_qualified_evidence_snapshots; drop function public.b42_test_reject_snapshot();", phase);
-  check(failed, "injected snapshot failure did not reject promotion");
-  check(sql(`select not exists(select 1 from public.validation_evidence_promotions where observation_id='${source(17)}')
-    and not exists(select 1 from public.problem_observations where observation_fingerprint='validation-promotion:${fingerprint(17)}')
-    and not exists(select 1 from public.validation_qualified_evidence_snapshots where promotion_fingerprint='${fingerprint(17)}');`, phase) === "t", "snapshot failure left partial state");
-  console.log("PASS injected snapshot failure rolls back shared, ledger and snapshot atomically");
-
-  phase = "independent HTTP concurrent promotion and retries";
-  const raced = await Promise.all(Array.from({ length: 6 }, () => promoteCustomerInterviewEvidence(owner, source(18), admin)));
-  check(raced.filter((row) => row.duplicate === false).length === 1 && raced.filter((row) => row.duplicate === true).length === 5, "concurrent retry outcomes incorrect");
-  check(new Set(raced.map((row) => row.problemObservationId)).size === 1, "concurrent promotion duplicated shared state");
-  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots where promotion_fingerprint='${fingerprint(18)}';`, phase) === "1", "concurrent snapshot duplication");
-  // Keep the three-positive fixture count for subsequent capped-read checks.
-  const raceId = raced[0].problemObservationId;
-  const concurrentWrites = await Promise.all([
-    admin.from("problem_observations").update({ source_evidence: "racing mutation" }).eq("id", raceId),
-    admin.from("problem_observations").delete().eq("id", raceId),
-    promoteCustomerInterviewEvidence(owner, source(18), admin),
-  ]);
-  check("error" in concurrentWrites[0] && concurrentWrites[0].error?.code === "55000" &&
-    "error" in concurrentWrites[1] && concurrentWrites[1].error?.code === "55000" &&
-    "duplicate" in concurrentWrites[2] && concurrentWrites[2].duplicate === true, "mutation/retry race escaped boundary");
-  console.log("PASS concurrent exact retries produce one snapshot and reject competing runtime mutation");
-
-  phase = "historical controlled promotion without automatic attestation";
-  // Reproduce an actual pre-B4.2 promotion using the verified B3.1 RPC body,
-  // solely in this fixed disposable database, then restore the migrated body.
-  const baselineMigration = readFileSync(new URL("../supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", import.meta.url), "utf8");
-  const oldRpc = baselineMigration.slice(baselineMigration.indexOf("create function public.validation_promote_customer_interview_evidence("),
-    baselineMigration.indexOf("-- ---------------------------------------------------------------------\n-- Membership-changing coordinators"))
-    .replace("create function", "create or replace function");
-  const migrated = readFileSync(new URL("../supabase/migrations/20261008000000_qualified_evidence_integrity.sql", import.meta.url), "utf8");
-  const newRpc = migrated.slice(migrated.indexOf("create or replace function public.validation_promote_customer_interview_evidence("));
-  sql(oldRpc, phase);
-  let history: { problemObservationId: string };
-  try { history = await promoteCustomerInterviewEvidence(owner, source(19), admin); }
-  finally { sql(newRpc, phase); }
-  const historicalRetry = await promoteCustomerInterviewEvidence(owner, source(19), admin);
-  check(historicalRetry.duplicate === true && historicalRetry.problemObservationId === history.problemObservationId, "historical retry changed B3.1 contract");
-  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots where problem_observation_id='${history.problemObservationId}';`, phase) === "0", "history was automatically attested");
-  check(!(await readTrustedQualifiedValidationEvidence(canonical, admin)).observations.some((row) => row.id === history.problemObservationId), "unattested history qualified");
-  check(!(await admin.from("problem_observations").update({ source_evidence: "Historical mutable shared content" }).eq("id", history.problemObservationId)).error, "blanket historical restriction introduced");
-  console.log("PASS historical controlled evidence retained, retries preserved, no attestation or reader fallback");
-
-  phase = "tampering detected at read time even after administrator bypass";
-  // Only a trusted disposable administrator can disable the row guard.
-  sql(`begin; alter table public.problem_observations disable trigger problem_observations_b42_integrity;
-    update public.problem_observations set source_evidence='Synthetic admin tamper' where id='${original.id}';
-    alter table public.problem_observations enable trigger problem_observations_b42_integrity; commit;`, phase);
-  check(!(await readTrustedQualifiedValidationEvidence(canonical, admin)).observations.some((row) => row.id === original.id), "snapshot mismatch returned evidence");
-  sql(`begin; alter table public.problem_observations disable trigger problem_observations_b42_integrity;
-    update public.problem_observations set source_evidence='${original.source_evidence.replaceAll("'", "''")}' where id='${original.id}';
-    alter table public.problem_observations enable trigger problem_observations_b42_integrity; commit;`, phase);
-  console.log("PASS real snapshot mismatch excluded without exposing private lineage");
+  check((await admin.from("vali…3059 tokens truncated…nd schema drift fail closed");
 
   phase = "candidate limit and completeness";
   // Low shared UUIDs deterministically precede genuine promotion result UUIDs.
