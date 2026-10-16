@@ -60,3 +60,106 @@ These are offline cryptographic and isolated harness properties only. A passing 
 3. Implement and test least-privilege database authorization, persisted owner/evidence/revision checks and atomic lifecycle changes. Pass B2.2's disposable PostgreSQL/PostgREST matrix, integrity/current-reader consistency and conservative historical compatibility gates before considering endpoint enablement.
 
 **Smallest next step:** a documentation-only enrollment/recovery and verifier trust-boundary design naming which administrators are in scope, who can change mappings, and the acceptance tests for compromise/recovery. Keep withdrawal disabled; this proof does not clear B2.3's NO-GO.
+
+## B4.2-B2.5 — Protected key lifecycle extension
+
+Read against verified main `6abb508640c608bbcad346481c02d488157a5909`
+(merged PR #221), together with B2.1–B2.3 linked above. B2.4's enrollment
+limitations above describe the original fixed-map experiment. This extension
+models lifecycle policy only; the real-world blockers remain **NOT VERIFIED**.
+It improves security knowledge for Validation evidence provenance and the Data
+Moat without changing any production architectural layer.
+
+```sh
+node --test --test-isolation=none tests/poc/independent-owner-authorization/*.test.mjs
+```
+
+`key-lifecycle.mjs` simulates an independent authority with a private registry,
+version compare-and-set transitions and immutable audit snapshots. Enrollment
+requires an opaque, single-use external decision binding action, independently
+established owner, exact Ed25519 key, expected version and decision reference.
+The decision issuer's `issue()` capability is **privileged test-harness input**:
+calling it explicitly assumes independent authentication has already happened.
+It never examines Supabase Auth or automatically equates an Auth subject with
+independent owner control. A copied token, approval boolean, email-recovery
+claim, service_role string or caller owner ID is not a decision. These tests do
+not exercise actual Supabase privileges.
+
+Owner rotation uses the existing B2.4 canonical signing helper and domain with
+operation `rotate-key`, audience `saasscout:offline-key-lifecycle:v1`, registry
+version in `revision`, and SHA-256 SPKI replacement fingerprint in the
+`evidence_promotion_id` slot. Other fields retain their codec/time semantics.
+This reuse is a restricted offline contract, not a production protocol.
+Only the active key may sign a rotation; the new key is accepted only when its
+fingerprint is covered by that signature. Old keys become explicitly revoked
+in history and cannot be reactivated. There is no general key setter.
+
+Loss handling requires an independent decision even to begin recovery (avoids
+unauthenticated suspension). It enters `pending recovery`; all owner withdrawal
+and rotation verification then fails. A separate independent recovery decision
+at the pending version is necessary to activate a distinct replacement and
+record revocation of the old key. No silent replacement, email-only recovery,
+Auth-admin approval or service-role approval is supported. Conflicting/replayed
+transitions fail. The audit records owner, version/predecessor, key state and
+fingerprint, transition kind, decision/request reference and synthetic time.
+Only synthetic identities and in-memory generated keys are used.
+
+The new verifier captures trusted evidence/owner/revision/audience bindings and
+reads current registry state on each request. The application supplies only the
+original B2.4 envelope, never registry state or keys. It reuses B2.4 verification
+and a shared replay store, checking the registry version again at synchronous
+consumption. Verification linearizes at consumption; later transitions do not
+retroactively cancel an earlier decision. No withdrawal is executed.
+
+**PASS — isolated tests:** explicitly authorized enrollment; unauthorized and
+foreign-issuer enrollment rejection; service-key substitution and forged-owner
+rejection; active-key rotation; unrelated/stale/revoked-key rejection; pending
+recovery denial; independent-only recovery with version history; replay and
+conflicting transition rejection; trusted-registry-only withdrawal verification.
+Audit and registry mutation, key resurrection, and cross-operation proof reuse
+are denied by the modeled interfaces. Factory inputs remain trusted.
+
+**External assumptions and required separation:** a real authority must
+independently establish the actor's right to control the persisted workspace
+owner, informed enrollment/recovery consent, exact key binding and possession,
+freshness, decision scope, expiry/revocation and accountable recovery review.
+This simulation does not choose a production identity-verification process or
+implement new-key proof of possession. Recovery must remain unavailable until
+that policy is reviewed. Same-project Auth identity or email access alone is
+insufficient.
+
+At minimum, registry writes, decision issuance and verifier deployment/config,
+trusted time, replay storage and audit retention need separately controlled
+credentials, IAM, CI/CD and infrastructure administration. SaaSScout application
+administrators, Supabase service_role/Auth admins and application-database
+administrators must have no ability to issue decisions, replace keys/trust roots,
+change verifier code/policy, impersonate its workload identity or rewrite its
+state/audit. A second same-project service key or process under the same
+administrator does not establish this separation. The application gets only a
+verification client; the verifier gets registry read access, not decision-issuer
+credentials. Protect the eventual enforcing executor and its authenticated
+channel too: an application-supplied `verified: true` is never authority.
+
+**NOT VERIFIED:** real independent enrollment/recovery; credential and
+infrastructure isolation; verifier compromise resistance; operational security;
+production database enforcement. All capabilities here share one JS process.
+The privileged harness can replace everything. History, versions and replay
+are in memory, atomic only in one isolate, not durable across restarts/workers;
+there is no persistent transaction, denial audit, rate limiting, receipt signing
+or database coupling. An administrator controlling enforcement can bypass it;
+an external authoritative event/consumption boundary is needed if database
+administrators are adversaries. Offline passes do not establish production-ready
+authorization and do not clear B2.3's NO-GO.
+
+**Smallest disposable integration test:** separately authorize two isolated
+workloads with independent admin/IAM and synthetic accounts only: a minimal
+registry/verifier and an adversarial application client. Prove the app's actual
+credentials cannot enroll, overwrite, recover, redeploy or impersonate the
+verifier; test rotation/loss/recovery and stale requests over an authenticated
+channel with durable atomic version/replay history and restart/race tests.
+Record the independently reviewed enrollment/recovery decision source instead
+of assuming it. Keep the outcome a verification receipt; no Validation withdrawal
+execution. Database lifecycle enforcement and B2.2's full disposable
+PostgreSQL/PostgREST matrix remain separate later gates. No production/staging,
+real provisioning/enrollment, endpoints, migrations, backfill, Knowledge
+Evolution integration, merge or deployment is included here.
