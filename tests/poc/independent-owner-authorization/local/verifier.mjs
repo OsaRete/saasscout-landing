@@ -13,6 +13,12 @@ import {
 } from "../key-lifecycle.mjs";
 import { openReplay } from "./replay.mjs";
 const cfg = JSON.parse(readFileSync(process.argv[2], "utf8"));
+if (
+  cfg.isolated &&
+  (process.getuid() !== 10002 ||
+    !/^CapEff:\s+0+$/m.test(readFileSync("/proc/self/status", "utf8")))
+)
+  throw Error("Wrong verifier UID");
 const now = () => Math.floor(Date.now() / 1000);
 const external = createSimulatedExternalAuthority();
 const authority = createProtectedKeyAuthority({
