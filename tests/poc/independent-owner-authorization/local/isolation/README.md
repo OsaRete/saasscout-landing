@@ -48,13 +48,13 @@ Build context must be exactly the POC directory (not the repository):
 ```powershell
 docker build --tag saasscout-b27-disposable --file .\tests\poc\independent-owner-authorization\local\isolation\Dockerfile .\tests\poc\independent-owner-authorization
 if ($LASTEXITCODE -ne 0) { throw 'Isolation image build failed' }
-docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add DAC_OVERRIDE --security-opt no-new-privileges:true --pids-limit 64 --memory 256m --cpus 1 saasscout-b27-disposable
+docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add KILL --security-opt no-new-privileges:true --pids-limit 64 --memory 256m --cpus 1 saasscout-b27-disposable
 if ($LASTEXITCODE -ne 0) { throw 'Real isolation test FAILED; do not claim PASS' }
 docker image rm saasscout-b27-disposable
 ```
 
 Root coordinator capabilities are confined to the container; they permit fixture
-ownership setup and dropping child identities. Executed non-root children have
+ownership setup, dropping child identities and stopping children on failure. Executed non-root children have
 no effective capabilities and cannot regain them with no-new-privileges. Code is
 on a read-only root filesystem. Loopback works inside the isolated network
 namespace; no ports are published. /tmp is disposable. `--rm` cleans container

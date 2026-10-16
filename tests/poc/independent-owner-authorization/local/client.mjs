@@ -1,5 +1,5 @@
 // Untrusted workload: receives client credential, pinned response public key,
-// and synthetic signed attack fixtures. Never receives registry or DB paths.
+// and synthetic signed attack fixtures. Isolation mode also supplies attack paths.
 import {
   readFileSync,
   writeFileSync,
