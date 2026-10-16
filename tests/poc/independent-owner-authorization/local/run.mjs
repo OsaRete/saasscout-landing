@@ -1,14 +1,30 @@
 // Explicit local entry point. NEVER run in restricted Codex Cloud.
 import { fork } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  chmodSync,
+  chownSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes, createHmac } from "node:crypto";
 import { createSignedAuthorization } from "../authorization.mjs";
 import { keyFingerprint, LIFECYCLE_AUDIENCE } from "../key-lifecycle.mjs";
 const dir = mkdtempSync(join(tmpdir(), "synthetic-owner-verifier-"));
+const isolated = process.argv.includes("--isolation");
+if (isolated && (process.platform !== "linux" || process.getuid() !== 0))
+  throw Error(
+    "Isolation mode requires the disposable Linux container root coordinator",
+  );
 const children = new Set();
+// Only the trusted coordinator has root. Executed children lose root capabilities.
+if (isolated) {
+  chmodSync(dir, 0o700);
+  chownSync(dir, 10002, 10002);
+}
 const publicPem = (key) => key.export({ type: "spki", format: "pem" });
 const privatePem = (key) => key.export({ type: "pkcs8", format: "pem" });
 const pair = () => generateKeyPairSync("ed25519");
@@ -36,6 +52,7 @@ const signed = (changes = {}, key = owner.privateKey) =>
 const valid = signed();
 const token = randomBytes(32).toString("hex");
 const cfg = {
+  isolated,
   token,
   expected,
   database: join(dir, "replay.sqlite"),
@@ -62,11 +79,21 @@ const cfg = {
 };
 const configPath = join(dir, "verifier.json");
 writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+if (isolated) chownSync(configPath, 10002, 10002);
 function launch(name) {
   const child = fork(
     fileURLToPath(new URL(name, import.meta.url)),
     name === "verifier.mjs" ? [configPath] : [],
-    { env: {}, stdio: ["ignore", "inherit", "inherit", "ipc"] },
+    {
+      ...(isolated
+        ? {
+            uid: name === "verifier.mjs" ? 10002 : 10001,
+            gid: name === "verifier.mjs" ? 10002 : 10001,
+          }
+        : {}),
+      env: {},
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+    },
   );
   children.add(child);
   child.once("exit", () => children.delete(child));
@@ -120,6 +147,9 @@ async function runClient(server, phase, attacks = []) {
   const child = launch("client.mjs");
   const result = await message(child, {
     phase,
+    protectedPaths: isolated
+      ? [configPath, cfg.database, cfg.database + "-wal", cfg.database + "-shm"]
+      : [],
     attacks,
     valid,
     fresh: signed({ request_id: "synthetic-after-restart" }),
@@ -136,6 +166,16 @@ try {
   const server = await message(verifier);
   const attacks = [
     ["invalid signature", signed({}, attacker.privateKey)],
+    ["missing owner proof", null],
+    ...["service_role", "internal_tester"].map((credential) => [
+      `${credential} is not owner authority`,
+      {
+        ...valid,
+        signature: createHmac("sha512", `SYNTHETIC-ONLY-${credential}`)
+          .update(valid.payload)
+          .digest("base64url"),
+      },
+    ]),
     ["tampered signature", { ...valid, signature: "A".repeat(86) }],
     [
       "tampered payload",
@@ -185,6 +225,7 @@ try {
   ]);
   await exited(verifier, true);
   console.log("PASS local independent verifier integration");
+  if (isolated) console.log("PASS disposable UID/storage isolation boundary");
 } finally {
   await Promise.all(
     [...children].map(

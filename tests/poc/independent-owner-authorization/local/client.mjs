@@ -1,10 +1,45 @@
 // Untrusted workload: receives client credential, pinned response public key,
 // and synthetic signed attack fixtures. Never receives registry or DB paths.
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  renameSync,
+  chmodSync,
+  rmSync,
+} from "node:fs";
 import assert from "node:assert/strict";
 import { randomBytes, createPublicKey, verify } from "node:crypto";
 process.once("message", async (cfg) => {
   try {
     assert.notEqual(process.pid, cfg.verifierPid);
+    if (cfg.protectedPaths?.length) {
+      assert.equal(process.getuid(), 10001);
+      assert.match(
+        readFileSync("/proc/self/status", "utf8"),
+        /^CapEff:\s+0+$/m,
+      );
+      assert.throws(() => process.kill(cfg.verifierPid, 0), { code: "EPERM" });
+      // Known exact paths: denial must come from permissions, not obscurity.
+      for (const path of cfg.protectedPaths) {
+        for (const attack of [
+          () => readFileSync(path),
+          () => writeFileSync(path, "SYNTHETIC-TAMPER"),
+          () => unlinkSync(path),
+          () => renameSync(path, path + ".replaced"),
+          () => chmodSync(path, 0o666),
+          () =>
+            rmSync(path.slice(0, path.lastIndexOf("/")), { recursive: true }),
+        ])
+          assert.throws(
+            attack,
+            (error) => error.code === "EACCES" || error.code === "EPERM",
+          );
+      }
+      console.log(
+        "PASS application UID denied credential/registry overwrite and replay read/write/reset",
+      );
+    }
     const key = createPublicKey(cfg.responsePublicKey);
     async function request(authorization, path = "/verify", token = cfg.token) {
       const nonce = randomBytes(32).toString("hex");
@@ -51,11 +86,20 @@ process.once("message", async (cfg) => {
         403,
       );
       assert.equal((await request(cfg.valid, "/verify", null)).status, 403);
-      console.log("PASS unauthenticated client denied");
+      for (const token of [
+        "SYNTHETIC-ONLY-service_role",
+        "SYNTHETIC-ONLY-internal_tester",
+      ])
+        assert.equal((await request(cfg.valid, "/verify", token)).status, 403);
+      console.log(
+        "PASS unauthenticated and substituted application credentials denied",
+      );
       for (const path of [
         "/enroll",
         "/rotate",
         "/recover",
+        "/revoke",
+        "/begin-recovery",
         "/admin",
         "/registry",
         "/reset-replay",
