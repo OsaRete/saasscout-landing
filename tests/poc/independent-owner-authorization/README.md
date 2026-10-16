@@ -163,3 +163,11 @@ execution. Database lifecycle enforcement and B2.2's full disposable
 PostgreSQL/PostgREST matrix remain separate later gates. No production/staging,
 real provisioning/enrollment, endpoints, migrations, backfill, Knowledge
 Evolution integration, merge or deployment is included here.
+
+## B4.2-B2.6 — Local independent verifier integration preparation
+
+See [local integration instructions](local/README.md) for the disposable,
+process-separated client/verifier, authenticated local communication and SQLite
+replay tests. **Integration tests NOT EXECUTED** in restricted Codex Cloud.
+This local test preparation does not establish real IAM isolation or resistance
+to host administrators and does not clear the production NO-GO above.
