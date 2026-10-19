@@ -1,6 +1,10 @@
 // SYNTHETIC / OFFLINE ONLY. No application imports or production authorization.
 import { DatabaseSync } from "node:sqlite";
 import { createHash, createPublicKey, verify } from "node:crypto";
+import {
+  verifySyntheticRegistration,
+  originConfig,
+} from "./webauthn-registration.mjs";
 import { keyFingerprint } from "./key-lifecycle.mjs";
 
 const DOMAIN = "SaaSScout:synthetic-durable-registry:v1\n";
@@ -30,10 +34,16 @@ function binary(s, min, max) {
   if (b.length < min || b.length > max || b.toString("base64url") !== s) fail();
   return b;
 }
-function publicKey(pem) {
+function publicKey(pem, ec = false) {
   if (typeof pem !== "string" || pem.length > 1024) fail();
   const k = createPublicKey(pem);
-  keyFingerprint(k); // Same Ed25519-only synthetic profile as B2.5, NOT WebAuthn.
+  if (ec) {
+    if (
+      k.asymmetricKeyType !== "ec" ||
+      k.asymmetricKeyDetails?.namedCurve !== "prime256v1"
+    )
+      fail();
+  } else keyFingerprint(k);
   if (k.export({ type: "spki", format: "pem" }) !== pem) fail();
   return k;
 }
@@ -41,7 +51,8 @@ function credential(value) {
   const c = record(value, ["id", "publicKey", "userHandle"]);
   binary(c.id, 1, 1024);
   binary(c.userHandle, 1, 64);
-  publicKey(c.publicKey);
+  const k = createPublicKey(c.publicKey);
+  publicKey(c.publicKey, k.asymmetricKeyType === "ec");
   return c;
 }
 /** Synthetic transition bytes only; never a production/withdrawal intent. */
@@ -111,6 +122,7 @@ export function openSyntheticRegistry({
   now,
   enabled = false,
   create = false,
+  webauthn = null,
 }) {
   if (
     enabled !== true ||
@@ -133,11 +145,13 @@ export function openSyntheticRegistry({
     expiresAt: 1,
     credential: null,
   });
+  const profile = webauthn === null ? null : originConfig(webauthn);
   const config = JSON.stringify({
     version: 1,
     ownerId,
     ownerSubject,
     roots: roots.map(keyFingerprint),
+    ...(profile ? { webauthn: profile } : {}),
   });
   const db = new DatabaseSync(path, { open: true });
   try {
@@ -152,6 +166,10 @@ export function openSyntheticRegistry({
           CREATE TABLE events (epoch INTEGER PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, body TEXT NOT NULL, previous_hash TEXT NOT NULL, digest TEXT NOT NULL) STRICT;
           CREATE TRIGGER no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'append only'); END;
           CREATE TRIGGER no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'append only'); END;`);
+        if (profile)
+          db.exec(`CREATE TABLE possession_uses (request_id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, epoch INTEGER NOT NULL) STRICT;
+          CREATE TRIGGER proof_no_update BEFORE UPDATE ON possession_uses BEGIN SELECT RAISE(ABORT, 'append only'); END;
+          CREATE TRIGGER proof_no_delete BEFORE DELETE ON possession_uses BEGIN SELECT RAISE(ABORT, 'append only'); END;`);
         db.prepare("INSERT INTO config VALUES(1, ?, 0, ?)").run(
           config,
           hash(config),
@@ -233,16 +251,32 @@ export function openSyntheticRegistry({
       if (
         external
           ? e.ownerProof !== null
-          : !old || !signed(publicKey(old.publicKey), e.request, e.ownerProof)
+          : !old ||
+            !(profile
+              ? verify(
+                  "sha256",
+                  Buffer.from(e.request),
+                  publicKey(old.publicKey, true),
+                  binary(e.ownerProof, 8, 72),
+                )
+              : signed(publicKey(old.publicKey), e.request, e.ownerProof))
       )
         fail();
       if (r.credential) {
         if (
-          !signed(
-            publicKey(r.credential.publicKey),
-            "possession\n" + e.request,
-            e.possession,
-          ) ||
+          !(profile
+            ? (verifySyntheticRegistration(
+                e.request,
+                e.possession,
+                r.credential,
+                profile,
+              ),
+              true)
+            : signed(
+                publicKey(r.credential.publicKey),
+                "possession\n" + e.request,
+                e.possession,
+              )) ||
           state.credentials.some(
             (c) =>
               c.id === r.credential.id ||
@@ -314,6 +348,69 @@ export function openSyntheticRegistry({
           return frozen({
             kind: "synthetic-registry-transition",
             epoch: state.epoch,
+            productionAuthorization: "disabled",
+          });
+        } catch {
+          db.exec("ROLLBACK");
+          fail();
+        }
+      },
+      // Privileged synchronous verifier hook; no execution or transferable authority.
+      consumePossession(binding, requestId, challenge, check) {
+        if (
+          !profile ||
+          typeof check !== "function" ||
+          typeof requestId !== "string" ||
+          !/^[0-9a-f-]{36}$/.test(requestId) ||
+          typeof challenge !== "string" ||
+          !/^[A-Za-z0-9_-]{43}$/.test(challenge)
+        )
+          fail();
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const { state } = read();
+          const c = state.credentials.at(-1);
+          const b = record(binding, [
+            "ownerId",
+            "ownerSubject",
+            "credentialId",
+            "epoch",
+          ]);
+          if (
+            b.ownerId !== ownerId ||
+            b.ownerSubject !== ownerSubject ||
+            b.epoch !== state.epoch ||
+            state.status !== "active" ||
+            !c ||
+            c.status !== "active" ||
+            c.id !== b.credentialId
+          )
+            fail();
+          const snapshot = frozen({
+            ownerId,
+            ownerSubject,
+            epoch: state.epoch,
+            credential: { ...c },
+            webauthn: { ...profile },
+            productionAuthorization: "disabled",
+          });
+          const result = check(snapshot);
+          if (
+            !result ||
+            result.kind !== "webauthn-proof-only" ||
+            result.productionAuthorization !== "disabled" ||
+            result.then
+          )
+            fail();
+          // Same write lock covers current mapping, verification and replay insertion.
+          db.prepare("INSERT INTO possession_uses VALUES (?, ?, ?)").run(
+            requestId,
+            challenge,
+            snapshot.epoch,
+          );
+          db.exec("COMMIT");
+          return frozen({
+            kind: "synthetic-possession-only",
             productionAuthorization: "disabled",
           });
         } catch {
