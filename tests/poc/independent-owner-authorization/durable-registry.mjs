@@ -138,6 +138,7 @@ export function openSyntheticRegistry({
   enabled = false,
   create = false,
   webauthn = null,
+  registrationProfile = "zero-aaguid",
 }) {
   if (
     enabled !== true ||
@@ -161,12 +162,20 @@ export function openSyntheticRegistry({
     credential: null,
   });
   const profile = webauthn === null ? null : originConfig(webauthn);
+  // Privileged, store-pinned test policy. Never selected by enrollment evidence.
+  if (
+    !["zero-aaguid", "cdp-platform-none-v1"].includes(registrationProfile) ||
+    (registrationProfile !== "zero-aaguid" && !profile)
+  )
+    fail();
   const config = JSON.stringify({
     version: 1,
     ownerId,
     ownerSubject,
     roots: roots.map(keyFingerprint),
     ...(profile ? { webauthn: profile } : {}),
+    // Preserve existing default store configuration bytes; no migration.
+    ...(registrationProfile !== "zero-aaguid" ? { registrationProfile } : {}),
   });
   const db = new DatabaseSync(path, { open: true });
   try {
@@ -382,6 +391,7 @@ export function openSyntheticRegistry({
                 r.credential,
                 profile,
                 initiation ?? e.request,
+                registrationProfile,
               ),
               true)
             : signed(
@@ -565,16 +575,19 @@ export function openSyntheticRegistry({
           !/^[A-Za-z0-9_-]{43}$/.test(challenge)
         )
           fail();
+        let stage = "read-integrity";
         db.exec("BEGIN IMMEDIATE");
         try {
           const { state } = read();
           const c = state.credentials.at(-1);
+          stage = "binding-shape";
           const b = record(binding, [
             "ownerId",
             "ownerSubject",
             "credentialId",
             "epoch",
           ]);
+          stage = "current-binding";
           if (
             b.ownerId !== ownerId ||
             b.ownerSubject !== ownerSubject ||
@@ -591,9 +604,12 @@ export function openSyntheticRegistry({
             epoch: state.epoch,
             credential: { ...c },
             webauthn: { ...profile },
+            registrationProfile,
             productionAuthorization: "disabled",
           });
+          stage = "assertion-verifier";
           const result = check(snapshot);
+          stage = "verifier-result";
           if (
             !result ||
             result.kind !== "webauthn-proof-only" ||
@@ -602,19 +618,53 @@ export function openSyntheticRegistry({
           )
             fail();
           // Same write lock covers current mapping, verification and replay insertion.
+          stage = "replay-insertion";
           db.prepare("INSERT INTO possession_uses VALUES (?, ?, ?)").run(
             requestId,
             challenge,
             snapshot.epoch,
           );
+          stage = "commit";
           db.exec("COMMIT");
           return frozen({
             kind: "synthetic-possession-only",
             productionAuthorization: "disabled",
           });
-        } catch {
+        } catch (error) {
           db.exec("ROLLBACK");
-          fail();
+          // Only fixed shared-verifier codes may survive this test-only boundary.
+          // Never attach a callback/native error, message, stack or evidence.
+          const proofStages = [
+            "compatibility-profile",
+            "client-data-extension-marker-value",
+            "trusted-context-shape",
+            "intent",
+            "origin-configuration",
+            "registry-shape",
+            "credential-shape",
+            "registry-binding",
+            "credential-identity-key",
+            "assertion-shape",
+            "assertion-credential-identity",
+            "user-handle",
+            "client-data-encoding",
+            "client-data-shape",
+            "client-data-shape-extension-marker",
+            "client-data-context",
+            "authenticator-data-length",
+            "authenticator-rp-id-hash",
+            "authenticator-flags",
+            "signature-encoding",
+            "signature-verification",
+          ];
+          const proofCode =
+            stage === "assertion-verifier" &&
+            proofStages
+              .map((value) => `webauthn-proof:${value}`)
+              .find((value) => value === error?.cause);
+          throw new Error("Invalid synthetic registry", {
+            cause: `synthetic-possession:${stage}${proofCode ? `:${proofCode}` : ""}`,
+          });
         }
       },
       lookup({ ownerId: id, ownerSubject: subject, credentialId, epoch }) {
