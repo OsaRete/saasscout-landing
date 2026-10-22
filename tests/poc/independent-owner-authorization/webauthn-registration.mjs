@@ -1,5 +1,10 @@
 // OFFLINE synthetic restricted WebAuthn profile. No identity attestation claim.
 import { createHash, createPublicKey, verify } from "node:crypto";
+// Chromium 149 GREASE member. WebAuthn permits extra client-data members but
+// does not standardize this name/value. This restricted POC pins exactly one.
+const MARKER = "other_keys_can_be_added_here";
+const MARKER_VALUE =
+  "do not compare clientDataJSON against a template. See https://goo.gl/yabPex";
 const fail = (stage) => {
   const error = new Error("Invalid synthetic registration");
   // Fixed labels only; this isolated POC never includes evidence in diagnostics.
@@ -22,12 +27,9 @@ export function dataRecord(value, fields, stage = "record") {
   const extra = keys.filter((key) => !fields.includes(key));
   if (extra.length) {
     if (stage === "create-client" || stage === "get-client") {
-      // Identify only known optional key names, never their values. Both remain
-      // REJECTED: these labels do not extend the synthetic profile.
+      // Identify the prohibited top-origin name without revealing its value.
       if (extra.length === 1 && extra[0] === "topOrigin")
         fail(`${stage}-unexpected-top-origin`);
-      if (extra.length === 1 && extra[0] === "other_keys_can_be_added_here")
-        fail(`${stage}-unexpected-extension-marker`);
     }
     fail(`${stage}-unexpected-field`);
   }
@@ -77,11 +79,15 @@ function client(value, request, purpose, origin) {
     // Native JSON errors can quote input. Keep diagnostic payloads fixed.
     fail(`${stage}-json`);
   }
-  const c = dataRecord(
-    parsed,
-    ["type", "challenge", "origin", "crossOrigin"],
-    stage,
-  );
+  const fields = ["type", "challenge", "origin", "crossOrigin"];
+  const hasMarker =
+    parsed !== null &&
+    typeof parsed === "object" &&
+    Object.hasOwn(parsed, MARKER);
+  if (hasMarker) fields.push(MARKER);
+  const c = dataRecord(parsed, fields, stage);
+  if (hasMarker && c[MARKER] !== MARKER_VALUE)
+    fail(`${stage}-extension-marker-value`);
   if (
     c.type !== `webauthn.${purpose}` ||
     c.challenge !== registrationChallenge(request, purpose) ||
@@ -89,6 +95,7 @@ function client(value, request, purpose, origin) {
     c.crossOrigin !== false
   )
     fail(`client-${purpose}`);
+  // Keep the exact bytes, INCLUDING the optional marker, in the signature hash.
   return raw;
 }
 // Fixed CBOR map: {fmt:"none",attStmt:{},authData: bstr8 or bstr16}.

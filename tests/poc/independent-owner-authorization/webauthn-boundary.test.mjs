@@ -28,6 +28,13 @@ const config = {
   origin: "https://owner.example.test",
   rpId: "owner.example.test",
 };
+// Pinned Chromium 149 GREASE value, not a WebAuthn-defined authorization field.
+const chromiumMarker =
+  "do not compare clientDataJSON against a template. See https://goo.gl/yabPex";
+const withMarker = (client = {}) => ({
+  other_keys_can_be_added_here: chromiumMarker,
+  ...client,
+});
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "synthetic-webauthn-"));
   const roots = [ed(), ed()],
@@ -656,7 +663,7 @@ test("registration diagnostics distinguish structural failures without exposing 
       proofClient(b64(JSON.stringify({ ...client, topOrigin: marker }))),
     ],
     [
-      "create-client-unexpected-extension-marker",
+      "create-client-extension-marker-value",
       proofClient(
         b64(
           JSON.stringify({ ...client, other_keys_can_be_added_here: marker }),
@@ -773,6 +780,155 @@ test("registration diagnostic helpers keep canonical bytes and data-only schemas
   );
 });
 // OFFLINE synthetic encoding fixture, never a rewritten browser response.
+test("Chromium marker supports optional create/get fields and both restricted CBOR forms", (t) => {
+  for (const short of [false, true])
+    for (const [createMarker, getMarker] of [
+      [false, false],
+      [true, false],
+      [false, true],
+      [true, true],
+    ]) {
+      const f = fixture(t),
+        s = staged(f);
+      const c = s.confirmation(f.key, "credential", {
+        client: createMarker ? withMarker() : {},
+        possession: { client: getMarker ? withMarker() : {} },
+      });
+      if (short) shortForm(c);
+      f.boundary.confirmEnrollment(c);
+      const before = f.registry.audit();
+      assert.equal(before.epoch, 1);
+      assert.deepEqual(before.history[0].evidence.possession, c.proof);
+      assert.throws(() => f.boundary.confirmEnrollment(c));
+      const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+      try {
+        assert.deepEqual(reopened.audit(), before);
+        assert.throws(() => reopened.confirmEnrollment(c));
+      } finally {
+        reopened.close();
+      }
+    }
+});
+test("Chromium marker rejects every non-pinned value and does not admit other fields", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  const bad = [
+    null,
+    false,
+    true,
+    0,
+    [],
+    {},
+    "",
+    "unexpected",
+    chromiumMarker + " ",
+    chromiumMarker.toUpperCase(),
+  ];
+  for (const phase of ["create", "get"])
+    for (const client of [
+      ...bad.map((value) => ({ other_keys_can_be_added_here: value })),
+      withMarker({ arbitrary: "untrusted" }),
+      withMarker({ topOrigin: config.origin }),
+      withMarker({ crossOrigin: undefined }),
+    ]) {
+      const c = s.confirmation(
+        f.key,
+        "credential",
+        phase === "create" ? { client } : { possession: { client } },
+      );
+      assert.throws(() => f.boundary.confirmEnrollment(c));
+      assert.equal(f.registry.audit().epoch, 0);
+    }
+  f.boundary.confirmEnrollment(
+    s.confirmation(f.key, "credential", {
+      client: withMarker(),
+      possession: { client: withMarker() },
+    }),
+  );
+});
+test("Chromium marker preserves origin/challenge/RP/UP/UV and exact raw get signature binding", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  const confirmation = (overrides = {}) =>
+    s.confirmation(f.key, "credential", {
+      ...overrides,
+      client: withMarker(overrides.client),
+      possession: {
+        ...overrides.possession,
+        client: withMarker(overrides.possession?.client),
+      },
+    });
+  for (const overrides of [
+    { client: { challenge: b64(Buffer.alloc(32)) } },
+    { client: { origin: "https://foreign.example.test" } },
+    { client: { type: 1 } },
+    { client: { crossOrigin: true } },
+    { possession: { client: { challenge: b64(Buffer.alloc(32)) } } },
+    { possession: { client: { origin: "https://foreign.example.test" } } },
+    { rpId: "foreign.example.test" },
+    { flags: 0x44 },
+    { flags: 0x41 },
+    { possession: { flags: 1 } },
+    { possession: { flags: 4 } },
+  ])
+    assert.throws(() => f.boundary.confirmEnrollment(confirmation(overrides)));
+  for (const mutation of ["remove", "insert", "whitespace"]) {
+    const c =
+      mutation === "insert"
+        ? s.confirmation(f.key, "credential", { client: withMarker() })
+        : confirmation();
+    const original = Buffer.from(
+      c.proof.possession.clientDataJSON,
+      "base64url",
+    ).toString();
+    const json = JSON.parse(
+      Buffer.from(c.proof.possession.clientDataJSON, "base64url"),
+    );
+    if (mutation === "remove") delete json.other_keys_can_be_added_here;
+    if (mutation === "insert")
+      json.other_keys_can_be_added_here = chromiumMarker;
+    const cd =
+      mutation === "whitespace" ? " " + original : JSON.stringify(json);
+    c.proof.possession.clientDataJSON = b64(cd);
+    assert.throws(() => f.boundary.confirmEnrollment(c)); // No re-sign: raw bytes MUST be covered.
+  }
+  for (const phase of ["create", "get"]) {
+    const c = confirmation(),
+      target = phase === "create" ? c.proof : c.proof.possession;
+    target.clientDataJSON = b64(
+      Buffer.from(target.clientDataJSON, "base64url").toString() + "!",
+    );
+    assert.throws(() => f.boundary.confirmEnrollment(c));
+  }
+  const valid = confirmation();
+  const substituted = {
+    ...valid,
+    credential: { ...valid.credential, id: b64("other-key") },
+  };
+  assert.throws(() => f.boundary.confirmEnrollment(substituted));
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({ ...valid, ownerId: f.options.ownerId }),
+  );
+  const expired = openSyntheticRegistry({ ...f.options, now: () => 1300 });
+  try {
+    assert.throws(() => expired.confirmEnrollment(valid));
+  } finally {
+    expired.close();
+  }
+  const stale = staged(f, "stale-marker").confirmation(
+    f.key,
+    "other-credential",
+    {
+      client: withMarker(),
+      possession: { client: withMarker() },
+    },
+  );
+  assert.equal(f.registry.audit().epoch, 0);
+  f.boundary.confirmEnrollment(valid);
+  const before = f.registry.audit();
+  assert.throws(() => f.boundary.confirmEnrollment(stale));
+  assert.deepEqual(f.registry.audit(), before);
+});
 function shortForm(c) {
   const att = Buffer.from(c.proof.attestationObject, "base64url");
   const prefix = Buffer.from(

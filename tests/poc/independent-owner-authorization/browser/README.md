@@ -45,8 +45,9 @@ stops durable checks. No conditional replay skip or known-failure exemption rema
 Existing strict origin, RP, challenge, signature, UP/UV, COSE/SPKI identity, owner,
 expiry, epoch and replay verification remains unchanged. Raw browser responses are
 never rewritten for acceptance; deliberate mutations occur only in negative cases.
-The restricted map, COSE, exact client JSON, flags and zero-AAGUID profile remain
-enforced. The only added encoding is a definite `bstr8` length alongside existing
+The restricted map, COSE, required client JSON bindings, flags and zero-AAGUID
+profile remain enforced. Registration client JSON additionally permits only the
+exact Chromium marker described below; other extra fields remain prohibited. The only added encoding is a definite `bstr8` length alongside existing
 `bstr16`, with exact payload length and no trailing bytes. No general CBOR parser.
 
 Uses existing Playwright, Chromium CDP CTAP2/internal, resident credentials, UV and
@@ -117,7 +118,8 @@ fix retains its bounded map and exact length/COSE verification, but this result
 does not establish whether the failing run reached that decoder. Without a
 specific structural failure, another acceptance change would be guesswork.
 
-This follow-up changes **diagnostics only**. Every former generic path has a
+At `edcab2c`, that follow-up changed **diagnostics only** (historical behavior;
+the current exact marker rule is described below). Every former generic path has a
 fixed check label scoped to its input. UTF-8 and JSON decoding errors are also
 sanitized so native errors cannot quote input. Example labels (all prefixed
 `synthetic-registration:`):
@@ -134,8 +136,8 @@ sanitized so native errors cannot quote input. Example labels (all prefixed
 
 The corresponding get-client labels use the same checks. The known optional
 property names above are diagnostic categories, **not observed browser evidence**.
-They remain rejected. No schema fields, size limits or encoding forms are newly
-accepted. The restricted decoder, crypto, owner/time/epoch/replay/SQLite checks,
+At that commit they remained rejected. No schema fields, size limits or encoding
+forms were newly accepted by that diagnostic-only update. The restricted decoder, crypto, owner/time/epoch/replay/SQLite checks,
 and now-working browser/HTTPS teardown are unchanged in this follow-up.
 
 Two deterministic offline tests cover the formerly ambiguous failure categories,
@@ -151,6 +153,58 @@ Run the exact PowerShell block below again. Report only the fixed
 exit code, duration, and whether exit was automatic. Do not dump response JSON,
 keys, credential IDs, signatures, challenges, nonces or attestation objects.
 A further local run is required; PR remains Draft / NO-GO.
+
+## Third local run: exact Chromium marker compatibility
+
+The third actual user-reported run at `edcab2c` identified
+`synthetic-registration:create-client-unexpected-extension-marker`.
+Windows PowerShell 7.6.7 / Node 24.11.1 / Playwright 1.61.1 / Chromium
+149.0.7827.55: four negative subtests passed, positive enrollment failed,
+exit code 1, normal automatic exit in approximately 2.8 seconds.
+This identifies the rejected member name, not its value; the profile now validates
+the value explicitly rather than assuming that browser evidence is trustworthy.
+
+[WebAuthn Level 3 §5.8.1](https://www.w3.org/TR/2026/REC-webauthn-3-20260825/#dictdef-collectedclientdata)
+describes an extensible JSON key/value mapping and tolerance for unknown keys.
+[Its serialization algorithm](https://www.w3.org/TR/2026/REC-webauthn-3-20260825/#clientdatajson-serialization)
+includes remaining members after the core bindings. The name
+`other_keys_can_be_added_here` and its value are **not standardized WebAuthn fields**.
+[Chromium 149's serializer](https://github.com/chromium/chromium/blob/149.0.7827.55/components/webauthn/core/browser/client_data_json.cc)
+adds this GREASE-style member with 20% probability, as an optional top-level
+JSON string property with exactly this public implementation constant:
+
+```json
+"other_keys_can_be_added_here": "do not compare clientDataJSON against a template. See https://goo.gl/yabPex"
+```
+
+The observed failure is an overly restrictive synthetic client-data schema. The
+small correction permits absence or this **one exact name/string pair** in both
+registration create and possession get client data. Other values (including other
+strings, whitespace changes, null, booleans, numbers, arrays and objects) reject.
+All four core fields remain mandatory; unexpected keys and `topOrigin` still reject.
+This is deliberately narrower than general WebAuthn extensibility, not a claim
+of complete browser/specification support. Generic data records remain exact.
+
+Validation returns the original UTF-8 bytes. The marker is neither removed nor
+normalized before the possession signature hash; insertion/removal/whitespace
+changes without re-signing reject. No change to challenge/origin/RP/COSE-SPKI,
+UP/UV, owner, expiry, epoch/replay, SQLite integrity, CBOR or browser teardown.
+No raw client data or other evidence is logged.
+
+The new offline regressions first failed against `edcab2c`, then passed after
+this rule. They cover all create/get presence combinations with bstr8/bstr16,
+malformed values and JSON, extra keys/types, topOrigin, wrong bindings/flags,
+raw-signature tampering, credential/owner substitution, expiry, stale sessions,
+retained evidence/reopen/replay. They are **synthetic offline verification**, not
+execution of Chromium after this fix.
+
+Remaining compatibility boundary: the shared authentication adapter
+`security/owner-authorization/webauthn-proof.ts` still enforces its original
+four-field client JSON schema. A marker in a later authentication assertion may
+therefore reject even after enrollment succeeds. That adapter is unchanged here;
+no signed JSON is stripped or re-signed to bypass it. Record any later failure
+separately. The real Chromium enrollment and durable replay matrix must all pass
+before reconsidering Draft / NO-GO, with automatic process exit still required.
 
 ## Exact Windows PowerShell execution
 
@@ -207,10 +261,10 @@ npm run build
 
 ## Execution evidence and merge gate
 
-Diagnostic-only follow-up executed in Cloud on Node 24.19.0:
+Exact-marker follow-up executed in Cloud on Node 24.19.0:
 
 - Focused security plus relevant Validation/integrity/reader regressions:
-  **359/359 PASS** (including the eight short-form cases and two diagnostic tests), zero failures/skips.
+  **362/362 PASS** (including three new marker tests, the eight short-form cases and two diagnostic tests), zero failures/skips.
 - Default gate: **one SKIP**, zero browser tests executed.
 - Explicit opt-in: **FAILED during HTTPS setup**:
   `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
@@ -219,16 +273,16 @@ Diagnostic-only follow-up executed in Cloud on Node 24.19.0:
   `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
   No download attempted after the listener restriction was established.
   Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
-  Both user-reported Windows runs did execute Chromium and failed enrollment;
-  the second exited normally. The new diagnostics have not yet run in Chromium.
+  All three user-reported Windows runs did execute Chromium and failed enrollment;
+  the second and third exited normally. The exact-marker fix has not yet run in Chromium.
 - Targeted ESLint, Node syntax and Prettier: PASS.
 - Repository lint: zero errors, four warnings in unchanged app files.
 - Build FAILED in Turbopack CSS processing: creating new process / binding to
   a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
 
 The fixed harness exited promptly on Cloud HTTPS setup failure (about 0.33 seconds);
-this does not exercise live browser connection cleanup. The diagnostic tests intentionally fail with the `4a2edeb` verifier because its
-shared label cannot distinguish failures; all final offline regressions passed.
+this does not exercise live browser connection cleanup. The marker regressions intentionally fail with the `edcab2c` verifier because it
+rejects the known member; all final offline regressions passed.
 
 Windows commands were NOT EXECUTED here. No offline pass or default skip establishes
 browser interoperability. Hardware/other browsers, genuine independent identity,
