@@ -138,6 +138,7 @@ export function openSyntheticRegistry({
   enabled = false,
   create = false,
   webauthn = null,
+  registrationProfile = "zero-aaguid",
 }) {
   if (
     enabled !== true ||
@@ -161,12 +162,20 @@ export function openSyntheticRegistry({
     credential: null,
   });
   const profile = webauthn === null ? null : originConfig(webauthn);
+  // Privileged, store-pinned test policy. Never selected by enrollment evidence.
+  if (
+    !["zero-aaguid", "cdp-platform-none-v1"].includes(registrationProfile) ||
+    (registrationProfile !== "zero-aaguid" && !profile)
+  )
+    fail();
   const config = JSON.stringify({
     version: 1,
     ownerId,
     ownerSubject,
     roots: roots.map(keyFingerprint),
     ...(profile ? { webauthn: profile } : {}),
+    // Preserve existing default store configuration bytes; no migration.
+    ...(registrationProfile !== "zero-aaguid" ? { registrationProfile } : {}),
   });
   const db = new DatabaseSync(path, { open: true });
   try {
@@ -382,6 +391,7 @@ export function openSyntheticRegistry({
                 r.credential,
                 profile,
                 initiation ?? e.request,
+                registrationProfile,
               ),
               true)
             : signed(

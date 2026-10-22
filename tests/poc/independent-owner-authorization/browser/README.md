@@ -45,8 +45,9 @@ stops durable checks. No conditional replay skip or known-failure exemption rema
 Existing strict origin, RP, challenge, signature, UP/UV, COSE/SPKI identity, owner,
 expiry, epoch and replay verification remains unchanged. Raw browser responses are
 never rewritten for acceptance; deliberate mutations occur only in negative cases.
-The restricted map, COSE, required client JSON bindings, flags and zero-AAGUID
-profile remain enforced. Registration client JSON additionally permits only the
+The restricted map, COSE, required client JSON bindings and flags remain enforced.
+Zero AAGUID remains the default; only the explicit browser profile below treats
+AAGUID as untrusted metadata. Registration client JSON additionally permits only the
 exact Chromium marker described below; other extra fields remain prohibited. The only added encoding is a definite `bstr8` length alongside existing
 `bstr16`, with exact payload length and no trailing bytes. No general CBOR parser.
 
@@ -243,6 +244,63 @@ case summary, exit code/duration and whether exit was automatic. Do not dump raw
 authenticator data, hashes, AAGUIDs, credential IDs, keys, signatures or challenges.
 Keep Draft / NO-GO; no acceptance change is justified by the combined label.
 
+## Fifth local run: explicit platform none-attestation profile
+
+The fifth actual user-reported run at `b514cf6f6d35695c345d7efd94f1f8d51a145f53`
+identified `synthetic-registration:attested-credential-aaguid` on Windows
+PowerShell 7.6.7 / Node 24.11.1 / Playwright 1.61.1 / Chromium 149.0.7827.55.
+Four negative tests passed; positive enrollment failed; automatic exit succeeded
+in approximately 2.8 seconds, code 1. No AAGUID value was supplied or is logged.
+
+[Chromium 149's virtual CTAP2 device](https://github.com/chromium/chromium/blob/149.0.7827.55/device/fido/virtual_ctap2_device.cc)
+constructs AAGUID metadata. Its [internal/platform response path](https://github.com/chromium/chromium/blob/149.0.7827.55/content/browser/webauth/authenticator_common_impl.cc)
+deliberately keeps the AAGUID when erasing attestation. A nonzero AAGUID is therefore
+a legitimate result of this CDP internal/resident/UV configuration, not evidence
+that possession failed. Resident-key/UV configuration does not establish model
+identity. No presumed Chromium AAGUID value is pinned in this change.
+
+[WebAuthn's authenticator model](https://www.w3.org/TR/2026/REC-webauthn-3-20260825/#sctn-authenticator-model)
+distinguishes model metadata from authenticated attestation and possession.
+AAGUID alone is not provably authentic. This verifier accepts only `fmt:none`
+with an empty statement, which supplies no verified device attestation or trust
+path. The mandatory signed get proves possession of the approved generated key
+and binds the final challenge/context; **it does not authenticate the create
+AAGUID**. A zero AAGUID was a restricted fixture constraint, not a trust anchor.
+
+The compatibility rule is an explicit privileged test policy:
+
+- Default `registrationProfile: "zero-aaguid"` retains the old zero-only check.
+- Only `registrationProfile: "cdp-platform-none-v1"` treats the fixed 16-byte
+  AAGUID slot as untrusted metadata. It admits no other attestation format,
+  algorithm, flag, key or CBOR layout. This is not a device/model allowlist,
+  proof that a response originated in CDP, or production authorization.
+- The opt-in browser harness selects this profile and explicitly requests
+  platform attachment. Its raw preflight and durable registry use the same
+  profile. Browser, HTTPS and registry cleanup logic is unchanged.
+- The registry pins the non-default profile in its existing configuration value,
+  covered by the initial history digest and checked on every read/reopen.
+  Enrollment evidence cannot choose it. Unknown names, profile changes on reopen,
+  profile injection into confirmation, non-WebAuthn and disabled factories deny.
+- Default configuration bytes remain unchanged. Use a fresh disposable store for
+  browser-profile tests; no SQL schema change or migration is performed.
+
+Every original challenge, origin/RP, exact COSE/SPKI and credential ID binding,
+UP/UV, owner/handle, custodian approval, time/expiry, epoch, replay and SQLite
+integrity check remains mandatory. Raw create evidence is stored unchanged and
+never normalized to zero. Its metadata gains no device-identity authority by being
+retained in the immutable history. No metadata value or cryptographic evidence is
+printed.
+
+Four new offline tests use randomly generated **synthetic** nonzero metadata,
+never a claimed Chromium identifier. They cover strict-default rejection,
+zero/nonzero browser-profile acceptance with both CBOR forms and exact markers,
+raw history/restart and durable signed-possession replay, pinned configuration,
+request/owner/credential substitution, malformed metadata/CBOR/COSE, invalid
+flags/RP/challenges/origin/signatures, missing approval, expiry and stale epoch.
+The same regressions fail against the prior implementation. All passing results
+are offline; actual Chromium must run again. The shared authentication adapter's
+separate optional-marker limitation remains as documented above.
+
 ## Exact Windows PowerShell execution
 
 Use PowerShell 7 / .NET 8+ and Node.js 24, starting in your local repository.
@@ -298,10 +356,10 @@ npm run build
 
 ## Execution evidence and merge gate
 
-Attested-diagnostic follow-up executed in Cloud on Node 24.19.0:
+Platform-profile follow-up executed in Cloud on Node 24.19.0:
 
 - Focused security plus relevant Validation/integrity/reader regressions:
-  **367/367 PASS** (including five new attested-label tests and all earlier marker/short-form/diagnostic cases), zero failures/skips.
+  **371/371 PASS** (including four new profile tests and all prior security cases), zero failures/skips.
 - Default gate: **one SKIP**, zero browser tests executed.
 - Explicit opt-in: **FAILED during HTTPS setup**:
   `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
@@ -310,16 +368,16 @@ Attested-diagnostic follow-up executed in Cloud on Node 24.19.0:
   `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
   No download attempted after the listener restriction was established.
   Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
-  All four user-reported Windows runs did execute Chromium and failed enrollment;
-  runs two through four exited normally. These split diagnostics have not yet run in Chromium.
+  All five user-reported Windows runs did execute Chromium and failed enrollment;
+  runs two through five exited normally. The explicit platform profile has not yet run in Chromium.
 - Targeted ESLint, Node syntax and Prettier: PASS.
 - Repository lint: zero errors, four warnings in unchanged app files.
 - Build FAILED in Turbopack CSS processing: creating new process / binding to
   a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
 
-The harness exited promptly on Cloud HTTPS setup failure (about 0.72 seconds);
-this does not exercise live browser connection cleanup. The marker regressions intentionally fail with the `edcab2c` verifier because it
-rejects the known member; all final offline regressions passed.
+The harness exited promptly on Cloud HTTPS setup failure (about 0.37 seconds);
+this does not exercise live browser connection cleanup. The new profile regressions intentionally fail against `b514cf6` because its
+zero-only policy rejects nonzero metadata and lacks profile pinning; all final offline regressions passed.
 
 Windows commands were NOT EXECUTED here. No offline pass or default skip establishes
 browser interoperability. Hardware/other browsers, genuine independent identity,

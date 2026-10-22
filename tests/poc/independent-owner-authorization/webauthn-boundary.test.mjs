@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +35,7 @@ const withMarker = (client = {}) => ({
   other_keys_can_be_added_here: chromiumMarker,
   ...client,
 });
-function fixture(t) {
+function fixture(t, registrationProfile = "zero-aaguid") {
   const dir = mkdtempSync(join(tmpdir(), "synthetic-webauthn-"));
   const roots = [ed(), ed()],
     key = ec(),
@@ -49,6 +49,7 @@ function fixture(t) {
     independentKeys: roots.map(pem),
     enabled: true,
     webauthn: config,
+    registrationProfile,
   };
   const registry = openSyntheticRegistry({
     ...options,
@@ -107,7 +108,8 @@ function fixture(t) {
     const auth = Buffer.concat([
       digest(overrides.rpId || config.rpId),
       Buffer.from([overrides.flags ?? 0x45]),
-      Buffer.alloc(4 + 16),
+      Buffer.alloc(4),
+      overrides.aaguid ?? Buffer.alloc(16),
       length,
       Buffer.from(c.id, "base64url"),
       Buffer.from("a5010203262001215820", "hex"),
@@ -623,6 +625,210 @@ function staged(f, requestId = "two-stage") {
     },
   };
 }
+// Random synthetic metadata, NOT an asserted or pinned Chromium device value.
+function metadataConfirmation(s, f, short = false, overrides = {}) {
+  const aaguid = randomBytes(16);
+  aaguid[0] |= 1;
+  const c = s.confirmation(f.key, "credential", {
+    aaguid,
+    ...overrides,
+    client: withMarker(overrides.client),
+    possession: {
+      ...overrides.possession,
+      client: withMarker(overrides.possession?.client),
+    },
+  });
+  return short ? shortForm(c) : c;
+}
+test("platform profile is opt-in; the default still rejects nonzero AAGUID", (t) => {
+  for (const short of [false, true]) {
+    const f = fixture(t),
+      s = staged(f),
+      c = metadataConfirmation(s, f, short);
+    assert.throws(() => f.boundary.confirmEnrollment(c));
+    assert.throws(() =>
+      f.boundary.confirmEnrollment({
+        ...c,
+        registrationProfile: "cdp-platform-none-v1",
+      }),
+    );
+    assert.equal(f.registry.audit().epoch, 0);
+    f.boundary.confirmEnrollment(s.confirmation());
+  }
+});
+test("platform profile keeps metadata untrusted; raw history and possession replay survive reopen", (t) => {
+  for (const short of [false, true])
+    for (const zero of [false, true]) {
+      const f = fixture(t, "cdp-platform-none-v1"),
+        s = staged(f);
+      const c = metadataConfirmation(
+        s,
+        f,
+        short,
+        zero ? { aaguid: Buffer.alloc(16) } : {},
+      );
+      f.boundary.confirmEnrollment(c);
+      const before = f.registry.audit();
+      assert.deepEqual(before.history[0].evidence.possession, c.proof);
+      assert.equal(f.prove(f.attempt()).productionAuthorization, "disabled");
+      const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+      try {
+        assert.deepEqual(reopened.audit(), before);
+        assert.throws(() => reopened.confirmEnrollment(c));
+        const b = createSyntheticWebAuthnBoundary({
+          registry: reopened,
+          webauthn: config,
+          now: () => 1050,
+          enabled: true,
+        });
+        const a = f.attempt();
+        assert.throws(() => b.prove(a.bytes, a.assertion, a.intent));
+      } finally {
+        reopened.close();
+      }
+    }
+});
+test("platform profile remains pinned to disposable store configuration and cannot be requested by evidence", (t) => {
+  const f = fixture(t, "cdp-platform-none-v1"),
+    s = staged(f),
+    c = metadataConfirmation(s, f);
+  for (const registrationProfile of ["zero-aaguid", "unknown", null, false])
+    assert.throws(() =>
+      openSyntheticRegistry({
+        ...f.options,
+        registrationProfile,
+        now: () => 1050,
+      }),
+    );
+  assert.throws(
+    () =>
+      verifySyntheticRegistration("", null, null, null, undefined, "unknown"),
+    {
+      code: "synthetic-registration:registration-profile",
+    },
+  );
+  assert.throws(() =>
+    openSyntheticRegistry({ ...f.options, webauthn: null, now: () => 1050 }),
+  );
+  assert.throws(() =>
+    openSyntheticRegistry({ ...f.options, enabled: false, now: () => 1050 }),
+  );
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      registrationProfile: "cdp-platform-none-v1",
+    }),
+  );
+  const expired = openSyntheticRegistry({ ...f.options, now: () => 1300 });
+  try {
+    assert.throws(() => expired.confirmEnrollment(c));
+  } finally {
+    expired.close();
+  }
+  assert.equal(f.registry.audit().epoch, 0);
+  f.boundary.confirmEnrollment(c);
+  const strict = fixture(t);
+  assert.throws(() =>
+    openSyntheticRegistry({
+      ...strict.options,
+      registrationProfile: "cdp-platform-none-v1",
+      now: () => 1050,
+    }),
+  );
+});
+test("platform profile preserves every credential, CBOR, signature and authorization boundary", (t) => {
+  const f = fixture(t, "cdp-platform-none-v1"),
+    s = staged(f);
+  for (const overrides of [
+    { rpId: "foreign.example.test" },
+    { flags: 0x41 },
+    { flags: 0x44 },
+    { client: { challenge: b64(Buffer.alloc(32)) } },
+    { client: { origin: "https://foreign.example.test" } },
+    { client: { topOrigin: config.origin } },
+    { client: { other_keys_can_be_added_here: "invalid" } },
+    { possession: { flags: 1 } },
+    { possession: { client: { challenge: b64(Buffer.alloc(32)) } } },
+    { aaguid: Buffer.alloc(15) },
+    { aaguid: Buffer.alloc(17) },
+  ])
+    assert.throws(() =>
+      f.boundary.confirmEnrollment(
+        metadataConfirmation(s, f, false, overrides),
+      ),
+    );
+  const c = metadataConfirmation(s, f);
+  // Legacy fixed CBOR prefix + bstr16 length ends at byte 31.
+  for (const mutate of [
+    (auth) => {
+      auth.writeUInt16BE(auth.readUInt16BE(53) + 1, 53);
+    },
+    (auth) => {
+      auth[55] ^= 1;
+    },
+    (auth) => {
+      auth[auth.length - 1] ^= 1;
+    },
+  ]) {
+    const att = Buffer.from(c.proof.attestationObject, "base64url");
+    mutate(att.subarray(31));
+    assert.throws(() =>
+      f.boundary.confirmEnrollment({
+        ...c,
+        proof: { ...c.proof, attestationObject: b64(att) },
+      }),
+    );
+  }
+  const malformed = Buffer.from(c.proof.attestationObject, "base64url");
+  malformed[6] ^= 1; // fmt must remain exactly none; no alternate attestation trust.
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      proof: { ...c.proof, attestationObject: b64(malformed) },
+    }),
+  );
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      proof: {
+        ...c.proof,
+        attestationObject: b64(
+          Buffer.concat([
+            Buffer.from(c.proof.attestationObject, "base64url"),
+            Buffer.from([0]),
+          ]),
+        ),
+      },
+    }),
+  );
+  const signature = Buffer.from(c.proof.possession.signature, "base64url");
+  signature[signature.length - 1] ^= 1;
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      proof: {
+        ...c.proof,
+        possession: { ...c.proof.possession, signature: b64(signature) },
+      },
+    }),
+  );
+  assert.throws(() => f.boundary.confirmEnrollment({ ...c, approvals: [] }));
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({ ...c, ownerId: f.options.ownerId }),
+  );
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      credential: { ...c.credential, id: b64("substitution") },
+    }),
+  );
+  const stale = metadataConfirmation(staged(f, "stale-profile"), f);
+  assert.equal(f.registry.audit().epoch, 0);
+  f.boundary.confirmEnrollment(c);
+  const before = f.registry.audit();
+  assert.throws(() => f.boundary.confirmEnrollment(stale));
+  assert.deepEqual(f.registry.audit(), before);
+});
 // Mutate only offline synthetic attested data, never raw browser evidence.
 for (const [label, mutate] of [
   [

@@ -33,6 +33,8 @@ const b64 = (v) => Buffer.from(v).toString("base64url");
 const pem = (key) => key.export({ type: "spki", format: "pem" });
 const ownerId = "11111111-1111-4111-8111-111111111111";
 const ownerSubject = "independent:synthetic:browser";
+// Only this opt-in CDP platform probe ignores the untrusted fmt:none AAGUID.
+const registrationProfile = "cdp-platform-none-v1";
 
 test(
   "browser interoperability (explicit opt-in only)",
@@ -125,6 +127,7 @@ test(
       now: () => 1050,
       enabled: true,
       webauthn: config,
+      registrationProfile,
     };
     registry = openSyntheticRegistry({ ...options, create: true });
     const boundary = createSyntheticWebAuthnBoundary({
@@ -174,6 +177,7 @@ test(
               },
               pubKeyCredParams: [{ type: "public-key", alg: -7 }],
               authenticatorSelection: {
+                authenticatorAttachment: "platform",
                 residentKey: "required",
                 userVerification: "required",
               },
@@ -514,6 +518,7 @@ test(
           credential,
           config,
           initiation,
+          registrationProfile,
         );
       } catch (error) {
         t.diagnostic(

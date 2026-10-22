@@ -111,7 +111,10 @@ export function verifySyntheticRegistration(
   credential,
   configuration,
   creationRequest = request,
+  registrationProfile = "zero-aaguid",
 ) {
+  if (!["zero-aaguid", "cdp-platform-none-v1"].includes(registrationProfile))
+    fail("registration-profile");
   const cfg = originConfig(configuration);
   const p = dataRecord(
     proof,
@@ -149,7 +152,12 @@ export function verifySyntheticRegistration(
   if (!auth.subarray(0, 32).equals(digest(cfg.rpId)))
     fail("attested-credential-rp-id-hash");
   if (auth[32] !== 0x45) fail("attested-credential-flags");
-  if (!auth.subarray(37, 53).equals(Buffer.alloc(16)))
+  // fmt:none has NO attestation trust path. The explicit browser-only profile
+  // treats this fixed 16-byte slot as untrusted metadata, never device identity.
+  if (
+    registrationProfile === "zero-aaguid" &&
+    !auth.subarray(37, 53).equals(Buffer.alloc(16))
+  )
     fail("attested-credential-aaguid");
   if (auth.readUInt16BE(53) !== id.length)
     fail("attested-credential-id-length");
