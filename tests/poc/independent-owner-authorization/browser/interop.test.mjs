@@ -615,6 +615,8 @@ test(
       t.diagnostic(code ?? `${prefix}:unclassified`);
     };
     const proofStages = [
+      "compatibility-profile",
+      "client-data-extension-marker-value",
       "trusted-context-shape",
       "intent",
       "origin-configuration",
@@ -637,7 +639,7 @@ test(
     ];
     const check = (a = assertion, c = trusted) => {
       try {
-        return verifyWebAuthnProof(bytes, a, c);
+        return verifyWebAuthnProof(bytes, a, c, registrationProfile);
       } catch (error) {
         diagnostic(error, "webauthn-proof", proofStages);
         throw error;
@@ -771,7 +773,9 @@ test(
           ]);
           throw error;
         }
-        assert.throws(() => boundary.prove(bytes, assertion, intent));
+        assert.throws(() => boundary.prove(bytes, assertion, intent), {
+          cause: "synthetic-possession:replay-insertion",
+        });
         const reopened = openSyntheticRegistry(options);
         try {
           const afterRestart = createSyntheticWebAuthnBoundary({
@@ -780,7 +784,9 @@ test(
             now: () => 1050,
             enabled: true,
           });
-          assert.throws(() => afterRestart.prove(bytes, assertion, intent));
+          assert.throws(() => afterRestart.prove(bytes, assertion, intent), {
+            cause: "synthetic-possession:replay-insertion",
+          });
         } finally {
           reopened.close();
         }

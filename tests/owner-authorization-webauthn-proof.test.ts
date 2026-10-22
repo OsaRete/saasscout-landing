@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { createPublicKey, createHash } from "node:crypto";
+import {
+  createPublicKey,
+  createHash,
+  generateKeyPairSync,
+  sign,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { encodeIntent } from "../security/owner-authorization/intent-codec.ts";
@@ -502,5 +507,118 @@ test("fixed failure diagnostics preserve strict client-data and cryptographic bo
       },
     );
     assert.equal(check(fixture()).productionAuthorization, "disabled");
+  }
+});
+
+test("explicit synthetic CDP policy accepts only exact optional marker and hashes original signed bytes", () => {
+  const profile = "cdp-platform-none-v1";
+  const marker =
+    "do not compare clientDataJSON against a template. See https://goo.gl/yabPex";
+  const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const f = fixture();
+  f.context.registry.credential.publicKey = key.publicKey;
+  const original = JSON.parse(f.assertion.response.clientDataJSON.toString());
+  const signClient = (client: unknown, pretty = false) => {
+    f.assertion.response.clientDataJSON = Buffer.from(
+      JSON.stringify(client, null, pretty ? 2 : undefined),
+    );
+    f.assertion.response.signature = sign(
+      "sha256",
+      Buffer.concat([
+        f.assertion.response.authenticatorData,
+        createHash("sha256")
+          .update(f.assertion.response.clientDataJSON)
+          .digest(),
+      ]),
+      key.privateKey,
+    );
+  };
+  const verify = (policy: unknown = profile) =>
+    verifyWebAuthnProof(f.bytes, f.assertion, f.context, policy);
+  for (const pretty of [false, true]) {
+    signClient({ ...original, other_keys_can_be_added_here: marker }, pretty);
+    assert.equal(verify().productionAuthorization, "disabled");
+    rejects(() => check(f)); // Existing/default caller still rejects.
+    rejects(() => verify("zero-aaguid"));
+    const raw = f.assertion.response.clientDataJSON;
+    // Equivalent JSON with different bytes must not verify under the old signature.
+    f.assertion.response.clientDataJSON = Buffer.concat([
+      raw,
+      Buffer.from(" "),
+    ]);
+    assert.throws(() => verify(), {
+      cause: "webauthn-proof:signature-verification",
+    });
+  }
+  signClient(original);
+  assert.equal(verify().productionAuthorization, "disabled");
+  assert.equal(check(f).productionAuthorization, "disabled");
+  for (const policy of [null, false, {}, "unknown", "cdp-platform-none-v2"])
+    assert.throws(() => verify(policy), {
+      cause: "webauthn-proof:compatibility-profile",
+    });
+  for (const value of [
+    null,
+    false,
+    1,
+    [],
+    {},
+    "",
+    marker + " ",
+    marker.toUpperCase(),
+  ]) {
+    signClient({ ...original, other_keys_can_be_added_here: value });
+    assert.throws(() => verify(), {
+      cause: "webauthn-proof:client-data-extension-marker-value",
+    });
+  }
+  for (const patch of [
+    { extra: true },
+    { topOrigin: f.context.origin },
+    { crossOrigin: true },
+    { origin: "https://other.example.test" },
+    { challenge: "wrong" },
+    { type: "webauthn.create" },
+  ]) {
+    signClient({ ...original, other_keys_can_be_added_here: marker, ...patch });
+    rejects(() => verify());
+  }
+  signClient({ ...original, other_keys_can_be_added_here: marker });
+  f.assertion.response.authenticatorData[32] = 1;
+  rejects(() => verify());
+  f.assertion.response.authenticatorData[32] = 5;
+  for (const patch of [
+    { ownerId: "44444444-4444-4444-8444-444444444444" },
+    { epoch: 3 },
+    { status: "revoked" },
+  ])
+    rejects(() =>
+      verifyWebAuthnProof(
+        f.bytes,
+        f.assertion,
+        { ...f.context, registry: { ...f.context.registry, ...patch } },
+        profile,
+      ),
+    );
+  rejects(() =>
+    verifyWebAuthnProof(
+      f.bytes,
+      f.assertion,
+      { ...f.context, now: 1301 },
+      profile,
+    ),
+  );
+  const id = f.assertion.credentialId;
+  f.assertion.credentialId = Buffer.from("substitute");
+  rejects(() => verify());
+  f.assertion.credentialId = id;
+  for (const raw of [
+    Buffer.from("{"),
+    Buffer.from([0xff]),
+    Buffer.from("null"),
+    Buffer.from("[]"),
+  ]) {
+    f.assertion.response.clientDataJSON = raw;
+    rejects(() => verify());
   }
 });

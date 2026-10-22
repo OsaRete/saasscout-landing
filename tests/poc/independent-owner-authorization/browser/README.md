@@ -354,57 +354,73 @@ npm run lint
 npm run build
 ```
 
-## Sixth local run and diagnostic follow-up
+## Seventh local run and profile-restricted authentication correction
 
-User-reported actual Windows Chromium 149 / Playwright 1.61.1 execution at
-`9f3b661031918724b428f50e7302230e4f75a697`: 19 tests, 10 passed, 9 failed,
-exit 1, about 2.32 seconds, normal automatic exit. Raw two-stage enrollment,
-duplicate confirmation, stale epoch and enrollment replay after restart passed.
-The adapter positive and durable authentication positive failed. Negative cases
-that reject while the adapter positive fails do not establish their intended
-security boundary; seven related cases also failed their positive controls.
+Actual user-reported Windows Chromium 149.0.7827.55 / Playwright 1.61.1,
+PowerShell 7.6.7 run at `cfe104c971d135d6ecf5fff67bd17fd8f29f1475`:
+19 tests, 6 passed, 3 failed, 10 skipped; exit 1, approximately 4.13 seconds,
+normal automatic exit. Raw two-stage enrollment, duplicate confirmation, stale
+epoch and enrollment replay after restart, and four registration negatives passed.
+Authentication negatives were correctly skipped as inconclusive after the positive failed.
 
-The shared adapter parses strict UTF-8 JSON and requires exactly type, challenge,
-origin and crossOrigin. The optional Chromium marker is rejected by that shape
-predicate even when correctly signed. The reported generic stack does **not**
-prove the actual assertion contained it. Durable consumePossession invokes the
-shared verifier under a write lock, checks active owner/credential/epoch, and
-inserts unique request/challenge replay records; its catch previously hid all
-these causes. It has no signature-counter policy. Its reported generic stack
-likewise cannot identify the failing predicate.
+Both paths conclusively identified the shared exact-four-member parser:
+`webauthn-proof:client-data-shape-extension-marker` and
+`synthetic-possession:assertion-verifier:webauthn-proof:client-data-shape-extension-marker`.
+There is no demonstrated second durable-state or counter defect: the durable
+path reached the shared verifier and rejected the same client-data shape.
 
-This follow-up changes **diagnostics only**, with no compatibility acceptance
-change. Fixed verifier failure stages appear as Error.cause, while its public
-message remains Invalid WebAuthn proof. No evidence/native exception is attached.
-The disabled durable registry labels integrity read, binding shape/current state,
-assertion verifier, verifier result, replay insertion and commit failures. An
-explicit whitelist retains the shared verifier stage for durable assertion failures,
-so the durable path is diagnosed independently without attaching callback errors. Browser
-output uses an explicit whitelist of fixed labels only. In particular
-webauthn-proof:client-data-shape-extension-marker identifies the exact five-key
-shape rejected, without printing any member values. Other shapes and encoding,
-context, RP hash, flags and signature failures have distinct fixed stages.
+The correction is **explicit test-only profile acceptance**, not global acceptance.
+The shared offline proof-only adapter's optional fourth privileged argument is
+`syntheticProfile`, default `zero-aaguid`, accepting only that name or
+`cdp-platform-none-v1`. Existing three-argument callers and the strict/default
+registry continue to reject extra members. Unknown policy names/types fail closed.
+The profile must never come from an assertion, intent, request or relay.
+The browser preflight explicitly selects the existing CDP profile. The durable
+boundary takes it only from the integrity-checked registry snapshot under the
+write lock. That snapshot exposes the already persisted and digest-pinned profile;
+no store schema/configuration bytes, migrations or production settings change.
 
-Authentication negatives are skipped as inconclusive when the shared positive
-fails. Durable authentication still runs independently to expose its stage.
-Registration profiles, CBOR/marker policies, signed bytes and teardown are unchanged.
-The shared offline foundation file has diagnostic-only edits; no caller gains
-production authorization. No evidence is rewritten, normalized, stripped or resigned.
+Only CDP policy accepts the optional member `other_keys_can_be_added_here`,
+with **string** value exactly:
+`do not compare clientDataJSON against a template. See https://goo.gl/yabPex`.
+This matches the registration verifier and [Chromium 149 implementation](https://github.com/chromium/chromium/blob/149.0.7827.55/components/webauthn/core/browser/client_data_json.cc).
+[CollectedClientData](https://www.w3.org/TR/2026/REC-webauthn-3-20260825/#dictdef-collectedclientdata)
+is extensible; this name/value is Chromium GREASE, not a standardized field,
+authority, device identity, or attestation. No arbitrary properties/values are allowed.
+The four core members remain mandatory, topOrigin stays prohibited, and malformed
+JSON/UTF-8, non-records and incorrect types reject. Marker absence remains supported.
+
+The verifier hashes the original raw clientDataJSON bytes including the marker.
+It never strips, normalizes, reserializes or resigns browser evidence. Tests use
+separately signed compact/pretty synthetic JSON and reject a byte-only whitespace
+change under the existing signature. Challenge/origin/RP, UP/UV, DER signature,
+credential/key/handle/owner identity, revocation, epoch/expiry and replay checks
+remain mandatory. Registration profiles, CBOR restrictions and successful teardown
+are unchanged. Shared default/production caller behavior is unchanged; only the
+disabled test profile opts in. This is no production-level compatibility approval.
+
+Offline tests cover exact marker presence/absence, type/value mutations, unknown
+fields, topOrigin, malformed JSON/UTF-8, context/identity/flags/signature boundaries,
+strict-default rejection, unknown policy and assertion policy injection, correct
+CDP durable proof, duplicate replay and replay after reopen. Negative cases must
+retain positive controls; browser negatives remain inconclusive/skipped if their
+positive fails. No raw evidence is logged; diagnostics are fixed stage labels only.
 
 Run the complete PowerShell block above unchanged. Report fixed stage labels,
-case totals, exit code, duration and automatic-exit status only. Another actual
-local Chromium run is required to establish the two precise failure predicates;
-no widening of client-data acceptance is justified solely by the current stacks.
+case totals, exit code, duration and automatic-exit status. A new actual local
+Chromium run is required: offline passes do not establish browser authentication
+or live browser teardown. Other restricted client-data/flag/encoding behavior may
+still surface; this experiment has no hardware attestation or independent identity guarantee.
 
-Cloud follow-up: focused regressions **373/373 PASS**, including correctly signed
-marker rejection with rollback, fixed parser/crypto stages, state mismatch and
-durable replay after reopen. These are offline results, not Chromium execution.
-Targeted lint/syntax/formatting and repository lint were checked separately.
-Cloud listener EPERM and absent Chromium prevent actual browser verification;
-a default gate skip does not establish interoperability. Build remains subject
-to the Cloud Turbopack process/port restriction. See PR verification for this run.
+**Draft / NO-GO until real Chromium positive authentication, meaningful negatives,
+durable replay rejection and automatic exit all pass and review completes.**
+Production owner withdrawal remains DISABLED / NO-GO. No merge, deployment,
+migration, production database operation or authorization activation.
 
-**Draft / NO-GO until actual local Chromium authentication, durable replay rejection
-and automatic exit all pass and review completes.** Production owner withdrawal
-remains DISABLED / NO-GO. No merge, deployment, migration, database operation or
-authorization activation is performed.
+Cloud verification for this follow-up: **375/375 focused regressions PASS**;
+targeted ESLint, Node syntax, Prettier and whitespace PASS. Repository lint has
+zero errors and four existing warnings. Opt-in browser execution stops during
+HTTPS setup: `listen EPERM: operation not permitted 127.0.0.1` (errno -1).
+Chromium is absent; no actual Chromium run of this correction occurred in Cloud.
+Build fails in Turbopack CSS processing during process/port creation with
+`Operation not permitted (os error 1)`. Local PowerShell verification is required.

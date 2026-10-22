@@ -51,27 +51,32 @@ export function createSyntheticWebAuthnBoundary({
           )
             throw new Error("Mismatched registry origin");
           const c = snapshot.credential;
-          return verifyWebAuthnProof(intentBytes, assertion, {
-            expectedIntent,
-            now: now(),
-            origin,
-            rpId,
-            registry: {
-              ownerId: snapshot.ownerId,
-              ownerSubject: snapshot.ownerSubject,
-              epoch: snapshot.epoch,
-              status: "active",
-              credential: {
-                id: Buffer.from(c.id, "base64url"),
-                type: "public-key",
-                algorithm: -7,
-                publicKey: createPublicKey(c.publicKey),
-                userHandle: Buffer.from(c.userHandle, "base64url"),
-                status: c.status,
-                epoch: c.epoch,
+          return verifyWebAuthnProof(
+            intentBytes,
+            assertion,
+            {
+              expectedIntent,
+              now: now(),
+              origin,
+              rpId,
+              registry: {
+                ownerId: snapshot.ownerId,
+                ownerSubject: snapshot.ownerSubject,
+                epoch: snapshot.epoch,
+                status: "active",
+                credential: {
+                  id: Buffer.from(c.id, "base64url"),
+                  type: "public-key",
+                  algorithm: -7,
+                  publicKey: createPublicKey(c.publicKey),
+                  userHandle: Buffer.from(c.userHandle, "base64url"),
+                  status: c.status,
+                  epoch: c.epoch,
+                },
               },
             },
-          });
+            snapshot.registrationProfile,
+          );
         },
       );
     },

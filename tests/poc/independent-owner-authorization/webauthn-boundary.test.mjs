@@ -1632,3 +1632,62 @@ test("durable possession diagnostics distinguish verifier failure, state and per
     reopened.close();
   }
 });
+
+test("store-pinned CDP authentication accepts exact signed marker with durable replay and strict boundaries", (t) => {
+  const f = fixture(t, "cdp-platform-none-v1");
+  f.boundary.register(f.evidence());
+  for (const value of [null, false, 1, [], {}, "", chromiumMarker + " "]) {
+    assert.throws(() =>
+      f.prove(
+        f.attempt({}, f.key, {
+          client: withMarker({ other_keys_can_be_added_here: value }),
+        }),
+      ),
+    );
+  }
+  for (const overrides of [
+    { client: withMarker({ extra: true }) },
+    { client: withMarker({ topOrigin: config.origin }) },
+    { client: withMarker({ challenge: "wrong" }) },
+    { client: withMarker({ origin: "https://other.example.test" }) },
+    { client: withMarker(), flags: 1 },
+    { client: withMarker(), flags: 4 },
+    { client: withMarker(), rpId: "other.example.test" },
+  ])
+    assert.throws(() => f.prove(f.attempt({}, f.key, overrides)));
+  assert.throws(() =>
+    f.prove(f.attempt({ registry_epoch: 2 }, f.key, { client: withMarker() })),
+  );
+  assert.throws(() => f.prove(f.attempt({}, f.next, { client: withMarker() })));
+  const a = f.attempt({}, f.key, { client: withMarker() });
+  assert.equal(f.prove(a).productionAuthorization, "disabled");
+  assert.throws(() => f.prove(a), {
+    cause: "synthetic-possession:replay-insertion",
+  });
+  const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+  try {
+    const boundary = createSyntheticWebAuthnBoundary({
+      registry: reopened,
+      webauthn: config,
+      now: () => 1050,
+      enabled: true,
+    });
+    assert.throws(() => boundary.prove(a.bytes, a.assertion, a.intent), {
+      cause: "synthetic-possession:replay-insertion",
+    });
+  } finally {
+    reopened.close();
+  }
+  // Neither assertion nor trusted-context payload can opt the default profile in.
+  const strict = fixture(t);
+  strict.boundary.register(strict.evidence());
+  const injected = strict.attempt({}, strict.key, { client: withMarker() });
+  injected.assertion.syntheticProfile = "cdp-platform-none-v1";
+  assert.throws(() => strict.prove(injected));
+  delete injected.assertion.syntheticProfile;
+  assert.throws(() => strict.prove(injected));
+  assert.equal(
+    strict.prove(strict.attempt()).productionAuthorization,
+    "disabled",
+  );
+});

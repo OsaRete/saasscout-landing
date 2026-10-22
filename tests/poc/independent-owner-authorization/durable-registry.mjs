@@ -604,6 +604,7 @@ export function openSyntheticRegistry({
             epoch: state.epoch,
             credential: { ...c },
             webauthn: { ...profile },
+            registrationProfile,
             productionAuthorization: "disabled",
           });
           stage = "assertion-verifier";
@@ -634,6 +635,8 @@ export function openSyntheticRegistry({
           // Only fixed shared-verifier codes may survive this test-only boundary.
           // Never attach a callback/native error, message, stack or evidence.
           const proofStages = [
+            "compatibility-profile",
+            "client-data-extension-marker-value",
             "trusted-context-shape",
             "intent",
             "origin-configuration",

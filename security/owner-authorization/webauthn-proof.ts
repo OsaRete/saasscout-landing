@@ -82,14 +82,24 @@ export function verifyWebAuthnProof(
   intentBytes: unknown,
   assertion: unknown,
   trustedContext: unknown,
+  syntheticProfile: unknown = "zero-aaguid",
 ): Readonly<{
   kind: "webauthn-proof-only";
   productionAuthorization: "disabled";
 }> {
   // Fixed failure stages only: never attach input, native errors or evidence.
   // The disabled browser POC may inspect cause; public message stays generic.
-  let stage = "trusted-context-shape";
+  let stage = "compatibility-profile";
   try {
+    // Privileged caller policy, never assertion/intent data. Existing callers
+    // retain the exact four-member profile; only the disabled CDP probe opts in.
+    if (
+      !["zero-aaguid", "cdp-platform-none-v1"].includes(
+        syntheticProfile as string,
+      )
+    )
+      throw invalid();
+    stage = "trusted-context-shape";
     const c = record(trustedContext, [
       "expectedIntent",
       "now",
@@ -203,12 +213,24 @@ export function verifyWebAuthnProof(
       ].every((field) => Object.hasOwn(parsed, field))
     )
       stage = "client-data-shape-extension-marker";
-    const client = record(parsed, [
-      "type",
-      "challenge",
-      "origin",
-      "crossOrigin",
-    ]);
+    const fields = ["type", "challenge", "origin", "crossOrigin"];
+    const hasMarker =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      Object.hasOwn(parsed, "other_keys_can_be_added_here");
+    if (syntheticProfile === "cdp-platform-none-v1" && hasMarker)
+      fields.push("other_keys_can_be_added_here");
+    const client = record(parsed, fields);
+    // Chromium GREASE, not authority or a WebAuthn-standardized name/value.
+    // Exact string comparison enforces both type and value. Never rewrite bytes.
+    if (
+      hasMarker &&
+      client.other_keys_can_be_added_here !==
+        "do not compare clientDataJSON against a template. See https://goo.gl/yabPex"
+    ) {
+      stage = "client-data-extension-marker-value";
+      throw invalid();
+    }
     stage = "client-data-context";
     if (
       client.type !== "webauthn.get" ||
