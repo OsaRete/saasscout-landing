@@ -86,6 +86,9 @@ export function verifyWebAuthnProof(
   kind: "webauthn-proof-only";
   productionAuthorization: "disabled";
 }> {
+  // Fixed failure stages only: never attach input, native errors or evidence.
+  // The disabled browser POC may inspect cause; public message stays generic.
+  let stage = "trusted-context-shape";
   try {
     const c = record(trustedContext, [
       "expectedIntent",
@@ -94,12 +97,14 @@ export function verifyWebAuthnProof(
       "rpId",
       "registry",
     ]);
+    stage = "intent";
     const bytes = canonicalBytes(intentBytes, c.now as number);
     const intent = decodeBoundIntent(
       bytes.toString("utf8"),
       c.expectedIntent,
       c.now as number,
     );
+    stage = "origin-configuration";
     // No URL coercion, suffix matching, request-derived RP, localhost or HTTP.
     if (
       typeof c.origin !== "string" ||
@@ -114,6 +119,7 @@ export function verifyWebAuthnProof(
       !(origin.hostname === c.rpId || origin.hostname.endsWith("." + c.rpId))
     )
       throw invalid();
+    stage = "registry-shape";
     const registry = record(c.registry, [
       "ownerSubject",
       "ownerId",
@@ -121,6 +127,7 @@ export function verifyWebAuthnProof(
       "status",
       "credential",
     ]);
+    stage = "credential-shape";
     const credential = record(registry.credential, [
       "id",
       "type",
@@ -130,6 +137,7 @@ export function verifyWebAuthnProof(
       "status",
       "epoch",
     ]);
+    stage = "registry-binding";
     if (
       registry.status !== "active" ||
       credential.status !== "active" ||
@@ -141,6 +149,7 @@ export function verifyWebAuthnProof(
       credential.algorithm !== -7
     )
       throw invalid();
+    stage = "credential-identity-key";
     const enrolledId = binary(credential.id, 1, 1024);
     const userHandle = binary(credential.userHandle, 1, 64);
     const key = credential.publicKey;
@@ -152,6 +161,7 @@ export function verifyWebAuthnProof(
       !equal(enrolledId, Buffer.from(intent.credential_id, "base64url"))
     )
       throw invalid();
+    stage = "assertion-shape";
     const a = record(assertion, ["type", "credentialId", "response"]);
     const response = record(a.response, [
       "clientDataJSON",
@@ -159,11 +169,13 @@ export function verifyWebAuthnProof(
       "signature",
       "userHandle",
     ]);
+    stage = "assertion-credential-identity";
     if (
       a.type !== "public-key" ||
       !equal(binary(a.credentialId, 1, 1024), enrolledId)
     )
       throw invalid();
+    stage = "user-handle";
     // This profile permits null for non-discoverable credentials; present handles
     // must match protected enrollment. The credential ID/key still pins identity.
     if (
@@ -171,11 +183,33 @@ export function verifyWebAuthnProof(
       !equal(binary(response.userHandle, 1, 64), userHandle)
     )
       throw invalid();
+    stage = "client-data-encoding";
     const clientBytes = binary(response.clientDataJSON, 1, 4096);
-    const client = record(
-      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(clientBytes)),
-      ["type", "challenge", "origin", "crossOrigin"],
+    const parsed = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(clientBytes),
     );
+    stage = "client-data-shape";
+    // Diagnose this known browser extension without accepting or logging it.
+    if (
+      parsed &&
+      Object.getPrototypeOf(parsed) === Object.prototype &&
+      Object.keys(parsed).length === 5 &&
+      [
+        "type",
+        "challenge",
+        "origin",
+        "crossOrigin",
+        "other_keys_can_be_added_here",
+      ].every((field) => Object.hasOwn(parsed, field))
+    )
+      stage = "client-data-shape-extension-marker";
+    const client = record(parsed, [
+      "type",
+      "challenge",
+      "origin",
+      "crossOrigin",
+    ]);
+    stage = "client-data-context";
     if (
       client.type !== "webauthn.get" ||
       client.origin !== c.origin ||
@@ -186,13 +220,16 @@ export function verifyWebAuthnProof(
       throw invalid();
     // Exactly base assertion data: no attested data, extensions or reserved flags.
     // BE/BS are rejected too: this initial profile does not accept synced keys.
+    stage = "authenticator-data-length";
     const auth = binary(response.authenticatorData, 37, 37);
-    if (
-      !equal(auth.subarray(0, 32), hash(Buffer.from(c.rpId, "utf8"))) ||
-      auth[32] !== 0x05
-    )
+    stage = "authenticator-rp-id-hash";
+    if (!equal(auth.subarray(0, 32), hash(Buffer.from(c.rpId, "utf8"))))
       throw invalid();
+    stage = "authenticator-flags";
+    if (auth[32] !== 0x05) throw invalid();
+    stage = "signature-encoding";
     const signature = es256Signature(response.signature);
+    stage = "signature-verification";
     if (
       !verify(
         "sha256",
@@ -207,6 +244,8 @@ export function verifyWebAuthnProof(
       productionAuthorization: "disabled",
     });
   } catch {
-    throw invalid();
+    throw new Error("Invalid WebAuthn proof", {
+      cause: `webauthn-proof:${stage}`,
+    });
   }
 }

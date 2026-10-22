@@ -1574,3 +1574,61 @@ test("two-stage public initiation and credential possession cannot substitute fo
   assert.equal(f.registry.audit().epoch, 0);
   f.boundary.confirmEnrollment(c);
 });
+
+test("durable possession diagnostics distinguish verifier failure, state and persisted replay", (t) => {
+  const f = fixture(t);
+  f.boundary.register(f.evidence());
+  const before = f.registry.audit();
+  const rejection = (attempt, stage) =>
+    assert.throws(() => f.prove(attempt), {
+      message: "Invalid synthetic registry",
+      cause: `synthetic-possession:${stage}`,
+    });
+  // Correctly signed extended JSON still fails the unchanged shared shape policy.
+  rejection(
+    f.attempt({}, f.key, { client: withMarker() }),
+    "assertion-verifier:webauthn-proof:client-data-shape-extension-marker",
+  );
+  assert.deepEqual(f.registry.audit(), before);
+  rejection(f.attempt({ registry_epoch: 2 }), "current-binding");
+  const a = f.attempt();
+  assert.throws(
+    () =>
+      f.registry.consumePossession(
+        {
+          ownerId: a.intent.owner_id,
+          ownerSubject: a.intent.owner_subject,
+          credentialId: a.intent.credential_id,
+          epoch: a.intent.registry_epoch,
+        },
+        a.intent.request_id,
+        deriveWebAuthnChallenge(a.bytes, 1050).toString("base64url"),
+        () => {
+          throw new Error("untrusted callback text", {
+            cause: "untrusted callback cause",
+          });
+        },
+      ),
+    {
+      message: "Invalid synthetic registry",
+      cause: "synthetic-possession:assertion-verifier",
+    },
+  );
+  assert.equal(f.prove(a).productionAuthorization, "disabled");
+  rejection(a, "replay-insertion");
+  const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+  try {
+    const boundary = createSyntheticWebAuthnBoundary({
+      registry: reopened,
+      webauthn: config,
+      now: () => 1050,
+      enabled: true,
+    });
+    assert.throws(() => boundary.prove(a.bytes, a.assertion, a.intent), {
+      message: "Invalid synthetic registry",
+      cause: "synthetic-possession:replay-insertion",
+    });
+  } finally {
+    reopened.close();
+  }
+});

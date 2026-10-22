@@ -427,3 +427,80 @@ test("wrong binary types, accessors and untrusted extra fields reject", () => {
       ),
     );
 });
+
+test("fixed failure diagnostics preserve strict client-data and cryptographic boundaries", () => {
+  const cases: [string, (f: Fixture) => void][] = [
+    [
+      "client-data-shape-extension-marker",
+      (f) => {
+        const client = JSON.parse(
+          f.assertion.response.clientDataJSON.toString(),
+        );
+        client.other_keys_can_be_added_here =
+          "do not compare clientDataJSON against a template. See https://goo.gl/yabPex";
+        f.assertion.response.clientDataJSON = Buffer.from(
+          JSON.stringify(client),
+        );
+      },
+    ],
+    [
+      "client-data-shape",
+      (f) => {
+        const client = JSON.parse(
+          f.assertion.response.clientDataJSON.toString(),
+        );
+        client.topOrigin = "https://other.example.test";
+        f.assertion.response.clientDataJSON = Buffer.from(
+          JSON.stringify(client),
+        );
+      },
+    ],
+    [
+      "client-data-encoding",
+      (f) => {
+        f.assertion.response.clientDataJSON = Buffer.from("{");
+      },
+    ],
+    [
+      "authenticator-rp-id-hash",
+      (f) => {
+        f.assertion.response.authenticatorData[0] ^= 1;
+      },
+    ],
+    [
+      "authenticator-flags",
+      (f) => {
+        f.assertion.response.authenticatorData[32] = 1;
+      },
+    ],
+    [
+      "signature-verification",
+      (f) => {
+        f.assertion.response.signature[
+          f.assertion.response.signature.length - 1
+        ] ^= 1;
+      },
+    ],
+    [
+      "registry-binding",
+      (f) => {
+        f.context.registry.status = "revoked";
+      },
+    ],
+  ];
+  for (const [stage, mutate] of cases) {
+    const f = fixture();
+    mutate(f);
+    assert.throws(
+      () => check(f),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "Invalid WebAuthn proof");
+        assert.equal(error.cause, `webauthn-proof:${stage}`);
+        assert.deepEqual(Object.keys(error), []);
+        return true;
+      },
+    );
+    assert.equal(check(fixture()).productionAuthorization, "disabled");
+  }
+});

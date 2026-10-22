@@ -607,11 +607,52 @@ test(
         },
       },
     };
-    const check = (a = assertion, c = trusted) =>
-      verifyWebAuthnProof(bytes, a, c);
-    await t.test("browser authentication adapter positive", () =>
-      assert.equal(check().productionAuthorization, "disabled"),
-    );
+    // Print only verifier-owned fixed stage codes, never errors or evidence.
+    const diagnostic = (error, prefix, stages) => {
+      const code = stages
+        .map((stage) => `${prefix}:${stage}`)
+        .find((candidate) => candidate === error?.cause);
+      t.diagnostic(code ?? `${prefix}:unclassified`);
+    };
+    const proofStages = [
+      "trusted-context-shape",
+      "intent",
+      "origin-configuration",
+      "registry-shape",
+      "credential-shape",
+      "registry-binding",
+      "credential-identity-key",
+      "assertion-shape",
+      "assertion-credential-identity",
+      "user-handle",
+      "client-data-encoding",
+      "client-data-shape",
+      "client-data-shape-extension-marker",
+      "client-data-context",
+      "authenticator-data-length",
+      "authenticator-rp-id-hash",
+      "authenticator-flags",
+      "signature-encoding",
+      "signature-verification",
+    ];
+    const check = (a = assertion, c = trusted) => {
+      try {
+        return verifyWebAuthnProof(bytes, a, c);
+      } catch (error) {
+        diagnostic(error, "webauthn-proof", proofStages);
+        throw error;
+      }
+    };
+    let adapterPassed = false;
+    await t.test("browser authentication adapter positive", () => {
+      assert.equal(check().productionAuthorization, "disabled");
+      adapterPassed = true;
+    });
+    const negativeOptions = {
+      skip:
+        !adapterPassed &&
+        "Adapter positive failed; rejection would be inconclusive",
+    };
     for (const [name, patch] of [
       [
         "incorrect origin",
@@ -629,7 +670,7 @@ test(
       ["revoked credential", (c) => (c.registry.credential.status = "revoked")],
       ["stale registry epoch", (c) => (c.registry.epoch = 2)],
     ])
-      await t.test(name, () => {
+      await t.test(name, negativeOptions, () => {
         const c = {
           ...trusted,
           registry: {
@@ -641,28 +682,45 @@ test(
         assert.throws(() => check(assertion, c), /Invalid WebAuthn proof/);
         assert.equal(check().productionAuthorization, "disabled");
       });
-    await t.test("invalid challenge signed by browser", async () => {
-      const wrong = await get(b64(randomBytes(32)));
-      assert.throws(() => check(wrong), /Invalid WebAuthn proof/);
-    });
-    await t.test("tampered authenticator data and missing UP", () => {
-      for (const index of [0, 32]) {
-        const authenticatorData = Buffer.from(
-          assertion.response.authenticatorData,
-        );
-        if (index === 32) authenticatorData[32] &= ~1;
-        else authenticatorData[index] ^= 1;
-        assert.throws(
-          () =>
-            check({
-              ...assertion,
-              response: { ...assertion.response, authenticatorData },
-            }),
-          /Invalid WebAuthn proof/,
-        );
-      }
-    });
-    await t.test("tampered authentication signature", () => {
+    await t.test(
+      "invalid challenge signed by browser",
+      negativeOptions,
+      async () => {
+        const wrong = await get(b64(randomBytes(32)));
+        assert.throws(() => check(wrong), {
+          message: "Invalid WebAuthn proof",
+          cause: "webauthn-proof:client-data-context",
+        });
+      },
+    );
+    await t.test(
+      "tampered authenticator data and missing UP",
+      negativeOptions,
+      () => {
+        for (const index of [0, 32]) {
+          const authenticatorData = Buffer.from(
+            assertion.response.authenticatorData,
+          );
+          if (index === 32) authenticatorData[32] &= ~1;
+          else authenticatorData[index] ^= 1;
+          assert.throws(
+            () =>
+              check({
+                ...assertion,
+                response: { ...assertion.response, authenticatorData },
+              }),
+            {
+              message: "Invalid WebAuthn proof",
+              cause:
+                index === 32
+                  ? "webauthn-proof:authenticator-flags"
+                  : "webauthn-proof:authenticator-rp-id-hash",
+            },
+          );
+        }
+      },
+    );
+    await t.test("tampered authentication signature", negativeOptions, () => {
       const signature = Buffer.from(assertion.response.signature);
       signature[signature.length - 1] ^= 1;
       assert.throws(
@@ -676,6 +734,7 @@ test(
     });
     await t.test(
       "missing required UV in actual browser assertion",
+      negativeOptions,
       async () => {
         await cdp.send("WebAuthn.setUserVerified", {
           authenticatorId,
@@ -683,16 +742,35 @@ test(
         });
         const a = await get(challenge, "discouraged");
         assert.equal(a.response.authenticatorData[32] & 4, 0);
-        assert.throws(() => check(a), /Invalid WebAuthn proof/);
+        assert.throws(() => check(a), {
+          message: "Invalid WebAuthn proof",
+          cause: "webauthn-proof:authenticator-flags",
+        });
       },
     );
     await t.test(
       "durable valid authentication and replay rejection",
       async () => {
-        assert.equal(
-          boundary.prove(bytes, assertion, intent).productionAuthorization,
-          "disabled",
-        );
+        try {
+          assert.equal(
+            boundary.prove(bytes, assertion, intent).productionAuthorization,
+            "disabled",
+          );
+        } catch (error) {
+          diagnostic(error, "synthetic-possession", [
+            "read-integrity",
+            "binding-shape",
+            "current-binding",
+            "assertion-verifier",
+            ...proofStages.map(
+              (stage) => `assertion-verifier:webauthn-proof:${stage}`,
+            ),
+            "verifier-result",
+            "replay-insertion",
+            "commit",
+          ]);
+          throw error;
+        }
         assert.throws(() => boundary.prove(bytes, assertion, intent));
         const reopened = openSyntheticRegistry(options);
         try {

@@ -354,37 +354,57 @@ npm run lint
 npm run build
 ```
 
-## Execution evidence and merge gate
+## Sixth local run and diagnostic follow-up
 
-Platform-profile follow-up executed in Cloud on Node 24.19.0:
+User-reported actual Windows Chromium 149 / Playwright 1.61.1 execution at
+`9f3b661031918724b428f50e7302230e4f75a697`: 19 tests, 10 passed, 9 failed,
+exit 1, about 2.32 seconds, normal automatic exit. Raw two-stage enrollment,
+duplicate confirmation, stale epoch and enrollment replay after restart passed.
+The adapter positive and durable authentication positive failed. Negative cases
+that reject while the adapter positive fails do not establish their intended
+security boundary; seven related cases also failed their positive controls.
 
-- Focused security plus relevant Validation/integrity/reader regressions:
-  **371/371 PASS** (including four new profile tests and all prior security cases), zero failures/skips.
-- Default gate: **one SKIP**, zero browser tests executed.
-- Explicit opt-in: **FAILED during HTTPS setup**:
-  `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
-  errno `-1`. All browser ceremonies/cases **NOT EXECUTED**.
-- Playwright 1.61.1 installed; expected Chromium 149.0.7827.55/revision 1228.
-  `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
-  No download attempted after the listener restriction was established.
-  Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
-  All five user-reported Windows runs did execute Chromium and failed enrollment;
-  runs two through five exited normally. The explicit platform profile has not yet run in Chromium.
-- Targeted ESLint, Node syntax and Prettier: PASS.
-- Repository lint: zero errors, four warnings in unchanged app files.
-- Build FAILED in Turbopack CSS processing: creating new process / binding to
-  a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
+The shared adapter parses strict UTF-8 JSON and requires exactly type, challenge,
+origin and crossOrigin. The optional Chromium marker is rejected by that shape
+predicate even when correctly signed. The reported generic stack does **not**
+prove the actual assertion contained it. Durable consumePossession invokes the
+shared verifier under a write lock, checks active owner/credential/epoch, and
+inserts unique request/challenge replay records; its catch previously hid all
+these causes. It has no signature-counter policy. Its reported generic stack
+likewise cannot identify the failing predicate.
 
-The harness exited promptly on Cloud HTTPS setup failure (about 0.37 seconds);
-this does not exercise live browser connection cleanup. The new profile regressions intentionally fail against `b514cf6` because its
-zero-only policy rejects nonzero metadata and lacks profile pinning; all final offline regressions passed.
+This follow-up changes **diagnostics only**, with no compatibility acceptance
+change. Fixed verifier failure stages appear as Error.cause, while its public
+message remains Invalid WebAuthn proof. No evidence/native exception is attached.
+The disabled durable registry labels integrity read, binding shape/current state,
+assertion verifier, verifier result, replay insertion and commit failures. An
+explicit whitelist retains the shared verifier stage for durable assertion failures,
+so the durable path is diagnosed independently without attaching callback errors. Browser
+output uses an explicit whitelist of fixed labels only. In particular
+webauthn-proof:client-data-shape-extension-marker identifies the exact five-key
+shape rejected, without printing any member values. Other shapes and encoding,
+context, RP hash, flags and signature failures have distinct fixed stages.
 
-Windows commands were NOT EXECUTED here. No offline pass or default skip establishes
-browser interoperability. Hardware/other browsers, genuine independent identity,
-production IAM and protected origin display remain unverified.
+Authentication negatives are skipped as inconclusive when the shared positive
+fails. Durable authentication still runs independently to expose its stage.
+Registration profiles, CBOR/marker policies, signed bytes and teardown are unchanged.
+The shared offline foundation file has diagnostic-only edits; no caller gains
+production authorization. No evidence is rewritten, normalized, stripped or resigned.
 
-**Merge recommendation: NO-GO pending actual local Chromium execution and review.**
-Leave draft; run the commands above and record Chromium version and full TAP output
-before reconsidering merge of this test-only PR. Production owner withdrawal
-remains DISABLED / NO-GO regardless of browser results. No merge, deployment,
-production database operation or authorization activation is performed.
+Run the complete PowerShell block above unchanged. Report fixed stage labels,
+case totals, exit code, duration and automatic-exit status only. Another actual
+local Chromium run is required to establish the two precise failure predicates;
+no widening of client-data acceptance is justified solely by the current stacks.
+
+Cloud follow-up: focused regressions **373/373 PASS**, including correctly signed
+marker rejection with rollback, fixed parser/crypto stages, state mismatch and
+durable replay after reopen. These are offline results, not Chromium execution.
+Targeted lint/syntax/formatting and repository lint were checked separately.
+Cloud listener EPERM and absent Chromium prevent actual browser verification;
+a default gate skip does not establish interoperability. Build remains subject
+to the Cloud Turbopack process/port restriction. See PR verification for this run.
+
+**Draft / NO-GO until actual local Chromium authentication, durable replay rejection
+and automatic exit all pass and review completes.** Production owner withdrawal
+remains DISABLED / NO-GO. No merge, deployment, migration, database operation or
+authorization activation is performed.
