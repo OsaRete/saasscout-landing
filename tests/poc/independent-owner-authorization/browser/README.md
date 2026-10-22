@@ -66,7 +66,7 @@ against an incompatible positive do not establish interoperability.
 
 The final request, session identity/times/epoch and final synthetic approvals
 match the two-stage contract. `transition()` deliberately hides the underlying
-error after rollback. A deterministic **test-only parser defect** explains this
+error after rollback. A deterministic **test-only parser defect** can reproduce this
 failure: the old fixed prefix requires `authData`'s `59` two-byte CBOR length.
 Chromium's 32-byte credential ID plus 55-byte header and 77-byte ES256 COSE key
 produces 164 bytes, serialized as `58 a4`, not legacy fixture `59 00 a4`.
@@ -94,12 +94,63 @@ Teardown now destroys tracked TCP connections (including unfinished TLS handshak
 when closing the server, so it cannot wait for the later browser hook. Browser
 closure also closes its pages, contexts and virtual authenticators. Registry
 closure now precedes temporary-directory removal, important on Windows.
-Actual post-failure Chromium teardown still requires local verification.
+The second user-reported local run below exited normally, supporting this cleanup fix.
 
 Chromium also replaces a resident key when another is created for the same RP
 and user handle. Competing-key ceremonies now use a separate page-scoped virtual
 authenticator so later authentication can still use the winning key. This changes
 only the test topology, not evidence or owner identity.
+
+## Second local run and diagnostic-only follow-up
+
+At `4a2edeb`, the user again actually ran Chromium 149.0.7827.55 on Windows
+(PowerShell 7.6.7, Node 24.11.1, Playwright 1.61.1). Four negative subtests passed,
+positive enrollment failed with `synthetic-registration:encoding`, epoch stayed
+zero, and the process **exited automatically**, code 1, in approximately 6.3 seconds.
+The earlier shutdown hang appears resolved. The browser positive and durable
+replay checks remain unverified; the negative passes alone establish no compatibility.
+
+The remaining `encoding` label is shared by record/schema checks, canonical
+base64url and size checks, configuration, and credential type/identity checks.
+It does **not** uniquely identify a CBOR encoding problem. The existing `bstr8`
+fix retains its bounded map and exact length/COSE verification, but this result
+does not establish whether the failing run reached that decoder. Without a
+specific structural failure, another acceptance change would be guesswork.
+
+This follow-up changes **diagnostics only**. Every former generic path has a
+fixed check label scoped to its input. UTF-8 and JSON decoding errors are also
+sanitized so native errors cannot quote input. Example labels (all prefixed
+`synthetic-registration:`):
+
+| Label or suffix                                                  | Failed structural check                                                                            |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `create-client-unexpected-field` / `get-client-unexpected-field` | Exact client JSON schema has an extra property; its name/value is not logged                       |
+| `create-client-unexpected-top-origin`                            | Sole extra property is the fixed known name `topOrigin`; value is not logged                       |
+| `create-client-unexpected-extension-marker`                      | Sole extra property is the fixed known name `other_keys_can_be_added_here`; value is not logged    |
+| `*-object`, `*-missing-field`, `*-field-descriptor`              | Plain-object, required-field or enumerable data-property constraint                                |
+| `*-base64url-alphabet`, `*-base64url-canonical`                  | URL-safe alphabet or canonical encoding constraint                                                 |
+| `*-encoded-size`, `*-decoded-size`                               | Existing size bounds; context identifies client JSON, attestation, authenticator data or signature |
+| `create-client-utf8`, `create-client-json`                       | Fatal UTF-8 decoding or JSON syntax                                                                |
+
+The corresponding get-client labels use the same checks. The known optional
+property names above are diagnostic categories, **not observed browser evidence**.
+They remain rejected. No schema fields, size limits or encoding forms are newly
+accepted. The restricted decoder, crypto, owner/time/epoch/replay/SQLite checks,
+and now-working browser/HTTPS teardown are unchanged in this follow-up.
+
+Two deterministic offline tests cover the formerly ambiguous failure categories,
+confirm that arbitrary field names/values and malformed JSON payloads are absent
+from error output, reject all bad evidence without consuming authorization, and
+then accept untouched valid signed evidence. These synthetic examples reproduce
+the diagnostic ambiguity, **not the unknown Chromium incompatibility**. A regression
+for the actual incompatibility must follow its identification and precede any
+acceptance change.
+
+Run the exact PowerShell block below again. Report only the fixed
+`Raw browser evidence rejected: synthetic-registration:...` line, pass/fail summary,
+exit code, duration, and whether exit was automatic. Do not dump response JSON,
+keys, credential IDs, signatures, challenges, nonces or attestation objects.
+A further local run is required; PR remains Draft / NO-GO.
 
 ## Exact Windows PowerShell execution
 
@@ -156,10 +207,10 @@ npm run build
 
 ## Execution evidence and merge gate
 
-Follow-up executed in Cloud on Node 24.19.0:
+Diagnostic-only follow-up executed in Cloud on Node 24.19.0:
 
 - Focused security plus relevant Validation/integrity/reader regressions:
-  **357/357 PASS** (including eight new short-form CBOR regressions), zero failures/skips.
+  **359/359 PASS** (including the eight short-form cases and two diagnostic tests), zero failures/skips.
 - Default gate: **one SKIP**, zero browser tests executed.
 - Explicit opt-in: **FAILED during HTTPS setup**:
   `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
@@ -168,15 +219,16 @@ Follow-up executed in Cloud on Node 24.19.0:
   `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
   No download attempted after the listener restriction was established.
   Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
-  The user-reported first Windows run did execute Chromium and failed enrollment.
+  Both user-reported Windows runs did execute Chromium and failed enrollment;
+  the second exited normally. The new diagnostics have not yet run in Chromium.
 - Targeted ESLint, Node syntax and Prettier: PASS.
 - Repository lint: zero errors, four warnings in unchanged app files.
 - Build FAILED in Turbopack CSS processing: creating new process / binding to
   a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
 
 The fixed harness exited promptly on Cloud HTTPS setup failure (about 0.33 seconds);
-this does not exercise live browser connection cleanup. The old-verifier
-short-form reproducer intentionally failed; all final offline regressions passed.
+this does not exercise live browser connection cleanup. The diagnostic tests intentionally fail with the `4a2edeb` verifier because its
+shared label cannot distinguish failures; all final offline regressions passed.
 
 Windows commands were NOT EXECUTED here. No offline pass or default skip establishes
 browser interoperability. Hardware/other browsers, genuine independent identity,

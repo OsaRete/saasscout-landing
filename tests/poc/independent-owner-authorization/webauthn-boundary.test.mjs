@@ -11,7 +11,13 @@ import {
   enrollmentConfirmationBytes,
 } from "./durable-registry.mjs";
 import { createSyntheticWebAuthnBoundary } from "./webauthn-boundary.mjs";
-import { digest, registrationChallenge } from "./webauthn-registration.mjs";
+import {
+  digest,
+  registrationChallenge,
+  verifySyntheticRegistration,
+  bytes,
+  dataRecord,
+} from "./webauthn-registration.mjs";
 import { encodeIntent } from "../../../security/owner-authorization/intent-codec.ts";
 import { deriveWebAuthnChallenge } from "../../../security/owner-authorization/webauthn-proof.ts";
 const pem = (k) => k.publicKey.export({ type: "spki", format: "pem" });
@@ -610,6 +616,162 @@ function staged(f, requestId = "two-stage") {
     },
   };
 }
+// Synthetic diagnostic examples only. No claim that a case is Chromium's failure.
+test("registration diagnostics distinguish structural failures without exposing evidence", (t) => {
+  const f = fixture(t),
+    s = staged(f),
+    c = shortForm(s.confirmation());
+  const request = registryTransitionBytes({
+    version: 1,
+    action: "enroll",
+    ownerId: f.options.ownerId,
+    ownerSubject: f.options.ownerSubject,
+    expectedEpoch: 0,
+    requestId: "two-stage",
+    issuedAt: 1050,
+    expiresAt: 1300,
+    credential: c.credential,
+  });
+  const marker = "synthetic-private-marker";
+  const client = JSON.parse(Buffer.from(c.proof.clientDataJSON, "base64url"));
+  const getClient = JSON.parse(
+    Buffer.from(c.proof.possession.clientDataJSON, "base64url"),
+  );
+  const proofClient = (value) => ({ ...c.proof, clientDataJSON: value });
+  for (const [label, proof] of [
+    ["proof-object", null],
+    ["proof-unexpected-field", { ...c.proof, [marker]: marker }],
+    [
+      "proof-missing-field",
+      Object.fromEntries(
+        Object.entries(c.proof).filter(([k]) => k !== "possession"),
+      ),
+    ],
+    [
+      "create-client-unexpected-field",
+      proofClient(b64(JSON.stringify({ ...client, [marker]: marker }))),
+    ],
+    [
+      "create-client-unexpected-top-origin",
+      proofClient(b64(JSON.stringify({ ...client, topOrigin: marker }))),
+    ],
+    [
+      "create-client-unexpected-extension-marker",
+      proofClient(
+        b64(
+          JSON.stringify({ ...client, other_keys_can_be_added_here: marker }),
+        ),
+      ),
+    ],
+    [
+      "create-client-missing-field",
+      proofClient(
+        b64(
+          JSON.stringify({
+            type: client.type,
+            challenge: client.challenge,
+            origin: client.origin,
+          }),
+        ),
+      ),
+    ],
+    ["create-client-base64url-alphabet", proofClient("++")],
+    ["create-client-utf8", proofClient(b64(Buffer.from([0xc3, 0x28])))],
+    ["create-client-json", proofClient(b64("{ " + marker))],
+    ["attestation-type", { ...c.proof, attestationObject: null }],
+    [
+      "attestation-encoded-size",
+      { ...c.proof, attestationObject: "A".repeat(2732) },
+    ],
+    [
+      "attestation-decoded-size",
+      { ...c.proof, attestationObject: b64(marker) },
+    ],
+    [
+      "possession-unexpected-field",
+      { ...c.proof, possession: { ...c.proof.possession, [marker]: marker } },
+    ],
+    [
+      "get-client-unexpected-field",
+      {
+        ...c.proof,
+        possession: {
+          ...c.proof.possession,
+          clientDataJSON: b64(
+            JSON.stringify({ ...getClient, [marker]: marker }),
+          ),
+        },
+      },
+    ],
+    [
+      "possession-authenticator-data-decoded-size",
+      {
+        ...c.proof,
+        possession: {
+          ...c.proof.possession,
+          authenticatorData: b64(Buffer.alloc(36)),
+        },
+      },
+    ],
+    [
+      "possession-signature-decoded-size",
+      {
+        ...c.proof,
+        possession: { ...c.proof.possession, signature: b64(Buffer.alloc(7)) },
+      },
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        verifySyntheticRegistration(
+          request,
+          proof,
+          c.credential,
+          config,
+          s.request,
+        ),
+      (error) => {
+        assert.equal(error.code, `synthetic-registration:${label}`);
+        assert.equal(error.message, "Invalid synthetic registration");
+        assert.deepEqual(Object.keys(error), ["code"]);
+        assert.ok(!String(error).includes(marker));
+        assert.ok(!JSON.stringify(error).includes(marker));
+        return true;
+      },
+    );
+    assert.throws(() => f.boundary.confirmEnrollment({ ...c, proof }));
+    assert.equal(f.registry.audit().epoch, 0);
+  }
+  // Instrumentation still accepts valid signed evidence without rewriting it.
+  verifySyntheticRegistration(
+    request,
+    c.proof,
+    c.credential,
+    config,
+    s.request,
+  );
+  f.boundary.confirmEnrollment(c);
+});
+test("registration diagnostic helpers keep canonical bytes and data-only schemas strict", () => {
+  assert.throws(() => bytes("Zh", 1, 1), {
+    code: "synthetic-registration:bytes-base64url-canonical",
+  });
+  assert.equal(bytes("Zg", 1, 1).toString(), "f");
+  const value = {};
+  Object.defineProperty(value, "known", {
+    enumerable: true,
+    get() {
+      throw new Error("must not invoke getter");
+    },
+  });
+  assert.throws(() => dataRecord(value, ["known"]), {
+    code: "synthetic-registration:record-field-descriptor",
+  });
+  assert.throws(
+    () => dataRecord({ known: 1, [Symbol("private-marker")]: 2 }, ["known"]),
+    { code: "synthetic-registration:record-unexpected-field" },
+  );
+});
 // OFFLINE synthetic encoding fixture, never a rewritten browser response.
 function shortForm(c) {
   const att = Buffer.from(c.proof.attestationObject, "base64url");

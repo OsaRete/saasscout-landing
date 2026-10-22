@@ -1,6 +1,6 @@
 // OFFLINE synthetic restricted WebAuthn profile. No identity attestation claim.
 import { createHash, createPublicKey, verify } from "node:crypto";
-const fail = (stage = "encoding") => {
+const fail = (stage) => {
   const error = new Error("Invalid synthetic registration");
   // Fixed labels only; this isolated POC never includes evidence in diagnostics.
   error.code = `synthetic-registration:${stage}`;
@@ -8,55 +8,79 @@ const fail = (stage = "encoding") => {
 };
 export const digest = (bytes) => createHash("sha256").update(bytes).digest();
 export function registrationChallenge(request, purpose) {
-  if (!["create", "get"].includes(purpose)) fail();
+  if (!["create", "get"].includes(purpose)) fail("challenge-purpose");
   return digest(
     `SaaSScout:synthetic-registration:${purpose}:v1\n${request}`,
   ).toString("base64url");
 }
-export function dataRecord(value, fields) {
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype) fail();
+export function dataRecord(value, fields, stage = "record") {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype)
+    fail(`${stage}-object`);
   const props = Object.getOwnPropertyDescriptors(value);
-  if (
-    Reflect.ownKeys(value).length !== fields.length ||
-    !fields.every((f) => props[f]?.enumerable && "value" in props[f])
-  )
-    fail();
+  const keys = Reflect.ownKeys(value);
+  // Report only fixed check labels, never unexpected property names or values.
+  const extra = keys.filter((key) => !fields.includes(key));
+  if (extra.length) {
+    if (stage === "create-client" || stage === "get-client") {
+      // Identify only known optional key names, never their values. Both remain
+      // REJECTED: these labels do not extend the synthetic profile.
+      if (extra.length === 1 && extra[0] === "topOrigin")
+        fail(`${stage}-unexpected-top-origin`);
+      if (extra.length === 1 && extra[0] === "other_keys_can_be_added_here")
+        fail(`${stage}-unexpected-extension-marker`);
+    }
+    fail(`${stage}-unexpected-field`);
+  }
+  if (keys.length !== fields.length) fail(`${stage}-missing-field`);
+  if (!fields.every((f) => props[f]?.enumerable && "value" in props[f]))
+    fail(`${stage}-field-descriptor`);
   return Object.fromEntries(fields.map((f) => [f, props[f].value]));
 }
-export function bytes(value, min, max) {
-  if (
-    typeof value !== "string" ||
-    value.length > Math.ceil((max * 4) / 3) ||
-    !/^[A-Za-z0-9_-]+$/.test(value)
-  )
-    fail();
+export function bytes(value, min, max, stage = "bytes") {
+  if (typeof value !== "string") fail(`${stage}-type`);
+  if (value.length > Math.ceil((max * 4) / 3)) fail(`${stage}-encoded-size`);
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) fail(`${stage}-base64url-alphabet`);
   const b = Buffer.from(value, "base64url");
-  if (b.length < min || b.length > max || b.toString("base64url") !== value)
-    fail();
+  if (b.length < min || b.length > max) fail(`${stage}-decoded-size`);
+  if (b.toString("base64url") !== value) fail(`${stage}-base64url-canonical`);
   return b;
 }
 export function originConfig(value) {
-  const c = dataRecord(value, ["origin", "rpId"]);
+  const c = dataRecord(value, ["origin", "rpId"], "configuration");
   if (
     typeof c.origin !== "string" ||
     typeof c.rpId !== "string" ||
     !/^(?=.{1,253}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(c.rpId)
   )
-    fail();
+    fail("configuration-types-or-rp-syntax");
   const u = new URL(c.origin);
   if (
     u.protocol !== "https:" ||
     u.origin !== c.origin ||
     !(u.hostname === c.rpId || u.hostname.endsWith("." + c.rpId))
   )
-    fail();
+    fail("configuration-origin-or-rp-binding");
   return c;
 }
 function client(value, request, purpose, origin) {
-  const raw = bytes(value, 1, 4096);
+  const stage = `${purpose}-client`;
+  const raw = bytes(value, 1, 4096, stage);
+  let text, parsed;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    fail(`${stage}-utf8`);
+  }
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Native JSON errors can quote input. Keep diagnostic payloads fixed.
+    fail(`${stage}-json`);
+  }
   const c = dataRecord(
-    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)),
+    parsed,
     ["type", "challenge", "origin", "crossOrigin"],
+    stage,
   );
   if (
     c.type !== `webauthn.${purpose}` ||
@@ -82,16 +106,26 @@ export function verifySyntheticRegistration(
   creationRequest = request,
 ) {
   const cfg = originConfig(configuration);
-  const p = dataRecord(proof, [
-    "type",
-    "credentialId",
-    "clientDataJSON",
-    "attestationObject",
-    "possession",
-  ]);
-  if (p.type !== "public-key" || p.credentialId !== credential.id) fail();
+  const p = dataRecord(
+    proof,
+    [
+      "type",
+      "credentialId",
+      "clientDataJSON",
+      "attestationObject",
+      "possession",
+    ],
+    "proof",
+  );
+  if (p.type !== "public-key") fail("credential-type");
+  if (p.credentialId !== credential.id) fail("credential-id-mismatch");
   client(p.clientDataJSON, creationRequest, "create", cfg.origin);
-  const att = bytes(p.attestationObject, PREFIX.length + 2 + 132, 2048);
+  const att = bytes(
+    p.attestationObject,
+    PREFIX.length + 2 + 132,
+    2048,
+    "attestation",
+  );
   const width =
     att[PREFIX.length] === 0x58 ? 1 : att[PREFIX.length] === 0x59 ? 2 : 0;
   const offset = PREFIX.length + 1 + width;
@@ -103,7 +137,7 @@ export function verifySyntheticRegistration(
   )
     fail("attestation-envelope");
   const auth = att.subarray(offset);
-  const id = bytes(credential.id, 1, 1024);
+  const id = bytes(credential.id, 1, 1024, "credential-id");
   if (
     !auth.subarray(0, 32).equals(digest(cfg.rpId)) ||
     auth[32] !== 0x45 ||
@@ -121,26 +155,35 @@ export function verifySyntheticRegistration(
   const jwk = key.export({ format: "jwk" });
   const cose = Buffer.concat([
     Buffer.from("a5010203262001215820", "hex"),
-    bytes(jwk.x, 32, 32),
+    bytes(jwk.x, 32, 32, "public-key-x"),
     Buffer.from("225820", "hex"),
-    bytes(jwk.y, 32, 32),
+    bytes(jwk.y, 32, 32, "public-key-y"),
   ]);
   if (!auth.subarray(55 + id.length).equals(cose)) fail("cose-key");
   // fmt:none is NOT identity/device attestation. Require a fresh signed get too.
-  const a = dataRecord(p.possession, [
-    "credentialId",
-    "clientDataJSON",
-    "authenticatorData",
-    "signature",
-    "userHandle",
-  ]);
+  const a = dataRecord(
+    p.possession,
+    [
+      "credentialId",
+      "clientDataJSON",
+      "authenticatorData",
+      "signature",
+      "userHandle",
+    ],
+    "possession",
+  );
   if (
     a.credentialId !== credential.id ||
     a.userHandle !== credential.userHandle
   )
     fail("possession-identity");
   const cd = client(a.clientDataJSON, request, "get", cfg.origin);
-  const ad = bytes(a.authenticatorData, 37, 37);
+  const ad = bytes(
+    a.authenticatorData,
+    37,
+    37,
+    "possession-authenticator-data",
+  );
   if (
     !ad.subarray(0, 32).equals(digest(cfg.rpId)) ||
     ad[32] !== 5 ||
@@ -148,7 +191,7 @@ export function verifySyntheticRegistration(
       "sha256",
       Buffer.concat([ad, digest(cd)]),
       key,
-      bytes(a.signature, 8, 72),
+      bytes(a.signature, 8, 72, "possession-signature"),
     )
   )
     fail("possession-signature-or-flags");
