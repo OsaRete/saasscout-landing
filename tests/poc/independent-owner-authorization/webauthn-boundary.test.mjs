@@ -610,6 +610,107 @@ function staged(f, requestId = "two-stage") {
     },
   };
 }
+// OFFLINE synthetic encoding fixture, never a rewritten browser response.
+function shortForm(c) {
+  const att = Buffer.from(c.proof.attestationObject, "base64url");
+  const prefix = Buffer.from(
+    "a363666d74646e6f6e656761747453746d74a0686175746844617461",
+    "hex",
+  );
+  assert.ok(att.subarray(0, prefix.length).equals(prefix));
+  assert.equal(att[prefix.length], 0x59);
+  const auth = att.subarray(prefix.length + 3);
+  assert.ok(auth.length < 256);
+  c.proof.attestationObject = b64(
+    Buffer.concat([prefix, Buffer.from([0x58, auth.length]), auth]),
+  );
+  return c;
+}
+test("short-form CBOR enrollment retains signed evidence, restart and replay checks", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  // Chromium 149 hashes ES256 COSE to a 32-byte ID: authData length 55+32+77.
+  const c = shortForm(s.confirmation(f.key, "x".repeat(32)));
+  assert.equal(Buffer.from(c.proof.attestationObject, "base64url").at(29), 164);
+  f.boundary.confirmEnrollment(c);
+  const before = f.registry.audit();
+  const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+  try {
+    assert.deepEqual(reopened.audit(), before);
+    assert.throws(() => reopened.confirmEnrollment(c));
+  } finally {
+    reopened.close();
+  }
+});
+test("short-form CBOR rejects malformed envelopes without consuming authorization", (t) => {
+  const f = fixture(t),
+    s = staged(f),
+    c = shortForm(s.confirmation());
+  const valid = Buffer.from(c.proof.attestationObject, "base64url");
+  const wrongLength = Buffer.from(valid);
+  wrongLength[29]--;
+  const wrongMap = Buffer.from(valid);
+  wrongMap[0] = 0xa4;
+  for (const att of [
+    wrongLength,
+    wrongMap,
+    valid.subarray(0, -1),
+    Buffer.concat([valid, Buffer.from([0])]),
+    Buffer.concat([
+      valid.subarray(0, 28),
+      Buffer.from([0x5f]),
+      valid.subarray(30),
+    ]),
+    Buffer.concat([
+      valid.subarray(0, 28),
+      Buffer.from([0x5a, 0, 0, 0, valid[29]]),
+      valid.subarray(30),
+    ]),
+  ]) {
+    assert.throws(() =>
+      f.boundary.confirmEnrollment({
+        ...c,
+        proof: { ...c.proof, attestationObject: b64(att) },
+      }),
+    );
+    assert.equal(f.registry.audit().epoch, 0);
+  }
+  const signature = Buffer.from(c.proof.possession.signature, "base64url");
+  signature[signature.length - 1] ^= 1;
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...c,
+      proof: {
+        ...c.proof,
+        possession: { ...c.proof.possession, signature: b64(signature) },
+      },
+    }),
+  );
+  assert.equal(f.registry.audit().epoch, 0);
+  f.boundary.confirmEnrollment(c);
+});
+for (const [name, override] of [
+  ["challenge", { client: { challenge: b64(Buffer.alloc(32)) } }],
+  ["origin", { client: { origin: "https://foreign.example.test" } }],
+  ["RP", { rpId: "foreign.example.test" }],
+  ["UP", { flags: 0x44 }],
+  ["UV", { flags: 0x41 }],
+  [
+    "possession",
+    { possession: { client: { challenge: b64(Buffer.alloc(32)) } } },
+  ],
+])
+  test(`short-form CBOR preserves ${name} verification`, (t) => {
+    const f = fixture(t),
+      s = staged(f);
+    assert.throws(() =>
+      f.boundary.confirmEnrollment(
+        shortForm(s.confirmation(f.key, "credential", override)),
+      ),
+    );
+    assert.equal(f.registry.audit().epoch, 0);
+    f.boundary.confirmEnrollment(shortForm(s.confirmation()));
+  });
 test("two-stage initiation precedes credential generation; immutable registration survives restart and replay", (t) => {
   const f = fixture(t),
     s = staged(f);

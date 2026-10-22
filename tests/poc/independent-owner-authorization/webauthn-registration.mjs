@@ -1,7 +1,10 @@
 // OFFLINE synthetic restricted WebAuthn profile. No identity attestation claim.
 import { createHash, createPublicKey, verify } from "node:crypto";
-const fail = () => {
-  throw new Error("Invalid synthetic registration");
+const fail = (stage = "encoding") => {
+  const error = new Error("Invalid synthetic registration");
+  // Fixed labels only; this isolated POC never includes evidence in diagnostics.
+  error.code = `synthetic-registration:${stage}`;
+  throw error;
 };
 export const digest = (bytes) => createHash("sha256").update(bytes).digest();
 export function registrationChallenge(request, purpose) {
@@ -61,13 +64,14 @@ function client(value, request, purpose, origin) {
     c.origin !== origin ||
     c.crossOrigin !== false
   )
-    fail();
+    fail(`client-${purpose}`);
   return raw;
 }
-// A single canonical CBOR encoding: {fmt:"none",attStmt:{},authData: bstr16}.
+// Fixed CBOR map: {fmt:"none",attStmt:{},authData: bstr8 or bstr16}.
+// bstr8 is Chromium's shortest encoding for <256 bytes; retain legacy fixtures.
 // Reject all other formats, encodings, extensions, algorithms and backup flags.
 const PREFIX = Buffer.from(
-  "a363666d74646e6f6e656761747453746d74a068617574684461746159",
+  "a363666d74646e6f6e656761747453746d74a0686175746844617461",
   "hex",
 );
 export function verifySyntheticRegistration(
@@ -88,12 +92,17 @@ export function verifySyntheticRegistration(
   if (p.type !== "public-key" || p.credentialId !== credential.id) fail();
   client(p.clientDataJSON, creationRequest, "create", cfg.origin);
   const att = bytes(p.attestationObject, PREFIX.length + 2 + 132, 2048);
+  const width =
+    att[PREFIX.length] === 0x58 ? 1 : att[PREFIX.length] === 0x59 ? 2 : 0;
+  const offset = PREFIX.length + 1 + width;
   if (
     !att.subarray(0, PREFIX.length).equals(PREFIX) ||
-    att.readUInt16BE(PREFIX.length) !== att.length - PREFIX.length - 2
+    width === 0 ||
+    (width === 1 ? att[offset - 1] : att.readUInt16BE(offset - 2)) !==
+      att.length - offset
   )
-    fail();
-  const auth = att.subarray(PREFIX.length + 2);
+    fail("attestation-envelope");
+  const auth = att.subarray(offset);
   const id = bytes(credential.id, 1, 1024);
   if (
     !auth.subarray(0, 32).equals(digest(cfg.rpId)) ||
@@ -102,13 +111,13 @@ export function verifySyntheticRegistration(
     auth.readUInt16BE(53) !== id.length ||
     !auth.subarray(55, 55 + id.length).equals(id)
   )
-    fail();
+    fail("attested-credential");
   const key = createPublicKey(credential.publicKey);
   if (
     key.asymmetricKeyType !== "ec" ||
     key.asymmetricKeyDetails?.namedCurve !== "prime256v1"
   )
-    fail();
+    fail("public-key");
   const jwk = key.export({ format: "jwk" });
   const cose = Buffer.concat([
     Buffer.from("a5010203262001215820", "hex"),
@@ -116,7 +125,7 @@ export function verifySyntheticRegistration(
     Buffer.from("225820", "hex"),
     bytes(jwk.y, 32, 32),
   ]);
-  if (!auth.subarray(55 + id.length).equals(cose)) fail();
+  if (!auth.subarray(55 + id.length).equals(cose)) fail("cose-key");
   // fmt:none is NOT identity/device attestation. Require a fresh signed get too.
   const a = dataRecord(p.possession, [
     "credentialId",
@@ -129,7 +138,7 @@ export function verifySyntheticRegistration(
     a.credentialId !== credential.id ||
     a.userHandle !== credential.userHandle
   )
-    fail();
+    fail("possession-identity");
   const cd = client(a.clientDataJSON, request, "get", cfg.origin);
   const ad = bytes(a.authenticatorData, 37, 37);
   if (
@@ -142,5 +151,5 @@ export function verifySyntheticRegistration(
       bytes(a.signature, 8, 72),
     )
   )
-    fail();
+    fail("possession-signature-or-flags");
 }

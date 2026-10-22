@@ -19,7 +19,10 @@ import {
   enrollmentConfirmationBytes,
 } from "../durable-registry.mjs";
 import { createSyntheticWebAuthnBoundary } from "../webauthn-boundary.mjs";
-import { registrationChallenge } from "../webauthn-registration.mjs";
+import {
+  registrationChallenge,
+  verifySyntheticRegistration,
+} from "../webauthn-registration.mjs";
 import { encodeIntent } from "../../../../security/owner-authorization/intent-codec.ts";
 import {
   deriveWebAuthnChallenge,
@@ -55,7 +58,22 @@ test(
         );
       },
     );
-    t.after(() => new Promise((resolve) => server.close(resolve)));
+    // After hooks run in registration order. Never wait on live Chromium TLS
+    // sockets before the later browser.close hook can run (including on failure).
+    const sockets = new Set();
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    t.after(
+      () =>
+        new Promise((resolve) => {
+          server.close(resolve);
+          server.closeAllConnections();
+          // Include TLS handshakes, which closeAllConnections may not track yet.
+          for (const socket of sockets) socket.destroy();
+        }),
+    );
     await new Promise((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);
@@ -91,7 +109,14 @@ test(
       generateKeyPairSync("ed25519"),
     ];
     const dir = mkdtempSync(join(tmpdir(), "browser-webauthn-"));
-    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    let registry;
+    t.after(() => {
+      try {
+        registry?.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
     const options = {
       path: join(dir, "registry.sqlite"),
       ownerId,
@@ -101,8 +126,7 @@ test(
       enabled: true,
       webauthn: config,
     };
-    const registry = openSyntheticRegistry({ ...options, create: true });
-    t.after(() => registry.close());
+    registry = openSyntheticRegistry({ ...options, create: true });
     const boundary = createSyntheticWebAuthnBoundary({
       registry,
       webauthn: config,
@@ -126,8 +150,8 @@ test(
     assert.equal(authorized.request, initiation);
     const session = JSON.parse(authorized.request.split("\n")[1]);
     const createChallenge = registrationChallenge(authorized.request, "create");
-    async function create(challenge, handle) {
-      return page.evaluate(
+    async function create(challenge, handle, target = page) {
+      return target.evaluate(
         async ({ challenge, handle }) => {
           const decode = (s) =>
             Uint8Array.from(
@@ -183,8 +207,9 @@ test(
       challenge,
       userVerification = "required",
       credentialId = credential.id,
+      target = page,
     ) {
-      const wire = await page.evaluate(
+      const wire = await target.evaluate(
         async ({ challenge, userVerification, credentialId }) => {
           const decode = (s) =>
             Uint8Array.from(
@@ -265,8 +290,24 @@ test(
         },
       },
     };
+    // A new resident key for the same RP/handle replaces the old key in Chromium.
+    // Give competing keys their own page/authenticator; preserve the primary key.
+    const competingPage = await context.newPage();
+    const competingCdp = await context.newCDPSession(competingPage);
+    await competingCdp.send("WebAuthn.enable");
+    await competingCdp.send("WebAuthn.addVirtualAuthenticator", {
+      options: {
+        protocol: "ctap2",
+        transport: "internal",
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        automaticPresenceSimulation: true,
+      },
+    });
+    await competingPage.goto(origin);
     // A second real browser key has valid possession but lacks approval of its binding.
-    const otherCreated = await create(createChallenge, handle);
+    const otherCreated = await create(createChallenge, handle, competingPage);
     const otherCredential = {
       id: otherCreated.credentialId,
       publicKey: pem(
@@ -293,6 +334,7 @@ test(
       registrationChallenge(otherRequest, "get"),
       "required",
       otherCredential.id,
+      competingPage,
     );
     const otherProof = {
       type: otherCreated.type,
@@ -412,6 +454,7 @@ test(
     const staleCreated = await create(
       registrationChallenge(stale, "create"),
       handle,
+      competingPage,
     );
     const staleCredential = {
       id: staleCreated.credentialId,
@@ -439,6 +482,7 @@ test(
       registrationChallenge(staleRequest, "get"),
       "required",
       staleCredential.id,
+      competingPage,
     );
     const staleConfirmation = {
       sessionId: staleSession.requestId,
@@ -461,6 +505,27 @@ test(
       },
     };
     await t.test("successful raw browser two-stage enrollment", () => {
+      // transition intentionally masks verification errors. Run the SAME strict
+      // verifier first for a fixed, non-sensitive stage label, never a bypass.
+      try {
+        verifySyntheticRegistration(
+          request,
+          confirmation.proof,
+          credential,
+          config,
+          initiation,
+        );
+      } catch (error) {
+        t.diagnostic(
+          `Raw browser evidence rejected: ${typeof error.code === "string" && error.code.startsWith("synthetic-registration:") ? error.code : "registration-profile"}`,
+        );
+        throw new Error(
+          "Raw browser registration failed strict profile verification",
+        );
+      }
+      t.diagnostic(
+        "Raw registration profile accepted; checking registry confirmation",
+      );
       assert.equal(
         boundary.confirmEnrollment(confirmation).productionAuthorization,
         "disabled",

@@ -2,7 +2,7 @@
 
 **Production owner withdrawal remains DISABLED and NO-GO.**
 Synthetic custodian approval is not real independent identity verification.
-Only browser test infrastructure and documentation change. No production
+Only isolated test POC infrastructure and documentation change. No production
 behavior, dependencies, Supabase, Validation workflows or Knowledge Evolution changes.
 This improves evidence-provenance security knowledge protecting the Data Moat.
 
@@ -22,6 +22,8 @@ approved session challenge. The raw generated ID and SPKI key form the final
 canonical binding; `navigator.credentials.get()` signs its possession challenge.
 Both custodians approve `enrollmentConfirmationBytes(initiation, finalRequest)`.
 Confirm through the existing two-stage registry contract without modifying it.
+The restricted test-only attestation decoder additionally accepts Chromium's
+short-form byte-string length; legacy synthetic fixtures remain readable.
 
 The positive requires raw browser enrollment, exact registered credential, epoch
 and immutable authorization history. Negatives cover missing final approvals,
@@ -43,8 +45,9 @@ stops durable checks. No conditional replay skip or known-failure exemption rema
 Existing strict origin, RP, challenge, signature, UP/UV, COSE/SPKI identity, owner,
 expiry, epoch and replay verification remains unchanged. Raw browser responses are
 never rewritten for acceptance; deliberate mutations occur only in negative cases.
-The restrictive CBOR/COSE, exact client JSON, flags and zero-AAGUID profile may still
-reject Chromium output. Do not weaken it to force compatibility in this PR.
+The restricted map, COSE, exact client JSON, flags and zero-AAGUID profile remain
+enforced. The only added encoding is a definite `bstr8` length alongside existing
+`bstr16`, with exact payload length and no trailing bytes. No general CBOR parser.
 
 Uses existing Playwright, Chromium CDP CTAP2/internal, resident credentials, UV and
 automatic presence on disposable loopback HTTPS. Gets pin the intended credential
@@ -53,23 +56,66 @@ browser context ignores its certificate trust error. No application-facing API.
 Default gate skips before reading TLS files or binding listeners. Explicit setup
 errors fail; there is no mocked fallback.
 
+## Diagnosis of the first local run
+
+User-reported Windows PowerShell 7.6.7 / Node 24.11.1 / Playwright 1.61.1 /
+Chromium 149.0.7827.55 actually ran create/get. Four negative subtests passed;
+positive confirmation failed at `durable-registry.mjs:466`, epoch stayed zero,
+and the process was interrupted after approximately 33 minutes. Passing negatives
+against an incompatible positive do not establish interoperability.
+
+The final request, session identity/times/epoch and final synthetic approvals
+match the two-stage contract. `transition()` deliberately hides the underlying
+error after rollback. A deterministic **test-only parser defect** explains this
+failure: the old fixed prefix requires `authData`'s `59` two-byte CBOR length.
+Chromium's 32-byte credential ID plus 55-byte header and 77-byte ES256 COSE key
+produces 164 bytes, serialized as `58 a4`, not legacy fixture `59 00 a4`.
+See Chromium 149's [key handle construction](https://github.com/chromium/chromium/blob/149.0.7827.55/device/fido/virtual_ctap2_device.cc)
+and [CBOR writer](https://github.com/chromium/chromium/blob/149.0.7827.55/components/cbor/writer.cc).
+No raw evidence from that Windows run was supplied, so this proves a compatibility
+blocker consistent with the stack, not that it was the only local failure.
+
+An offline synthetic fixture with `58 a4` reproduces the same line-466 failure
+against the old verifier and passes after the bounded length-decoding fix. The
+new tests also reject malformed/truncated/trailing/indefinite/32-bit envelopes,
+wrong challenge/origin/RP/UP/UV/possession and verify restart/replay. These are
+**offline regression results, not browser execution**. No browser evidence is
+rewritten, and no signatures, challenges, identity/owner bindings, epochs, time
+or SQLite checks are bypassed.
+
+The browser positive now invokes the same strict verifier before confirmation
+and emits only a fixed stage label on rejection. The registry's masked errors
+and transaction behavior remain unchanged; diagnostics print no credential ID,
+key, nonce, signature or full response.
+
+The hang is consistent with FIFO `after` hooks waiting for `server.close()` while
+Chromium still owns HTTPS connections; its later close hook cannot run yet.
+Teardown now destroys tracked TCP connections (including unfinished TLS handshakes)
+when closing the server, so it cannot wait for the later browser hook. Browser
+closure also closes its pages, contexts and virtual authenticators. Registry
+closure now precedes temporary-directory removal, important on Windows.
+Actual post-failure Chromium teardown still requires local verification.
+
+Chromium also replaces a resident key when another is created for the same RP
+and user handle. Competing-key ceremonies now use a separate page-scoped virtual
+authenticator so later authentication can still use the winning key. This changes
+only the test topology, not evidence or owner identity.
+
 ## Exact Windows PowerShell execution
 
 Use PowerShell 7 / .NET 8+ and Node.js 24, starting in your local repository.
-If the branch exists locally, use `git switch codex/b42-b215-two-stage-browser-interop`
-instead of the tracking command. The one-day certificate stays outside the repo;
+For the existing checkout and installed Chromium, run this rerun block in the
+VS Code terminal at the repository root. Dependencies are unchanged. The one-day
+certificate stays outside the repo;
 no machine trust store changes.
 
 ```powershell
 git fetch origin
-git switch --track origin/codex/b42-b215-two-stage-browser-interop
-code .
-# Continue in the VS Code PowerShell terminal at the repository root.
-npm ci
-if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-npx playwright install chromium
-if ($LASTEXITCODE -ne 0) { throw 'Chromium install failed' }
-npx playwright --version
+if ($LASTEXITCODE -ne 0) { throw 'Fetch failed' }
+git switch codex/b42-b215-two-stage-browser-interop
+if ($LASTEXITCODE -ne 0) { throw 'Branch switch failed' }
+git pull --ff-only origin codex/b42-b215-two-stage-browser-interop
+if ($LASTEXITCODE -ne 0) { throw 'Branch update failed' }
 $fixtureDir = Join-Path ([IO.Path]::GetTempPath()) ('browser-webauthn-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $fixtureDir | Out-Null
 $rsa = [Security.Cryptography.RSA]::Create(2048)
@@ -110,10 +156,10 @@ npm run build
 
 ## Execution evidence and merge gate
 
-Executed in Cloud on Node 24.19.0:
+Follow-up executed in Cloud on Node 24.19.0:
 
 - Focused security plus relevant Validation/integrity/reader regressions:
-  **349/349 PASS**, zero failures/skips.
+  **357/357 PASS** (including eight new short-form CBOR regressions), zero failures/skips.
 - Default gate: **one SKIP**, zero browser tests executed.
 - Explicit opt-in: **FAILED during HTTPS setup**:
   `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
@@ -121,11 +167,16 @@ Executed in Cloud on Node 24.19.0:
 - Playwright 1.61.1 installed; expected Chromium 149.0.7827.55/revision 1228.
   `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
   No download attempted after the listener restriction was established.
-  Actual Chromium and virtual-authenticator execution did **not** occur.
+  Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
+  The user-reported first Windows run did execute Chromium and failed enrollment.
 - Targeted ESLint, Node syntax and Prettier: PASS.
 - Repository lint: zero errors, four warnings in unchanged app files.
 - Build FAILED in Turbopack CSS processing: creating new process / binding to
   a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
+
+The fixed harness exited promptly on Cloud HTTPS setup failure (about 0.33 seconds);
+this does not exercise live browser connection cleanup. The old-verifier
+short-form reproducer intentionally failed; all final offline regressions passed.
 
 Windows commands were NOT EXECUTED here. No offline pass or default skip establishes
 browser interoperability. Hardware/other browsers, genuine independent identity,
