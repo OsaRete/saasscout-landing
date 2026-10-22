@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import {
   openSyntheticRegistry,
   registryTransitionBytes,
+  enrollmentConfirmationBytes,
 } from "./durable-registry.mjs";
 import { createSyntheticWebAuthnBoundary } from "./webauthn-boundary.mjs";
 import { digest, registrationChallenge } from "./webauthn-registration.mjs";
@@ -553,4 +554,313 @@ test("registration rejects malformed/trailing CBOR, handle substitution and prof
     }),
   );
   f.boundary.register(e);
+});
+
+// B2.14: two pinned custodians SIMULATE independent authorization. Keys and
+// synthetic WebAuthn responses below are harness data, never identity evidence.
+function staged(f, requestId = "two-stage") {
+  const request = f.boundary.prepareEnrollment({
+    requestId,
+    userHandle: b64("synthetic-owner"),
+    expiresAt: 1300,
+  });
+  const authorization = {
+    request,
+    approvals: f.roots.map((k) =>
+      b64(sign(null, Buffer.from(request), k.privateKey)),
+    ),
+  };
+  f.boundary.initiateEnrollment(authorization);
+  return {
+    request,
+    authorization,
+    confirmation(k = f.key, id = "credential", overrides = {}) {
+      const credential = f.credential(k, id);
+      const finalRequest = registryTransitionBytes({
+        version: 1,
+        action: "enroll",
+        ownerId: f.options.ownerId,
+        ownerSubject: f.options.ownerSubject,
+        expectedEpoch: 0,
+        requestId,
+        issuedAt: 1050,
+        expiresAt: 1300,
+        credential,
+      });
+      return {
+        sessionId: requestId,
+        credential,
+        approvals: f.roots.map((k) =>
+          b64(
+            sign(
+              null,
+              Buffer.from(enrollmentConfirmationBytes(request, finalRequest)),
+              k.privateKey,
+            ),
+          ),
+        ),
+        proof: f.registration(finalRequest, k, credential, {
+          ...overrides,
+          client: {
+            challenge: registrationChallenge(request, "create"),
+            ...overrides.client,
+          },
+        }),
+      };
+    },
+  };
+}
+test("two-stage initiation precedes credential generation; immutable registration survives restart and replay", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  assert.ok(!s.request.includes("publicKey"));
+  assert.ok(!s.request.includes("credential"));
+  assert.equal(f.registry.audit().epoch, 0);
+  const generatedAfterInitiation = ec();
+  const c = s.confirmation(
+    generatedAfterInitiation,
+    "created-after-initiation",
+  );
+  assert.equal(
+    f.boundary.confirmEnrollment(c).productionAuthorization,
+    "disabled",
+  );
+  assert.throws(() => f.boundary.confirmEnrollment(c));
+  assert.throws(() => f.boundary.initiateEnrollment(s.authorization));
+  const history = f.registry.audit();
+  assert.equal(history.credentials[0].publicKey, pem(generatedAfterInitiation));
+  assert.deepEqual(history.history[0].evidence.ownerProof, s.authorization);
+  const r = openSyntheticRegistry({ ...f.options, now: () => 1400 });
+  try {
+    assert.deepEqual(r.audit(), history);
+    assert.throws(() => r.confirmEnrollment(c));
+  } finally {
+    r.close();
+  }
+});
+for (const [name, override] of [
+  ["challenge", { client: { challenge: b64(Buffer.alloc(32)) } }],
+  ["origin", { client: { origin: "https://foreign.example.test" } }],
+  ["RP ID", { rpId: "foreign.example.test" }],
+  ["UP", { flags: 0x44 }],
+  ["UV", { flags: 0x41 }],
+  [
+    "possession signature",
+    { possession: { client: { challenge: b64(Buffer.alloc(32)) } } },
+  ],
+])
+  test(`two-stage rejects incorrect ${name} without consuming session`, (t) => {
+    const f = fixture(t),
+      s = staged(f);
+    assert.throws(() =>
+      f.boundary.confirmEnrollment(
+        s.confirmation(f.key, "credential", override),
+      ),
+    );
+    assert.equal(f.registry.audit().epoch, 0);
+    f.boundary.confirmEnrollment(s.confirmation());
+  });
+test("two-stage rejects wrong owner, subject, origin, purpose and administrative substitution", (t) => {
+  const f = fixture(t);
+  const request = f.boundary.prepareEnrollment({
+    requestId: "authorization",
+    userHandle: b64("synthetic-owner"),
+    expiresAt: 1300,
+  });
+  const [domain, body] = request.split("\n");
+  for (const patch of [
+    { ownerId: "44444444-4444-4444-8444-444444444444" },
+    { ownerSubject: "service_role" },
+    { purpose: "withdraw" },
+    { origin: "https://foreign.example.test" },
+    { rpId: "example.test" },
+  ]) {
+    const wrong =
+      domain + "\n" + JSON.stringify({ ...JSON.parse(body), ...patch });
+    assert.throws(() =>
+      f.boundary.initiateEnrollment({
+        request: wrong,
+        approvals: f.roots.map((k) =>
+          b64(sign(null, Buffer.from(wrong), k.privateKey)),
+        ),
+      }),
+    );
+  }
+  const admin = ed();
+  for (const approvals of [
+    [],
+    [
+      b64(sign(null, Buffer.from(request), admin.privateKey)),
+      b64(sign(null, Buffer.from(request), admin.privateKey)),
+    ],
+    f.roots.map(() =>
+      b64(sign(null, Buffer.from(request), f.roots[0].privateKey)),
+    ),
+  ])
+    assert.throws(() => f.boundary.initiateEnrollment({ request, approvals }));
+  const s = staged(f);
+  const c = s.confirmation();
+  c.credential.userHandle = b64("other-owner");
+  assert.throws(() => f.boundary.confirmEnrollment(c));
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({
+      ...s.confirmation(),
+      ownerId: f.options.ownerId,
+    }),
+  );
+});
+test("two-stage expired initiation and confirmation fail closed", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  const r = openSyntheticRegistry({ ...f.options, now: () => 1300 });
+  try {
+    assert.throws(() => r.initiateEnrollment(s.authorization));
+    assert.throws(() => r.confirmEnrollment(s.confirmation()));
+    assert.equal(r.audit().epoch, 0);
+  } finally {
+    r.close();
+  }
+  f.boundary.confirmEnrollment(s.confirmation());
+});
+for (const action of [null, "revoke", "begin-recovery"])
+  test(`two-stage rejects duplicate credential/stale session in ${action ?? "active"} state`, (t) => {
+    const f = fixture(t),
+      s = staged(f);
+    f.boundary.register(f.evidence());
+    if (action) f.registry.transition(f.evidence(action, 1));
+    const before = f.registry.audit();
+    assert.throws(() => f.boundary.confirmEnrollment(s.confirmation()));
+    assert.throws(() =>
+      f.boundary.prepareEnrollment({
+        requestId: "replacement",
+        userHandle: b64("synthetic-owner"),
+        expiresAt: 1300,
+      }),
+    );
+    assert.deepEqual(f.registry.audit(), before);
+  });
+test("two-stage concurrent confirmations on independent SQLite processes have exactly one winner", async (t) => {
+  const f = fixture(t),
+    s = staged(f),
+    c = s.confirmation();
+  const results = await race(
+    f,
+    [0, 1].map(() => `b.confirmEnrollment(${JSON.stringify(c)})`),
+  );
+  assert.deepEqual(results.map((r) => r.exit).sort(), [10, 11]);
+  assert.equal(f.registry.audit().epoch, 1);
+  assert.equal(f.registry.audit().history.length, 1);
+  assert.throws(() => f.boundary.confirmEnrollment(c));
+});
+test("two-stage atomic persistence rollback and append-only initiation history", async (t) => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const f = fixture(t),
+    s = staged(f),
+    c = s.confirmation();
+  const db = new DatabaseSync(f.options.path);
+  try {
+    db.exec(
+      "CREATE TRIGGER enrollment_unavailable BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'unavailable'); END",
+    );
+    assert.throws(() => f.boundary.confirmEnrollment(c));
+    assert.equal(f.registry.audit().epoch, 0);
+    db.exec("DROP TRIGGER enrollment_unavailable");
+    f.boundary.confirmEnrollment(c);
+    assert.throws(
+      () => db.exec("DELETE FROM enrollment_sessions"),
+      /append only/,
+    );
+    assert.throws(
+      () => db.exec("UPDATE enrollment_sessions SET at=0"),
+      /append only/,
+    );
+    assert.equal(
+      db.prepare("SELECT count(*) AS n FROM enrollment_sessions").get().n,
+      1,
+    );
+  } finally {
+    db.close();
+  }
+});
+test("two-stage pending session survives reopen; competing generated credentials cannot share approval", async (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  const reopened = openSyntheticRegistry({ ...f.options, now: () => 1050 });
+  try {
+    assert.equal(reopened.audit().epoch, 0);
+  } finally {
+    reopened.close();
+  }
+  const a = s.confirmation(),
+    b = s.confirmation(f.next, "competing-key");
+  const results = await race(
+    f,
+    [a, b].map((c) => `b.confirmEnrollment(${JSON.stringify(c)})`),
+  );
+  assert.deepEqual(results.map((r) => r.exit).sort(), [10, 11]);
+  assert.equal(f.registry.audit().history.length, 1);
+});
+test("two-stage session ID and nonce uniqueness; confirmation requires persisted authorization", (t) => {
+  const f = fixture(t),
+    s = staged(f);
+  assert.throws(() => f.boundary.initiateEnrollment(s.authorization));
+  const prefix = s.request.slice(0, s.request.indexOf("\n") + 1);
+  const value = JSON.parse(s.request.slice(prefix.length));
+  for (const patch of [
+    { requestId: "nonce-reuse" },
+    { nonce: b64(Buffer.alloc(32, 7)) },
+  ]) {
+    const request = prefix + JSON.stringify({ ...value, ...patch });
+    assert.throws(() =>
+      f.boundary.initiateEnrollment({
+        request,
+        approvals: f.roots.map((k) =>
+          b64(sign(null, Buffer.from(request), k.privateKey)),
+        ),
+      }),
+    );
+  }
+  assert.throws(() =>
+    f.boundary.confirmEnrollment({ ...s.confirmation(), sessionId: "unknown" }),
+  );
+  const c = s.confirmation();
+  const request = registryTransitionBytes({
+    version: 1,
+    action: "enroll",
+    ownerId: f.options.ownerId,
+    ownerSubject: f.options.ownerSubject,
+    expectedEpoch: 0,
+    requestId: "never-initiated",
+    issuedAt: 1050,
+    expiresAt: 1300,
+    credential: c.credential,
+  });
+  assert.throws(() =>
+    f.boundary.register({
+      request,
+      approvals: [],
+      ownerProof: s.authorization,
+      possession: c.proof,
+    }),
+  );
+  f.boundary.confirmEnrollment(c);
+});
+
+test("two-stage public initiation and credential possession cannot substitute for final owner-binding approval", (t) => {
+  const f = fixture(t),
+    s = staged(f),
+    c = s.confirmation();
+  const other = s.confirmation(f.next, "substituted-key");
+  // Attacker has the public session and a valid create/get from their OWN key.
+  other.approvals = c.approvals;
+  assert.throws(() => f.boundary.confirmEnrollment(other));
+  for (const approvals of [
+    [],
+    f.roots.map(() =>
+      b64(sign(null, Buffer.from("service_role"), ed().privateKey)),
+    ),
+  ])
+    assert.throws(() => f.boundary.confirmEnrollment({ ...c, approvals }));
+  assert.equal(f.registry.audit().epoch, 0);
+  f.boundary.confirmEnrollment(c);
 });

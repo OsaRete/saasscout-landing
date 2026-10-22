@@ -1,12 +1,13 @@
 // SYNTHETIC / OFFLINE ONLY. No application imports or production authorization.
 import { DatabaseSync } from "node:sqlite";
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
   verifySyntheticRegistration,
   originConfig,
 } from "./webauthn-registration.mjs";
 import { keyFingerprint } from "./key-lifecycle.mjs";
 
+const ENROLLMENT = "SaaSScout:synthetic-enrollment-initiation:v1\n";
 const DOMAIN = "SaaSScout:synthetic-durable-registry:v1\n";
 const fail = () => {
   throw new Error("Invalid synthetic registry");
@@ -100,6 +101,20 @@ export function registryTransitionBytes(value) {
     fail();
   return DOMAIN + JSON.stringify(r);
 }
+// Final custodian approval binds BOTH the pre-creation session and generated key.
+export function enrollmentConfirmationBytes(initiation, finalRequest) {
+  if (
+    typeof initiation !== "string" ||
+    initiation.length > 4096 ||
+    typeof finalRequest !== "string" ||
+    finalRequest.length > 8192
+  )
+    fail();
+  return (
+    "SaaSScout:synthetic-enrollment-confirmation:v1\n" +
+    JSON.stringify([initiation, finalRequest])
+  );
+}
 function signed(key, bytes, signature) {
   return verify(null, Buffer.from(bytes), key, binary(signature, 64, 64));
 }
@@ -167,7 +182,10 @@ export function openSyntheticRegistry({
           CREATE TRIGGER no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'append only'); END;
           CREATE TRIGGER no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'append only'); END;`);
         if (profile)
-          db.exec(`CREATE TABLE possession_uses (request_id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, epoch INTEGER NOT NULL) STRICT;
+          db.exec(`CREATE TABLE enrollment_sessions (request_id TEXT PRIMARY KEY, nonce TEXT NOT NULL UNIQUE, evidence TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+          CREATE TRIGGER session_no_update BEFORE UPDATE ON enrollment_sessions BEGIN SELECT RAISE(ABORT, 'append only'); END;
+          CREATE TRIGGER session_no_delete BEFORE DELETE ON enrollment_sessions BEGIN SELECT RAISE(ABORT, 'append only'); END;
+          CREATE TABLE possession_uses (request_id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, epoch INTEGER NOT NULL) STRICT;
           CREATE TRIGGER proof_no_update BEFORE UPDATE ON possession_uses BEGIN SELECT RAISE(ABORT, 'append only'); END;
           CREATE TRIGGER proof_no_delete BEFORE DELETE ON possession_uses BEGIN SELECT RAISE(ABORT, 'append only'); END;`);
         db.prepare("INSERT INTO config VALUES(1, ?, 0, ?)").run(
@@ -204,6 +222,68 @@ export function openSyntheticRegistry({
       if (cfg[0].epoch !== state.epoch || cfg[0].digest !== previous) fail();
       return { state, previous };
     }
+    // Credential-free authorization, domain-separated from every lifecycle request.
+    function sessionBytes(value) {
+      const s = record(value, [
+        "version",
+        "purpose",
+        "ownerId",
+        "ownerSubject",
+        "expectedEpoch",
+        "requestId",
+        "issuedAt",
+        "expiresAt",
+        "nonce",
+        "userHandle",
+        "origin",
+        "rpId",
+      ]);
+      if (
+        !profile ||
+        s.version !== 1 ||
+        s.purpose !== "enroll" ||
+        s.ownerId !== ownerId ||
+        s.ownerSubject !== ownerSubject ||
+        s.origin !== profile.origin ||
+        s.rpId !== profile.rpId
+      )
+        fail();
+      registryTransitionBytes({
+        version: 1,
+        action: "begin-recovery",
+        ownerId: s.ownerId,
+        ownerSubject: s.ownerSubject,
+        expectedEpoch: s.expectedEpoch,
+        requestId: s.requestId,
+        issuedAt: s.issuedAt,
+        expiresAt: s.expiresAt,
+        credential: null,
+      });
+      binary(s.nonce, 32, 32);
+      binary(s.userHandle, 1, 64);
+      return ENROLLMENT + JSON.stringify(s);
+    }
+    function authorizedSession(input, at) {
+      const e = record(input, ["request", "approvals"]);
+      if (
+        typeof e.request !== "string" ||
+        e.request.length > 4096 ||
+        !e.request.startsWith(ENROLLMENT)
+      )
+        fail();
+      const s = JSON.parse(e.request.slice(ENROLLMENT.length));
+      if (
+        sessionBytes(s) !== e.request ||
+        !integer(at) ||
+        s.issuedAt > at ||
+        at >= s.expiresAt ||
+        !Array.isArray(e.approvals) ||
+        e.approvals.length !== 2 ||
+        !roots.every((key, i) => signed(key, e.request, e.approvals[i]))
+      )
+        fail();
+      return s;
+    }
     function apply(state, input, at) {
       const e = record(input, [
         "request",
@@ -231,6 +311,29 @@ export function openSyntheticRegistry({
         state.epoch >= Number.MAX_SAFE_INTEGER
       )
         fail();
+      const staged = r.action === "enroll" && e.ownerProof !== null;
+      let initiation = null;
+      if (staged) {
+        const s = authorizedSession(e.ownerProof, at);
+        const row = db
+          .prepare("SELECT * FROM enrollment_sessions WHERE request_id=?")
+          .get(s.requestId);
+        if (
+          !row ||
+          row.evidence !== JSON.stringify(e.ownerProof) ||
+          row.nonce !== s.nonce ||
+          row.at > at ||
+          JSON.stringify(authorizedSession(e.ownerProof, row.at)) !==
+            JSON.stringify(s) ||
+          r.requestId !== s.requestId ||
+          r.expectedEpoch !== s.expectedEpoch ||
+          r.issuedAt !== s.issuedAt ||
+          r.expiresAt !== s.expiresAt ||
+          r.credential?.userHandle !== s.userHandle
+        )
+          fail();
+        initiation = e.ownerProof.request;
+      }
       const external = [
         "enroll",
         "begin-recovery",
@@ -244,13 +347,21 @@ export function openSyntheticRegistry({
       // Two distinct pinned simulated custodians, never service/application roles.
       if (
         external &&
-        !roots.every((key, i) => signed(key, e.request, e.approvals[i]))
+        !roots.every((key, i) =>
+          signed(
+            key,
+            staged
+              ? enrollmentConfirmationBytes(initiation, e.request)
+              : e.request,
+            e.approvals[i],
+          ),
+        )
       )
         fail();
       const old = state.credentials.at(-1);
       if (
         external
-          ? e.ownerProof !== null
+          ? !staged && e.ownerProof !== null
           : !old ||
             !(profile
               ? verify(
@@ -270,6 +381,7 @@ export function openSyntheticRegistry({
                 e.possession,
                 r.credential,
                 profile,
+                initiation ?? e.request,
               ),
               true)
             : signed(
@@ -321,33 +433,82 @@ export function openSyntheticRegistry({
         evidence: e,
       });
     }
+    function transition(evidence) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const { state, previous } = read();
+        // Serialize/copy only after strict evidence checks inside apply.
+        const at = now();
+        apply(state, evidence, at);
+        const body = JSON.stringify({
+          evidence: state.history.at(-1).evidence,
+          at,
+        });
+        db.prepare("INSERT INTO events VALUES (?, ?, ?, ?, ?)").run(
+          state.epoch,
+          state.history.at(-1).requestId,
+          body,
+          previous,
+          hash(previous + "\n" + body),
+        );
+        db.prepare("UPDATE config SET epoch=?, digest=? WHERE singleton=1").run(
+          state.epoch,
+          hash(previous + "\n" + body),
+        );
+        db.exec("COMMIT");
+        return frozen({
+          kind: "synthetic-registry-transition",
+          epoch: state.epoch,
+          productionAuthorization: "disabled",
+        });
+      } catch {
+        db.exec("ROLLBACK");
+        fail();
+      }
+    }
     read(); // Fail closed on open, not just at the next write.
     return Object.freeze({
-      transition(evidence) {
+      // Privileged harness prepares nonce; this is NOT owner authorization.
+      prepareEnrollment(input) {
+        const { requestId, userHandle, expiresAt } = record(input, [
+          "requestId",
+          "userHandle",
+          "expiresAt",
+        ]);
+        const { state } = read();
+        if (!profile || state.status !== "empty") fail();
+        const s = {
+          version: 1,
+          purpose: "enroll",
+          ownerId,
+          ownerSubject,
+          expectedEpoch: state.epoch,
+          requestId,
+          issuedAt: now(),
+          expiresAt,
+          nonce: randomBytes(32).toString("base64url"),
+          userHandle,
+          ...profile,
+        };
+        return sessionBytes(s);
+      },
+      initiateEnrollment(evidence) {
         db.exec("BEGIN IMMEDIATE");
         try {
-          const { state, previous } = read();
-          // Serialize/copy only after strict evidence checks inside apply.
+          const { state } = read();
           const at = now();
-          apply(state, evidence, at);
-          const body = JSON.stringify({
-            evidence: state.history.at(-1).evidence,
+          const s = authorizedSession(evidence, at);
+          if (state.status !== "empty" || state.epoch !== s.expectedEpoch)
+            fail();
+          db.prepare("INSERT INTO enrollment_sessions VALUES (?, ?, ?, ?)").run(
+            s.requestId,
+            s.nonce,
+            JSON.stringify(evidence),
             at,
-          });
-          db.prepare("INSERT INTO events VALUES (?, ?, ?, ?, ?)").run(
-            state.epoch,
-            state.history.at(-1).requestId,
-            body,
-            previous,
-            hash(previous + "\n" + body),
           );
-          db.prepare(
-            "UPDATE config SET epoch=?, digest=? WHERE singleton=1",
-          ).run(state.epoch, hash(previous + "\n" + body));
           db.exec("COMMIT");
           return frozen({
-            kind: "synthetic-registry-transition",
-            epoch: state.epoch,
+            request: evidence.request,
             productionAuthorization: "disabled",
           });
         } catch {
@@ -355,6 +516,44 @@ export function openSyntheticRegistry({
           fail();
         }
       },
+      confirmEnrollment(input) {
+        const {
+          sessionId,
+          credential: proposed,
+          proof,
+          approvals,
+        } = record(input, ["sessionId", "credential", "proof", "approvals"]);
+        if (
+          typeof sessionId !== "string" ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)
+        )
+          fail();
+        // transition rechecks the session and consumes its ID in the events UNIQUE
+        // constraint under the SAME write lock as registry validation and append.
+        const row = db
+          .prepare("SELECT * FROM enrollment_sessions WHERE request_id=?")
+          .get(sessionId);
+        if (!row) fail();
+        const authorization = JSON.parse(row.evidence);
+        const s = authorizedSession(authorization, now());
+        return transition({
+          request: registryTransitionBytes({
+            version: 1,
+            action: "enroll",
+            ownerId,
+            ownerSubject,
+            expectedEpoch: s.expectedEpoch,
+            requestId: s.requestId,
+            issuedAt: s.issuedAt,
+            expiresAt: s.expiresAt,
+            credential: proposed,
+          }),
+          approvals,
+          ownerProof: authorization,
+          possession: proof,
+        });
+      },
+      transition,
       // Privileged synchronous verifier hook; no execution or transferable authority.
       consumePossession(binding, requestId, challenge, check) {
         if (
