@@ -13,6 +13,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
+import { assertBrowserEvidenceEqual } from "../browser-evidence-assertion.mjs";
 import {
   openSyntheticRegistry,
   registryTransitionBytes,
@@ -150,7 +151,7 @@ test(
       approvals: approve(initiation),
     };
     const authorized = boundary.initiateEnrollment(authorization);
-    assert.equal(authorized.request, initiation);
+    assertBrowserEvidenceEqual(authorized.request, initiation);
     const session = JSON.parse(authorized.request.split("\n")[1]);
     const createChallenge = registrationChallenge(authorized.request, "create");
     async function create(challenge, handle, target = page) {
@@ -358,7 +359,7 @@ test(
     const empty = registry.audit();
     const reject = (value, target = boundary) => {
       assert.throws(() => target.confirmEnrollment(value));
-      assert.deepEqual(registry.audit(), empty);
+      assertBrowserEvidenceEqual(registry.audit(), empty);
     };
     await t.test(
       "unauthorized final approval and credential substitution",
@@ -537,12 +538,15 @@ test(
       );
       const snapshot = registry.audit();
       assert.equal(snapshot.epoch, 1);
-      assert.deepEqual(snapshot.credentials[0], {
+      assertBrowserEvidenceEqual(snapshot.credentials[0], {
         ...credential,
         status: "active",
         epoch: 1,
       });
-      assert.deepEqual(snapshot.history[0].evidence.ownerProof, authorization);
+      assertBrowserEvidenceEqual(
+        snapshot.history[0].evidence.ownerProof,
+        authorization,
+      );
     });
     // Stop after a failed positive: negative results alone cannot prove compatibility.
     assert.equal(
@@ -558,13 +562,13 @@ test(
         assert.throws(() => boundary.confirmEnrollment(staleConfirmation));
         const reopened = openSyntheticRegistry(options);
         try {
-          assert.deepEqual(reopened.audit(), before);
+          assertBrowserEvidenceEqual(reopened.audit(), before);
           assert.throws(() => reopened.confirmEnrollment(confirmation));
           assert.throws(() => reopened.initiateEnrollment(authorization));
         } finally {
           reopened.close();
         }
-        assert.deepEqual(registry.audit(), before);
+        assertBrowserEvidenceEqual(registry.audit(), before);
       },
     );
     // Adapter negatives below supplement the durable enrollment and proof checks.
