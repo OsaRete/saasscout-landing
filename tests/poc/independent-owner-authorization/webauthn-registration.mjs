@@ -145,14 +145,16 @@ export function verifySyntheticRegistration(
     fail("attestation-envelope");
   const auth = att.subarray(offset);
   const id = bytes(credential.id, 1, 1024, "credential-id");
-  if (
-    !auth.subarray(0, 32).equals(digest(cfg.rpId)) ||
-    auth[32] !== 0x45 ||
-    !auth.subarray(37, 53).equals(Buffer.alloc(16)) ||
-    auth.readUInt16BE(53) !== id.length ||
-    !auth.subarray(55, 55 + id.length).equals(id)
-  )
-    fail("attested-credential");
+  // Same predicates and short-circuit order; fixed labels reveal no evidence.
+  if (!auth.subarray(0, 32).equals(digest(cfg.rpId)))
+    fail("attested-credential-rp-id-hash");
+  if (auth[32] !== 0x45) fail("attested-credential-flags");
+  if (!auth.subarray(37, 53).equals(Buffer.alloc(16)))
+    fail("attested-credential-aaguid");
+  if (auth.readUInt16BE(53) !== id.length)
+    fail("attested-credential-id-length");
+  if (!auth.subarray(55, 55 + id.length).equals(id))
+    fail("attested-credential-id-equality");
   const key = createPublicKey(credential.publicKey);
   if (
     key.asymmetricKeyType !== "ec" ||

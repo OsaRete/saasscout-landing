@@ -206,6 +206,43 @@ no signed JSON is stripped or re-signed to bypass it. Record any later failure
 separately. The real Chromium enrollment and durable replay matrix must all pass
 before reconsidering Draft / NO-GO, with automatic process exit still required.
 
+## Fourth local run: split attested-credential diagnostics
+
+The fourth actual user-reported Chromium 149 run at
+`ad70cccded00d8ee13885c80bfe4597d2724a050` exited automatically in about
+3 seconds, code 1. Four negative tests passed; positive enrollment failed with
+`synthetic-registration:attested-credential`, leaving durable epoch zero.
+This combined label does not identify which condition failed. No conclusion is
+drawn about the browser's RP hash, flags, AAGUID or credential identity.
+
+The current follow-up changes **diagnostics only**. The same five predicates run
+in the same short-circuit order and emit these fixed labels, all prefixed with
+`synthetic-registration:`:
+
+| Label                             | Failed check                       |
+| --------------------------------- | ---------------------------------- |
+| `attested-credential-rp-id-hash`  | RP ID hash equality                |
+| `attested-credential-flags`       | Exact required authenticator flags |
+| `attested-credential-aaguid`      | Required zero AAGUID               |
+| `attested-credential-id-length`   | Credential ID length equality      |
+| `attested-credential-id-equality` | Credential ID byte equality        |
+
+No actual hash, flag value, AAGUID, length, credential ID or other evidence is
+printed. Flags must still equal `0x45`, AAGUID must still be zero, and both
+credential identity comparisons remain mandatory. CBOR, exact optional marker,
+all other validation and the successful browser/HTTPS teardown are unchanged.
+
+Five focused offline tests isolate one failed predicate at a time, using both
+restricted CBOR forms and valid optional markers. Each asserts the fixed label
+and message, registry rejection with empty history/epoch zero, then successful
+confirmation of the untouched valid evidence. These are synthetic diagnostic
+regressions, not evidence of which condition Chromium violates.
+
+Run the exact PowerShell block below and return only the fixed diagnostic label,
+case summary, exit code/duration and whether exit was automatic. Do not dump raw
+authenticator data, hashes, AAGUIDs, credential IDs, keys, signatures or challenges.
+Keep Draft / NO-GO; no acceptance change is justified by the combined label.
+
 ## Exact Windows PowerShell execution
 
 Use PowerShell 7 / .NET 8+ and Node.js 24, starting in your local repository.
@@ -261,10 +298,10 @@ npm run build
 
 ## Execution evidence and merge gate
 
-Exact-marker follow-up executed in Cloud on Node 24.19.0:
+Attested-diagnostic follow-up executed in Cloud on Node 24.19.0:
 
 - Focused security plus relevant Validation/integrity/reader regressions:
-  **362/362 PASS** (including three new marker tests, the eight short-form cases and two diagnostic tests), zero failures/skips.
+  **367/367 PASS** (including five new attested-label tests and all earlier marker/short-form/diagnostic cases), zero failures/skips.
 - Default gate: **one SKIP**, zero browser tests executed.
 - Explicit opt-in: **FAILED during HTTPS setup**:
   `Error: listen EPERM: operation not permitted 127.0.0.1`, syscall `listen`,
@@ -273,14 +310,14 @@ Exact-marker follow-up executed in Cloud on Node 24.19.0:
   `/home/agent/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome` absent.
   No download attempted after the listener restriction was established.
   Actual Chromium and virtual-authenticator execution did **not** occur in Cloud.
-  All three user-reported Windows runs did execute Chromium and failed enrollment;
-  the second and third exited normally. The exact-marker fix has not yet run in Chromium.
+  All four user-reported Windows runs did execute Chromium and failed enrollment;
+  runs two through four exited normally. These split diagnostics have not yet run in Chromium.
 - Targeted ESLint, Node syntax and Prettier: PASS.
 - Repository lint: zero errors, four warnings in unchanged app files.
 - Build FAILED in Turbopack CSS processing: creating new process / binding to
   a port / `Operation not permitted (os error 1)`. Successful build NOT VERIFIED.
 
-The fixed harness exited promptly on Cloud HTTPS setup failure (about 0.33 seconds);
+The harness exited promptly on Cloud HTTPS setup failure (about 0.72 seconds);
 this does not exercise live browser connection cleanup. The marker regressions intentionally fail with the `edcab2c` verifier because it
 rejects the known member; all final offline regressions passed.
 

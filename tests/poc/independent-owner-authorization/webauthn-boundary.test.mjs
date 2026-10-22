@@ -623,6 +623,91 @@ function staged(f, requestId = "two-stage") {
     },
   };
 }
+// Mutate only offline synthetic attested data, never raw browser evidence.
+for (const [label, mutate] of [
+  [
+    "rp-id-hash",
+    (auth) => {
+      auth[0] ^= 1;
+    },
+  ],
+  [
+    "flags",
+    (auth) => {
+      auth[32] = 0x41;
+    },
+  ],
+  [
+    "aaguid",
+    (auth) => {
+      auth[37] = 1;
+    },
+  ],
+  [
+    "id-length",
+    (auth) => {
+      auth.writeUInt16BE(auth.readUInt16BE(53) + 1, 53);
+    },
+  ],
+  [
+    "id-equality",
+    (auth) => {
+      auth[55] ^= 1;
+    },
+  ],
+])
+  test(`attested diagnostic isolates ${label} without changing acceptance`, (t) => {
+    for (const short of [false, true]) {
+      const f = fixture(t),
+        s = staged(f);
+      const c = s.confirmation(f.key, "credential", {
+        client: withMarker(),
+        possession: { client: withMarker() },
+      });
+      if (short) shortForm(c);
+      const request = registryTransitionBytes({
+        version: 1,
+        action: "enroll",
+        ownerId: f.options.ownerId,
+        ownerSubject: f.options.ownerSubject,
+        expectedEpoch: 0,
+        requestId: "two-stage",
+        issuedAt: 1050,
+        expiresAt: 1300,
+        credential: c.credential,
+      });
+      const verifyProof = (proof) =>
+        verifySyntheticRegistration(
+          request,
+          proof,
+          c.credential,
+          config,
+          s.request,
+        );
+      verifyProof(c.proof);
+      const att = Buffer.from(c.proof.attestationObject, "base64url");
+      // Fixed 28-byte map prefix + byte-string tag + 1/2-byte length.
+      mutate(att.subarray(short ? 30 : 31));
+      const proof = { ...c.proof, attestationObject: b64(att) };
+      assert.throws(
+        () => verifyProof(proof),
+        (error) => {
+          assert.equal(
+            error.code,
+            `synthetic-registration:attested-credential-${label}`,
+          );
+          assert.equal(error.message, "Invalid synthetic registration");
+          assert.deepEqual(Object.keys(error), ["code"]);
+          return true;
+        },
+      );
+      assert.throws(() => f.boundary.confirmEnrollment({ ...c, proof }));
+      assert.equal(f.registry.audit().epoch, 0);
+      assert.equal(f.registry.audit().history.length, 0);
+      f.boundary.confirmEnrollment(c);
+      assert.equal(f.registry.audit().epoch, 1);
+    }
+  });
 // Synthetic diagnostic examples only. No claim that a case is Chromium's failure.
 test("registration diagnostics distinguish structural failures without exposing evidence", (t) => {
   const f = fixture(t),
