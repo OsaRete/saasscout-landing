@@ -11,6 +11,10 @@ Base: GitHub main `1930517734b2634840446dae13f0328bc6d34a3c`, including merged
 unavailable; the GitHub integration supplied the eleven missing baseline files.
 Their Git blob hashes were checked before publishing. They are not PR additions.
 
+For the credential-free initiation and post-creation confirmation path, see
+[two-stage enrollment](TWO_STAGE_ENROLLMENT.md). The original one-stage fixture
+profile below remains supported; it cannot initiate a browser-created credential.
+
 ## Scope and trust
 
 Builds on [durable registry](DURABLE_REGISTRY.md), [intent codec](../../../security/owner-authorization/README.md)

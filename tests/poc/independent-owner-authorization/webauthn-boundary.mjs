@@ -16,6 +16,15 @@ export function createSyntheticWebAuthnBoundary({
     throw new Error("Disabled synthetic WebAuthn boundary");
   const { origin, rpId } = originConfig(webauthn);
   return Object.freeze({
+    prepareEnrollment(input) {
+      return registry.prepareEnrollment(input);
+    },
+    initiateEnrollment(evidence) {
+      return registry.initiateEnrollment(evidence);
+    },
+    confirmEnrollment(input) {
+      return registry.confirmEnrollment(input);
+    },
     register(evidence) {
       return registry.transition(evidence);
     },

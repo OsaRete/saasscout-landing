@@ -75,6 +75,7 @@ export function verifySyntheticRegistration(
   proof,
   credential,
   configuration,
+  creationRequest = request,
 ) {
   const cfg = originConfig(configuration);
   const p = dataRecord(proof, [
@@ -85,7 +86,7 @@ export function verifySyntheticRegistration(
     "possession",
   ]);
   if (p.type !== "public-key" || p.credentialId !== credential.id) fail();
-  client(p.clientDataJSON, request, "create", cfg.origin);
+  client(p.clientDataJSON, creationRequest, "create", cfg.origin);
   const att = bytes(p.attestationObject, PREFIX.length + 2 + 132, 2048);
   if (
     !att.subarray(0, PREFIX.length).equals(PREFIX) ||
