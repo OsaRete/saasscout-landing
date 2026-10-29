@@ -16,7 +16,9 @@ export function validateSurveyAnswers(questions: readonly SurveyQuestion[], answ
     seen.add(questionRef); const question = byId.get(questionRef)!; const value = record.value;
     if (question.type === "single_choice" && (typeof value !== "string" || !question.options?.includes(value))) throw new Error("A choice answer is outside the allowed options.");
     if (question.type === "multiple_choice" && (!Array.isArray(value) || value.length > 12 || value.some(item => typeof item !== "string" || !question.options?.includes(item)) || new Set(value).size !== value.length)) throw new Error("A multiple-choice answer is invalid.");
+    if (question.type === "multiple_choice" && question.required && Array.isArray(value) && value.length === 0) throw new Error("A required question was not answered.");
     if ((question.type === "short_text" || question.type === "long_text") && (typeof value !== "string" || value.length > (question.type === "short_text" ? 500 : 4000))) throw new Error("A text answer exceeds its bound.");
+    if ((question.type === "short_text" || question.type === "long_text") && question.required && typeof value === "string" && /^[\s\p{White_Space}]*$/u.test(value)) throw new Error("A required question was not answered.");
     if (question.type === "number" && (typeof value !== "number" || !Number.isFinite(value) || (question.min != null && value < question.min) || (question.max != null && value > question.max))) throw new Error("A number answer is outside its allowed range.");
     return { questionRef, value } as SurveyAnswer;
   });
