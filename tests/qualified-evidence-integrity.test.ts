@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const baseline = readFileSync("supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", "utf8");
+const baseline = readFileSync("supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", "utf8")
+  .replace(/\r\n/g, "\n");
 const migrations = ["20261008000000_qualified_evidence_integrity.sql", "20261008010000_qualified_evidence_snapshot_v2.sql"];
 for (const filename of migrations) {
-  const migration = readFileSync(`supabase/migrations/${filename}`, "utf8");
+  const migration = readFileSync(`supabase/migrations/${filename}`, "utf8").replace(/\r\n/g, "\n");
 
   test(`${filename}: complete B3.1 RPC contract is unchanged except the final atomic snapshot INSERT`, () => {
     const original = baseline.slice(baseline.indexOf("create function public.validation_promote_customer_interview_evidence("),

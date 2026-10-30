@@ -8,16 +8,48 @@ on:
       - "scripts/validation-b31-db.ts"
       - "scripts/validation-b41-db.ts"
       - "scripts/validation-b42-db.ts"
+      - "scripts/validation-b43-db.ts"
+      - "scripts/validation-b43-isolation.ts"
+      - "scripts/prepare-validation-b43-disposable.ts"
       - "tests/qualified-evidence-integrity.test.ts"
+      - "tests/current-qualified-evidence-reader.test.ts"
+      - "tests/validation-b43-isolation.test.ts"
       - "lib/validation/promotion/**"
       - "lib/supabase/server-admin.ts"
       - "tests/trusted-qualified-evidence-reader.test.ts"
+      - "docs/V8_B43_A_CURRENT_EVIDENCE_AUTHORITY_CONTRACT.md"
+      - "docs/V8_B43_B_CURRENT_EVIDENCE_SAFETY_FOUNDATION.md"
+      - "docs/V8_B43_B_DISPOSABLE_DATABASE_VALIDATION.md"
       - ".github/workflows/validation-b31-database.yml"
       - "package.json"
       - "package-lock.json"
   workflow_dispatch:
+    inputs:
+      authorize_disposable_reset:
+        description: "Authorize reset of the newly generated B4.3 disposable project only"
+        type: boolean
+        required: true
+        default: false
 
 jobs:
+  b43-static:
+    name: B4.3-B static regression and isolation checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Execute TypeScript regression and isolation tests without a database
+        run: node --experimental-strip-types --test --test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
+      - name: Lint B4.3 TypeScript boundary and tests
+        run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
+      - name: Type-check B4.3 test infrastructure without emitting files
+        run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts
+
   database:
     name: database
     runs-on: ubuntu-latest
@@ -52,3 +84,83 @@ jobs:
         env:
           VALIDATION_B42_DISPOSABLE: "1"
         run: npm run test:validation-b42-db
+  b43-disposable-database:
+    name: isolated B4.3-B database
+    if: github.event_name == 'workflow_dispatch' && inputs.authorize_disposable_reset == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: b43-disposable-database-validation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.118.0
+      - name: Verify disposable tooling
+        run: |
+          supabase --version
+          docker --version
+          psql --version
+      - name: Prepare isolated disposable project outside the repository
+        id: disposable
+        run: node scripts/prepare-validation-b43-disposable.ts --github-output
+      - name: Create and verify a unique loopback-only Docker network
+        id: network
+        env:
+          PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+        run: |
+          if [[ ! "$PROJECT_ID" =~ ^saasscout-b43-disposable-[a-f0-9]{12}$ ]]; then
+            echo "Unexpected disposable project id" >&2
+            exit 1
+          fi
+          suffix="${PROJECT_ID#saasscout-b43-disposable-}"
+          network_name="saasscout-b43-loopback-${suffix}"
+          network_inventory="$(docker network ls --format '{{.Name}}')"
+          if grep -Fxq "$network_name" <<< "$network_inventory"; then
+            echo "Dedicated B4.3 network name already exists" >&2
+            exit 1
+          fi
+          network_id="$(docker network create --driver bridge --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 "$network_name")"
+          if [[ ! "$network_id" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "Docker did not return a valid dedicated network id" >&2
+            exit 1
+          fi
+          inspect="$(docker network inspect --format '{{.Id}}|{{.Name}}|{{.Driver}}|{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}|{{json .Containers}}' "$network_id")"
+          IFS='|' read -r actual_id actual_name driver host_binding attached <<< "$inspect"
+          if [[ "$actual_id" != "$network_id" || "$actual_name" != "$network_name" || "$driver" != bridge || "$host_binding" != 127.0.0.1 || ( "$attached" != null && "$attached" != '{}' ) ]]; then
+            echo "Dedicated B4.3 network did not pass its creation identity checks" >&2
+            exit 1
+          fi
+          echo "networkId=$network_id" >> "$GITHUB_OUTPUT"
+          echo "networkName=$network_name" >> "$GITHUB_OUTPUT"
+      - name: Start only the generated disposable Supabase project
+        env:
+          PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: supabase --workdir "$PROJECT_DIR" start --network-id "$NETWORK_ID"
+      - name: Verify container and PostgreSQL identity before reset
+        env:
+          VALIDATION_B43_DISPOSABLE: "1"
+          VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          VALIDATION_B43_PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
+          VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
+          VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: node scripts/validation-b43-db.ts --preflight-only
+      - name: Reset only the newly generated disposable project
+        env:
+          PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+        run: supabase --workdir "$PROJECT_DIR" db reset --local --no-seed
+      - name: Execute B4.3-B PostgreSQL and PostgREST suite
+        env:
+          VALIDATION_B43_DISPOSABLE: "1"
+          VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          VALIDATION_B43_PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
+          VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
+          VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: npm run test:validation-b43-db
