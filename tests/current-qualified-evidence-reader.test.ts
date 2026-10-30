@@ -87,8 +87,10 @@ test("migration makes authority withheld-only, immutable, private, and new-row-o
   assert.match(migration, /current_user in \('anon','authenticated','service_role','authenticator'\)/i);
   assert.match(migration, /session_user is distinct from current_user/i);
   assert.match(migration, /pg_has_role\('service_role',current_user,'SET'\)/i);
-  assert.match(migration, /pg_roles where rolname='postgres' and rolsuper/i);
+  assert.match(migration, /select coalesce\(\(select r\.rolsuper from pg_roles r where r\.rolname='postgres'\),false\)/i);
   assert.match(migration, /pg_has_role\(current_user,'postgres','SET'\)/i);
+  assert.match(migration, /if not postgres_is_superuser or not migration_can_set_postgres then[\s\S]+raise exception 'B4\.3 requires verified ownership privileges: session_user=%, current_user=%, postgres_is_superuser=%, migration_can_set_postgres=%'/i);
+  assert.doesNotMatch(migration, /raise notice 'B4\.3 migration diagnostics/i);
   assert.match(migration, /set local role postgres/i);
   assert.match(migration, /current_user<>'postgres' or not exists\(select 1 from pg_roles where rolname=current_user and rolsuper\)/i);
   assert.doesNotMatch(migration, /grant saasscout_b43_(?:fact_writer|current_reader).*to/i);

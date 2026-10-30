@@ -9,21 +9,16 @@ begin
   if session_user is distinct from current_user then
     raise exception 'B4.3 requires an unmodified migration session role';
   end if;
-  select coalesce((select r.rolsuper from pg_roles r where r.rolname='postgres'),false)
-    into postgres_is_superuser;
-  migration_can_set_postgres := case
-    when postgres_is_superuser then pg_has_role(current_user,'postgres','SET')
-    else false
-  end;
-  raise notice 'B4.3 migration diagnostics: session_user=%, current_user=%, postgres.rolsuper=%, migration_can_set_postgres=%',
-    session_user, current_user, postgres_is_superuser, migration_can_set_postgres;
+  select coalesce((select r.rolsuper from pg_roles r where r.rolname='postgres'),false),
+         coalesce((select pg_has_role(current_user,'postgres','SET') from pg_roles r where r.rolname='postgres'),false)
+    into postgres_is_superuser, migration_can_set_postgres;
   if current_user in ('anon','authenticated','service_role','authenticator')
      or session_user in ('anon','authenticated','service_role','authenticator') then
     raise exception 'B4.3 migrations must not run as an application-facing role';
   end if;
-  if not exists (select 1 from pg_roles where rolname='postgres' and rolsuper)
-     or not pg_has_role(current_user,'postgres','SET') then
-    raise exception 'B4.3 requires the migration principal to SET ROLE to verified superuser postgres';
+  if not postgres_is_superuser or not migration_can_set_postgres then
+    raise exception 'B4.3 requires verified ownership privileges: session_user=%, current_user=%, postgres_is_superuser=%, migration_can_set_postgres=%',
+      session_user, current_user, postgres_is_superuser, migration_can_set_postgres;
   end if;
   if pg_has_role('anon',current_user,'SET') or pg_has_role('authenticated',current_user,'SET')
      or pg_has_role('service_role',current_user,'SET') or pg_has_role('authenticator',current_user,'SET')
