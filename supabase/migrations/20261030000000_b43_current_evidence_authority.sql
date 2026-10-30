@@ -10,8 +10,16 @@ begin
     create role saasscout_b43_current_reader nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
   end if;
 end $$;
-alter role saasscout_b43_fact_writer nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
-alter role saasscout_b43_current_reader nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+do $$
+begin
+  if exists (
+    select 1 from pg_roles
+    where rolname in ('saasscout_b43_fact_writer','saasscout_b43_current_reader')
+      and (rolcanlogin or rolsuper or rolcreatedb or rolcreaterole or rolinherit or rolreplication or rolbypassrls)
+  ) then
+    raise exception 'B4.3 internal roles must retain least-privilege attributes';
+  end if;
+end $$;
 grant create on schema public to saasscout_b43_fact_writer,saasscout_b43_current_reader;
 
 alter table public.validation_evidence_promotions

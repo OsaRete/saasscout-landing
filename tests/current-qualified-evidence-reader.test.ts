@@ -79,6 +79,10 @@ test("invalid canonical IDs fail before a database call", async () => {
 });
 
 test("migration makes authority withheld-only, immutable, private, and new-row-only", () => {
+  assert.match(migration, /create role saasscout_b43_fact_writer nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls/i);
+  assert.match(migration, /create role saasscout_b43_current_reader nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls/i);
+  assert.match(migration, /select 1 from pg_roles[\s\S]+rolcanlogin or rolsuper or rolcreatedb or rolcreaterole or rolinherit or rolreplication or rolbypassrls/i);
+  assert.doesNotMatch(migration, /alter role saasscout_b43_(?:fact_writer|current_reader)/i);
   assert.match(migration, /authority_state text not null check \(authority_state='withheld'\)/);
   assert.match(migration, /after insert on public\.validation_evidence_promotions[\s\S]+when \(new\.problem_observation_id is not null\)/i);
   assert.match(migration, /validation_b43_authority_immutable before update or delete/i);

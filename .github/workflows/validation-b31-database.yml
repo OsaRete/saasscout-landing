@@ -44,7 +44,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Execute TypeScript regression and isolation tests without a database
-        run: node --experimental-strip-types --test --test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
+        run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
       - name: Lint B4.3 TypeScript boundary and tests
         run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
       - name: Type-check B4.3 test infrastructure without emitting files
