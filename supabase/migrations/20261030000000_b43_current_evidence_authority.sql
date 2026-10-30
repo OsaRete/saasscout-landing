@@ -2,11 +2,21 @@
 -- Additive only: B3.1 promotion rows and B4.2 snapshots are not rewritten.
 
 do $$
+declare
+  postgres_is_superuser boolean;
+  migration_can_set_postgres boolean;
 begin
   if session_user is distinct from current_user then
     raise exception 'B4.3 requires an unmodified migration session role';
   end if;
-  raise notice 'B4.3 migration principal: session_user=%, current_user=%', session_user, current_user;
+  select coalesce((select r.rolsuper from pg_roles r where r.rolname='postgres'),false)
+    into postgres_is_superuser;
+  migration_can_set_postgres := case
+    when postgres_is_superuser then pg_has_role(current_user,'postgres','SET')
+    else false
+  end;
+  raise notice 'B4.3 migration diagnostics: session_user=%, current_user=%, postgres.rolsuper=%, migration_can_set_postgres=%',
+    session_user, current_user, postgres_is_superuser, migration_can_set_postgres;
   if current_user in ('anon','authenticated','service_role','authenticator')
      or session_user in ('anon','authenticated','service_role','authenticator') then
     raise exception 'B4.3 migrations must not run as an application-facing role';
