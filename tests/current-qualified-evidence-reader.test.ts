@@ -8,6 +8,7 @@ const canonical = "11111111-1111-4111-8111-111111111111";
 const privateMarker = "PRIVATE_B43_MARKER";
 const migrationPath = "supabase/migrations/20261030000000_b43_current_evidence_authority.sql";
 const migration = readFileSync(migrationPath, "utf8");
+const databaseRunner = readFileSync("scripts/validation-b43-db.ts", "utf8");
 
 function mockRpc(data: unknown, fail = false) {
   const requests: Array<{ url: URL; method: string; body: unknown }> = [];
@@ -83,6 +84,17 @@ test("migration makes authority withheld-only, immutable, private, and new-row-o
   assert.match(migration, /create role saasscout_b43_current_reader nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls/i);
   assert.match(migration, /select 1 from pg_roles[\s\S]+rolcanlogin or rolsuper or rolcreatedb or rolcreaterole or rolinherit or rolreplication or rolbypassrls/i);
   assert.doesNotMatch(migration, /alter role saasscout_b43_(?:fact_writer|current_reader)/i);
+  assert.match(migration, /current_user in \('anon','authenticated','service_role','authenticator'\)/i);
+  assert.match(migration, /session_user is distinct from current_user/i);
+  assert.match(migration, /pg_has_role\('service_role',current_user,'SET'\)/i);
+  assert.match(migration, /pg_roles where rolname='postgres' and rolsuper/i);
+  assert.match(migration, /pg_has_role\(current_user,'postgres','SET'\)/i);
+  assert.match(migration, /set local role postgres/i);
+  assert.match(migration, /current_user<>'postgres' or not exists\(select 1 from pg_roles where rolname=current_user and rolsuper\)/i);
+  assert.doesNotMatch(migration, /grant saasscout_b43_(?:fact_writer|current_reader).*to/i);
+  assert.match(migration, /if exists \(select 1 from pg_auth_members m where m\.roleid in[\s\S]{0,300}or m\.member in[\s\S]{0,200}internal owner roles must have no membership edges/i);
+  assert.match(migration, /pg_has_role\('service_role','postgres','SET'\)/i);
+  assert.match(migration, /m\.roleid in \(current_user::regrole,'postgres'::regrole\) and m\.admin_option/i);
   assert.match(migration, /authority_state text not null check \(authority_state='withheld'\)/);
   assert.match(migration, /after insert on public\.validation_evidence_promotions[\s\S]+when \(new\.problem_observation_id is not null\)/i);
   assert.match(migration, /validation_b43_authority_immutable before update or delete/i);
@@ -93,6 +105,24 @@ test("migration makes authority withheld-only, immutable, private, and new-row-o
   assert.match(issueWithheld, /'withheld'/i);
   assert.doesNotMatch(issueWithheld, /'active'/i);
   assert.doesNotMatch(migration, /update public\.validation_evidence_consumption_authority/i);
+});
+
+test("migration uses verified transaction-local owner role and leaves no internal membership", () => {
+  assert.equal((migration.match(/alter function public\.validation_b43_[^\n]+ owner to /gi) ?? []).length, 11);
+  assert.match(migration, /if not exists \(select 1 from pg_roles where rolname='saasscout_b43_fact_writer'\)[\s\S]+create role saasscout_b43_fact_writer/i);
+  assert.match(migration, /if not exists \(select 1 from pg_roles where rolname='saasscout_b43_current_reader'\)[\s\S]+create role saasscout_b43_current_reader/i);
+  assert.match(databaseRunner, /session_user\|\|'\|'\|\|current_user/i);
+  assert.match(databaseRunner, /pg_has_role\(current_user,'postgres','SET'\)/i);
+  assert.match(databaseRunner, /not exists\(select 1 from pg_auth_members m[\s\S]{0,250}m\.member in \('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole\)/i);
+  assert.match(databaseRunner, /count\(\*\) filter\(where p\.proowner='saasscout_b43_fact_writer'::regrole\)=9/i);
+  assert.ok(databaseRunner.includes('"forced ownership migration failure"'));
+  assert.ok(databaseRunner.includes("'transitive admin bridge was not detected'"));
+  assert.ok(databaseRunner.includes("'direct admin escalation was not detected'"));
+  assert.ok(databaseRunner.includes("grant ${target} to service_role with admin false, inherit false, set true"));
+  assert.ok(databaseRunner.includes("grant ${direct} to service_role with admin false, inherit false, set true"));
+  assert.ok(databaseRunner.includes("pg_has_role('service_role','${bridge}','SET')"));
+  assert.match(databaseRunner, /not has_function_privilege\('anon','public\.validation_b43_read_current_evidence/i);
+  assert.match(databaseRunner, /not has_function_privilege\('authenticated','public\.validation_b43_read_current_evidence/i);
 });
 
 test("migration records permanent restrictions for approved source transitions", () => {

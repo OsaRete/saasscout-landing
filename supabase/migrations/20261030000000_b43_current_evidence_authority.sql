@@ -3,6 +3,46 @@
 
 do $$
 begin
+  if session_user is distinct from current_user then
+    raise exception 'B4.3 requires an unmodified migration session role';
+  end if;
+  raise notice 'B4.3 migration principal: session_user=%, current_user=%', session_user, current_user;
+  if current_user in ('anon','authenticated','service_role','authenticator')
+     or session_user in ('anon','authenticated','service_role','authenticator') then
+    raise exception 'B4.3 migrations must not run as an application-facing role';
+  end if;
+  if not exists (select 1 from pg_roles where rolname='postgres' and rolsuper)
+     or not pg_has_role(current_user,'postgres','SET') then
+    raise exception 'B4.3 requires the migration principal to SET ROLE to verified superuser postgres';
+  end if;
+  if pg_has_role('anon',current_user,'SET') or pg_has_role('authenticated',current_user,'SET')
+     or pg_has_role('service_role',current_user,'SET') or pg_has_role('authenticator',current_user,'SET')
+     or pg_has_role('anon','postgres','SET') or pg_has_role('authenticated','postgres','SET')
+     or pg_has_role('service_role','postgres','SET') or pg_has_role('authenticator','postgres','SET')
+     or exists (
+       select 1 from pg_auth_members m
+       where m.roleid in (current_user::regrole,'postgres'::regrole) and m.admin_option
+         and (pg_has_role('anon',m.member,'SET') or pg_has_role('authenticated',m.member,'SET')
+           or pg_has_role('service_role',m.member,'SET') or pg_has_role('authenticator',m.member,'SET'))
+     ) then
+    raise exception 'B4.3 application role can reach a migration administrator';
+  end if;
+end $$;
+
+-- Role creation by a CREATEROLE member can leave a permanent ADMIN membership
+-- even when SET/INHERIT are false. Perform all ownership changes as the
+-- pre-verified postgres superuser instead; SET LOCAL is rolled back at the end
+-- of Supabase's per-migration transaction.
+set local role postgres;
+do $$
+begin
+  if current_user<>'postgres' or not exists(select 1 from pg_roles where rolname=current_user and rolsuper) then
+    raise exception 'B4.3 migration did not enter the verified postgres superuser role';
+  end if;
+end $$;
+
+do $$
+begin
   if not exists (select 1 from pg_roles where rolname='saasscout_b43_fact_writer') then
     create role saasscout_b43_fact_writer nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
   end if;
@@ -516,10 +556,9 @@ revoke create on schema public from saasscout_b43_fact_writer,saasscout_b43_curr
 
 do $$
 begin
-  if pg_has_role('service_role','saasscout_b43_fact_writer','MEMBER')
-     or pg_has_role('service_role','saasscout_b43_current_reader','MEMBER')
-     or pg_has_role('saasscout_b43_fact_writer','service_role','MEMBER')
-     or pg_has_role('saasscout_b43_current_reader','service_role','MEMBER') then
-    raise exception 'B4.3 internal roles and service_role must not inherit from one another';
+  if exists (select 1 from pg_auth_members m where m.roleid in
+      ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole)
+      or m.member in ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole)) then
+    raise exception 'B4.3 internal owner roles must have no membership edges';
   end if;
 end $$;
