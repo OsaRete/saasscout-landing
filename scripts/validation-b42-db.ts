@@ -310,9 +310,19 @@ async function run() {
   const statement = insertStatement(table, row);
   const result = sqlCode(statement);
 
+  const observationId =
+    typeof row.observation_id === "string"
+      ? row.observation_id
+      : "not-applicable";
+
+  const fixtureNumber =
+    observationId === "not-applicable"
+      ? "not-applicable"
+      : observationId.slice(-12);
+
   check(
     result === "00000",
-    `${phase}: synthetic INSERT failed for ${table}, SQLSTATE ${result}`
+    `${phase}: INSERT ${table}, fixture ${fixtureNumber}, SQLSTATE ${result}`
   );
 }
   async function unchanged() {
