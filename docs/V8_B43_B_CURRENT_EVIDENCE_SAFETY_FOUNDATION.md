@@ -18,7 +18,7 @@ Because B4.3-B can issue only `WITHHELD`, valid candidates are excluded and the 
 
 ## Database boundary
 
-Private facts have forced RLS and no direct `service_role` access. Non-login, non-inheriting, non-bypass roles own the narrow security-definer trigger/read functions. The current reader RPC is executable by `service_role` only; trigger functions have no caller execution grant. Functions use schema-qualified objects and fixed search paths. The schema CREATE grant used during function ownership transfer is revoked in the migration transaction.
+Private facts have forced RLS as defense in depth and no direct access for `PUBLIC`, `anon`, `authenticated`, or `service_role`. The migration principal `postgres` owns the narrow security-definer trigger/read functions and has `BYPASSRLS`; RLS is therefore not treated as their authorization boundary. Direct SQL privileges, schema-qualified references, and fixed `pg_catalog, pg_temp` search paths provide the application-facing boundary. Every B4.3 function has execution revoked from application roles. The current reader has no application RPC grant and no consumer is wired. The database administrator remains trusted and can alter these enforcement objects.
 
 Source-change lock hooks reuse the B3.1 participant, experiment, and session lock ordering. Restriction insert failure aborts the initiating transaction. The canonical restriction trigger runs after the existing statement-level registry lock hook. This migration does not claim protection against a database/schema administrator who can replace the enforcement objects.
 

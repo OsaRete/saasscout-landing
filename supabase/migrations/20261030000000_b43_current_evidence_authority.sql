@@ -1,71 +1,28 @@
 -- B4.3-B restrictive current-evidence safety foundation.
 -- Additive only: B3.1 promotion rows and B4.2 snapshots are not rewritten.
 
+-- Supabase's migration principal is postgres but is not necessarily a
+-- superuser. SECURITY DEFINER code therefore runs with BYPASSRLS; direct SQL
+-- privileges and explicit function grants are the application boundary.
 do $$
-declare
-  postgres_is_superuser boolean;
-  migration_can_set_postgres boolean;
 begin
-  if session_user is distinct from current_user then
-    raise exception 'B4.3 requires an unmodified migration session role';
+  if current_user <> 'postgres' or current_user in ('anon','authenticated','service_role','authenticator') then
+    raise exception 'B4.3 requires the trusted Supabase postgres migration principal';
   end if;
-  select coalesce((select r.rolsuper from pg_roles r where r.rolname='postgres'),false),
-         coalesce((select pg_has_role(current_user,'postgres','SET') from pg_roles r where r.rolname='postgres'),false)
-    into postgres_is_superuser, migration_can_set_postgres;
-  if current_user in ('anon','authenticated','service_role','authenticator')
-     or session_user in ('anon','authenticated','service_role','authenticator') then
-    raise exception 'B4.3 migrations must not run as an application-facing role';
+  if not exists (select 1 from pg_roles where rolname=current_user and rolbypassrls) then
+    raise exception 'B4.3 postgres-owned functions require the documented BYPASSRLS threat model';
   end if;
-  if not postgres_is_superuser or not migration_can_set_postgres then
-    raise exception 'B4.3 requires verified ownership privileges: session_user=%, current_user=%, postgres_is_superuser=%, migration_can_set_postgres=%',
-      session_user, current_user, postgres_is_superuser, migration_can_set_postgres;
-  end if;
-  if pg_has_role('anon',current_user,'SET') or pg_has_role('authenticated',current_user,'SET')
-     or pg_has_role('service_role',current_user,'SET') or pg_has_role('authenticator',current_user,'SET')
-     or pg_has_role('anon','postgres','SET') or pg_has_role('authenticated','postgres','SET')
+  if pg_has_role('anon','postgres','SET') or pg_has_role('authenticated','postgres','SET')
      or pg_has_role('service_role','postgres','SET') or pg_has_role('authenticator','postgres','SET')
      or exists (
        select 1 from pg_auth_members m
-       where m.roleid in (current_user::regrole,'postgres'::regrole) and m.admin_option
+       where m.roleid='postgres'::regrole and m.admin_option
          and (pg_has_role('anon',m.member,'SET') or pg_has_role('authenticated',m.member,'SET')
            or pg_has_role('service_role',m.member,'SET') or pg_has_role('authenticator',m.member,'SET'))
      ) then
-    raise exception 'B4.3 application role can reach a migration administrator';
+    raise exception 'B4.3 application roles can reach or administer the postgres principal';
   end if;
 end $$;
-
--- Role creation by a CREATEROLE member can leave a permanent ADMIN membership
--- even when SET/INHERIT are false. Perform all ownership changes as the
--- pre-verified postgres superuser instead; SET LOCAL is rolled back at the end
--- of Supabase's per-migration transaction.
-set local role postgres;
-do $$
-begin
-  if current_user<>'postgres' or not exists(select 1 from pg_roles where rolname=current_user and rolsuper) then
-    raise exception 'B4.3 migration did not enter the verified postgres superuser role';
-  end if;
-end $$;
-
-do $$
-begin
-  if not exists (select 1 from pg_roles where rolname='saasscout_b43_fact_writer') then
-    create role saasscout_b43_fact_writer nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
-  end if;
-  if not exists (select 1 from pg_roles where rolname='saasscout_b43_current_reader') then
-    create role saasscout_b43_current_reader nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
-  end if;
-end $$;
-do $$
-begin
-  if exists (
-    select 1 from pg_roles
-    where rolname in ('saasscout_b43_fact_writer','saasscout_b43_current_reader')
-      and (rolcanlogin or rolsuper or rolcreatedb or rolcreaterole or rolinherit or rolreplication or rolbypassrls)
-  ) then
-    raise exception 'B4.3 internal roles must retain least-privilege attributes';
-  end if;
-end $$;
-grant create on schema public to saasscout_b43_fact_writer,saasscout_b43_current_reader;
 
 alter table public.validation_evidence_promotions
   add constraint validation_promotions_b43_authority_identity_unique
@@ -124,39 +81,29 @@ create index validation_b43_restriction_contribution_idx on public.validation_ev
 comment on table public.validation_evidence_source_restrictions is
   'Private append-only permanent restrictions. Participant facts bind only observations existing at the source transition; later observations do not inherit them.';
 
+-- Defense in depth for any future accidental grants; postgres-owned definer
+-- functions bypass these policies, so they are not their authorization layer.
 alter table public.validation_evidence_consumption_authority enable row level security;
 alter table public.validation_evidence_consumption_authority force row level security;
 alter table public.validation_evidence_source_restrictions enable row level security;
 alter table public.validation_evidence_source_restrictions force row level security;
+
 revoke all on public.validation_evidence_consumption_authority,public.validation_evidence_source_restrictions
-  from public,anon,authenticated,service_role;
-grant insert on public.validation_evidence_consumption_authority,public.validation_evidence_source_restrictions
-  to saasscout_b43_fact_writer;
-grant select on public.validation_evidence_consumption_authority,public.validation_evidence_source_restrictions
-  to saasscout_b43_current_reader;
-create policy validation_b43_authority_writer_insert on public.validation_evidence_consumption_authority
-  for insert to saasscout_b43_fact_writer with check (purpose_id='qualified_validation_shared_evidence' and authority_state='withheld');
-create policy validation_b43_authority_reader_select on public.validation_evidence_consumption_authority
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_restrictions_writer_insert on public.validation_evidence_source_restrictions
-  for insert to saasscout_b43_fact_writer with check (purpose_id='qualified_validation_shared_evidence');
-create policy validation_b43_restrictions_reader_select on public.validation_evidence_source_restrictions
-  for select to saasscout_b43_current_reader using (true);
+  from public,anon,authenticated,service_role,authenticator;
 
 create function public.validation_b43_reject_fact_change() returns trigger
-language plpgsql set search_path=pg_catalog,public as $$
+language plpgsql set search_path=pg_catalog,pg_temp as $$
 begin
   raise exception 'B4.3 authority facts are append-only' using errcode='55000';
 end $$;
-alter function public.validation_b43_reject_fact_change() owner to postgres;
-revoke all on function public.validation_b43_reject_fact_change() from public,anon,authenticated,service_role;
+revoke all on function public.validation_b43_reject_fact_change() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_authority_immutable before update or delete on public.validation_evidence_consumption_authority
   for each row execute function public.validation_b43_reject_fact_change();
 create trigger validation_b43_restrictions_immutable before update or delete on public.validation_evidence_source_restrictions
   for each row execute function public.validation_b43_reject_fact_change();
 
 create function public.validation_b43_capture_new_promotion_authority() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   insert into public.validation_evidence_consumption_authority(
     purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,
@@ -167,9 +114,7 @@ begin
   );
   return new;
 end $$;
-alter function public.validation_b43_capture_new_promotion_authority() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_new_promotion_authority() from public,anon,authenticated,service_role;
-grant insert on public.validation_evidence_consumption_authority to saasscout_b43_fact_writer;
+revoke all on function public.validation_b43_capture_new_promotion_authority() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_new_promotion_withheld_authority
   after insert on public.validation_evidence_promotions
   for each row when (new.problem_observation_id is not null)
@@ -177,20 +122,20 @@ create trigger validation_b43_new_promotion_withheld_authority
 
 create function public.validation_b43_insert_restriction(
   p_reason text,p_kind text,p_scope uuid,p_owner uuid,p_observation uuid default null
-) returns void language plpgsql security definer set search_path=pg_catalog,public as $$
+) returns void language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
+  if pg_trigger_depth()=0 then
+    raise exception 'B4.3 restriction writer is trigger-only' using errcode='42501';
+  end if;
   insert into public.validation_evidence_source_restrictions(
     purpose_id,reason_code,scope_kind,scope_id,owner_id,contribution_observation_id
   ) values ('qualified_validation_shared_evidence',p_reason,p_kind,p_scope,p_owner,p_observation)
   on conflict do nothing;
 end $$;
-alter function public.validation_b43_insert_restriction(text,text,uuid,uuid,uuid) owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_insert_restriction(text,text,uuid,uuid,uuid) from public,anon,authenticated,service_role;
-grant execute on function public.validation_b43_insert_restriction(text,text,uuid,uuid,uuid) to saasscout_b43_fact_writer;
-grant insert on public.validation_evidence_source_restrictions to saasscout_b43_fact_writer;
+revoke all on function public.validation_b43_insert_restriction(text,text,uuid,uuid,uuid) from public,anon,authenticated,service_role,authenticator;
 
 create function public.validation_b43_lock_source_change() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   if tg_table_name='validation_participants' then
     perform public.validation_b31_lock('participant',old.id::text);
@@ -208,12 +153,10 @@ begin
   if tg_op='INSERT' then return new; end if;
   return old;
 end $$;
-alter function public.validation_b43_lock_source_change() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_lock_source_change() from public,anon,authenticated,service_role;
-grant execute on function public.validation_b31_lock(text,text) to saasscout_b43_fact_writer;
+revoke all on function public.validation_b43_lock_source_change() from public,anon,authenticated,service_role,authenticator;
 
 create function public.validation_b43_capture_participant_restrictions() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare reason text;
 begin
   if old.status is distinct from new.status and new.status in ('withdrawn','archived') then
@@ -237,15 +180,14 @@ begin
   end if;
   return new;
 end $$;
-alter function public.validation_b43_capture_participant_restrictions() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_participant_restrictions() from public,anon,authenticated,service_role;
+revoke all on function public.validation_b43_capture_participant_restrictions() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_participant_change_lock before update of status,consent_mode,consent_purpose,consent_captured_at
   on public.validation_participants for each row execute function public.validation_b43_lock_source_change();
 create trigger validation_b43_participant_restrictions after update of status,consent_mode,consent_purpose,consent_captured_at
   on public.validation_participants for each row execute function public.validation_b43_capture_participant_restrictions();
 
 create function public.validation_b43_restrict_observation_during_nonactive_participant() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare participant_status text;
 begin
   if new.participant_id is null then return new; end if;
@@ -259,20 +201,14 @@ begin
   end if;
   return new;
 end $$;
-alter function public.validation_b43_restrict_observation_during_nonactive_participant() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_restrict_observation_during_nonactive_participant() from public,anon,authenticated,service_role;
-grant select on public.validation_participants,public.validation_evidence_observations to saasscout_b43_fact_writer;
-create policy validation_b43_writer_participant_select on public.validation_participants
-  for select to saasscout_b43_fact_writer using (true);
-create policy validation_b43_writer_observation_select on public.validation_evidence_observations
-  for select to saasscout_b43_fact_writer using (true);
+revoke all on function public.validation_b43_restrict_observation_during_nonactive_participant() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_observation_participant_restriction after insert on public.validation_evidence_observations
   for each row execute function public.validation_b43_restrict_observation_during_nonactive_participant();
 create trigger validation_b43_observation_source_lock before insert on public.validation_evidence_observations
   for each row execute function public.validation_b43_lock_source_change();
 
 create function public.validation_b43_capture_session_restrictions() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   if old.status is distinct from new.status and new.status='cancelled' then
     perform public.validation_b43_insert_restriction('session_cancelled','interview_session',new.id,new.owner_id);
@@ -282,30 +218,28 @@ begin
   end if;
   return new;
 end $$;
-alter function public.validation_b43_capture_session_restrictions() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_session_restrictions() from public,anon,authenticated,service_role;
+revoke all on function public.validation_b43_capture_session_restrictions() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_session_change_lock before update of status,participant_relevance
   on public.validation_interview_sessions for each row execute function public.validation_b43_lock_source_change();
 create trigger validation_b43_session_restrictions after update of status,participant_relevance
   on public.validation_interview_sessions for each row execute function public.validation_b43_capture_session_restrictions();
 
 create function public.validation_b43_capture_experiment_restriction() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   if old.lifecycle is distinct from new.lifecycle and new.lifecycle='cancelled' then
     perform public.validation_b43_insert_restriction('experiment_cancelled','experiment_version',new.id,new.owner_id);
   end if;
   return new;
 end $$;
-alter function public.validation_b43_capture_experiment_restriction() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_experiment_restriction() from public,anon,authenticated,service_role;
+revoke all on function public.validation_b43_capture_experiment_restriction() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_experiment_change_lock before update of lifecycle on public.validation_experiment_versions
   for each row execute function public.validation_b43_lock_source_change();
 create trigger validation_b43_experiment_restriction after update of lifecycle on public.validation_experiment_versions
   for each row execute function public.validation_b43_capture_experiment_restriction();
 
 create function public.validation_b43_capture_classification_restriction() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   if new.supersedes_classification_id is not null and exists (
     select 1 from public.validation_evidence_promotions p
@@ -316,16 +250,12 @@ begin
   end if;
   return new;
 end $$;
-alter function public.validation_b43_capture_classification_restriction() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_classification_restriction() from public,anon,authenticated,service_role;
-grant select on public.validation_evidence_promotions to saasscout_b43_fact_writer;
-create policy validation_b43_writer_promotion_select on public.validation_evidence_promotions
-  for select to saasscout_b43_fact_writer using (true);
+revoke all on function public.validation_b43_capture_classification_restriction() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_classification_restriction after insert on public.validation_evidence_classifications
   for each row execute function public.validation_b43_capture_classification_restriction();
 
 create function public.validation_b43_capture_canonical_restriction() returns trigger
-language plpgsql security definer set search_path=pg_catalog,public as $$
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   if old.status='active' and new.status in ('candidate','deprecated','archived') then
     perform public.validation_b43_insert_restriction('canonical_deactivated','canonical_problem',new.id,null);
@@ -336,42 +266,16 @@ begin
   end if;
   return new;
 end $$;
-alter function public.validation_b43_capture_canonical_restriction() owner to saasscout_b43_fact_writer;
-revoke all on function public.validation_b43_capture_canonical_restriction() from public,anon,authenticated,service_role;
+revoke all on function public.validation_b43_capture_canonical_restriction() from public,anon,authenticated,service_role,authenticator;
 create trigger validation_b43_canonical_restriction after update of status,merged_into_problem_id
   on public.canonical_problems for each row execute function public.validation_b43_capture_canonical_restriction();
 
--- Reader role access is mediated only through its fixed SECURITY DEFINER routine.
-grant select on public.validation_evidence_promotions,public.validation_qualified_evidence_snapshots,
-  public.problem_observations,public.canonical_problems,public.validation_evidence_observations,
-  public.validation_evidence_classifications,public.validation_participants,
-  public.validation_interview_sessions,public.validation_experiment_versions
-  to saasscout_b43_current_reader;
-create policy validation_b43_reader_promotion_select on public.validation_evidence_promotions
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_snapshot_select on public.validation_qualified_evidence_snapshots
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_shared_select on public.problem_observations
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_canonical_select on public.canonical_problems
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_observation_select on public.validation_evidence_observations
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_classification_select on public.validation_evidence_classifications
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_participant_select on public.validation_participants
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_session_select on public.validation_interview_sessions
-  for select to saasscout_b43_current_reader using (true);
-create policy validation_b43_reader_experiment_select on public.validation_experiment_versions
-  for select to saasscout_b43_current_reader using (true);
-grant execute on function public.validation_b42_snapshot_verified(public.validation_evidence_promotions),
-  public.validation_b42_protected_schema(),public.validation_b42_row_record(public.problem_observations)
-  to saasscout_b43_current_reader;
+-- The postgres-owned reader deliberately bypasses RLS. Its static, qualified
+-- checks are the boundary; it is not executable by any application role here.
 
 create function public.validation_b43_read_current_evidence(p_canonical_problem_id uuid)
 returns jsonb language plpgsql stable security definer
-set search_path=pg_catalog,public,extensions
+set search_path=pg_catalog,pg_temp
 as $$
 declare
   candidate_count bigint;
@@ -390,6 +294,9 @@ declare
   restricted boolean;
   output_rows jsonb := '[]'::jsonb;
 begin
+  -- The runtime RPC has no application grant. Keep a second, explicit
+  -- fail-closed guard in case an EXECUTE grant is accidentally added later.
+  if session_user <> 'postgres' then raise exception 'unavailable' using errcode='P0001'; end if;
   if p_canonical_problem_id is null then raise exception 'unavailable' using errcode='P0001'; end if;
   select * into canonical from public.canonical_problems c where c.id=p_canonical_problem_id;
   if not found or canonical.status not in ('candidate','active','merged','deprecated','archived')
@@ -546,24 +453,11 @@ begin
 exception when others then
   raise exception 'current evidence unavailable' using errcode='P0001';
 end $$;
-alter function public.validation_b43_read_current_evidence(uuid) owner to saasscout_b43_current_reader;
-revoke all on function public.validation_b43_read_current_evidence(uuid) from public,anon,authenticated;
-grant execute on function public.validation_b43_read_current_evidence(uuid) to service_role;
+revoke all on function public.validation_b43_read_current_evidence(uuid) from public,anon,authenticated,service_role,authenticator;
 comment on function public.validation_b43_read_current_evidence(uuid) is
   'One-snapshot complete current-evidence assessment. WITHHELD is excluded; missing authority or inconsistent proof fails closed.';
 
 -- No authenticated or service-role direct access to private fact contents.
 revoke all on public.validation_evidence_consumption_authority,public.validation_evidence_source_restrictions
-  from public,anon,authenticated,service_role;
-grant usage on schema public to saasscout_b43_fact_writer,saasscout_b43_current_reader;
-grant usage on schema extensions to saasscout_b43_current_reader;
-revoke create on schema public from saasscout_b43_fact_writer,saasscout_b43_current_reader;
-
-do $$
-begin
-  if exists (select 1 from pg_auth_members m where m.roleid in
-      ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole)
-      or m.member in ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole)) then
-    raise exception 'B4.3 internal owner roles must have no membership edges';
-  end if;
-end $$;
+  from public,anon,authenticated,service_role,authenticator;
+-- No application role receives direct fact access or B4.3 function execution.

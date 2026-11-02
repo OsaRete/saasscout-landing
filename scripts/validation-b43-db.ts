@@ -174,35 +174,32 @@ function verifyDisposableIdentity(): Readonly<{ projectId: string; dbContainerId
   // This read-only probe identifies the login/effective principal on the
   // generated project's verified DB_URL before the explicitly local reset.
   const principal = sql(`select session_user||'|'||current_user||'|'||
-    (select rolsuper::text from pg_roles where rolname='postgres')||'|'||
-    pg_has_role(current_user,'postgres','SET')::text||'|'||
+    (select rolbypassrls::text from pg_roles where rolname=current_user)||'|'||
     (pg_has_role('anon',current_user,'SET') or pg_has_role('authenticated',current_user,'SET') or
      pg_has_role('service_role',current_user,'SET') or pg_has_role('authenticator',current_user,'SET') or
-     pg_has_role('anon','postgres','SET') or pg_has_role('authenticated','postgres','SET') or
-     pg_has_role('service_role','postgres','SET') or pg_has_role('authenticator','postgres','SET') or
-     exists(select 1 from pg_auth_members m where m.roleid in (current_user::regrole,'postgres'::regrole)
-       and m.admin_option and (pg_has_role('anon',m.member,'SET') or pg_has_role('authenticated',m.member,'SET') or
+     exists(select 1 from pg_auth_members m where m.roleid='postgres'::regrole and m.admin_option
+       and (pg_has_role('anon',m.member,'SET') or pg_has_role('authenticated',m.member,'SET') or
          pg_has_role('service_role',m.member,'SET') or pg_has_role('authenticator',m.member,'SET'))))::text`,
-    "migration principal privilege preflight failed", false);
-  const [sessionUser, currentUser, postgresSuperuser, canSetPostgres, appReachability] = principal.split("|");
-  check(sessionUser && sessionUser === currentUser && !["anon", "authenticated", "service_role", "authenticator"].includes(sessionUser),
-    "database login and effective migration principal are not the same trusted role");
-  check(postgresSuperuser === "true" && canSetPostgres === "t" && appReachability === "f",
-    "migration principal cannot safely use the verified postgres owner role");
+    "migration principal privilege preflight failed");
+  const [sessionUser, currentUser, bypassRls, applicationCanAssumePrincipal] = principal.split("|");
+  check(sessionUser === "postgres" && currentUser === "postgres",
+    "database login and effective migration principal must be Supabase postgres");
+  check(bypassRls === "true" && applicationCanAssumePrincipal === "f",
+    "postgres BYPASSRLS assumption or application role boundary is invalid");
   return { projectId, dbContainerId: containers.database.id, clusterId, status };
 }
 
-function sqlRaw(statement: string, label = phase, elevateToVerifiedPostgres = true) {
+function sqlRaw(statement: string, label = phase) {
   const result = spawnSync("psql", [B43_DATABASE_URL, "-X", "-A", "-t", "-q", "-w", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=sqlstate"], {
-    input: `${elevateToVerifiedPostgres ? "set role postgres;\n" : ""}set statement_timeout='20s';\n${statement}`,
+    input: `set statement_timeout='20s';\n${statement}`,
     encoding: "utf8", timeout: 25000, maxBuffer: 2 * 1024 * 1024, env: sanitizedProcessEnv(),
   });
   check(!result.error && result.status !== null, `${label}: psql unavailable`);
   return result;
 }
 
-function sql(statement: string, label = phase, elevateToVerifiedPostgres = true): string {
-  const result = sqlRaw(statement, label, elevateToVerifiedPostgres);
+function sql(statement: string, label = phase): string {
+  const result = sqlRaw(statement, label);
   check(result.status === 0, `${label}: SQL failed`);
   return result.stdout.split(/\r?\n/).filter((line) => line && !line.startsWith("SET")).join("\n");
 }
@@ -249,9 +246,15 @@ function expectPostgrestPermissionDenied(error: { code?: string; message?: strin
   check(error?.code === "42501", `${label}: expected PostgreSQL permission denial 42501`);
 }
 
-async function expectCurrentReadUnavailable(admin: SupabaseClient, label: string): Promise<void> {
-  const { error } = await admin.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-  check(error?.code === "P0001" && error.message === "current evidence unavailable", `${label}: expected the sanitized unavailable result`);
+async function expectCurrentReadUnavailable(admin: SupabaseClient, label: string, canonicalId = canonical): Promise<void> {
+  void admin;
+  const result = sqlRaw(`select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`);
+  check(result.status !== 0 && /ERROR:\s+P0001/.test(result.stderr) && /current evidence unavailable/.test(result.stderr),
+    `${label}: expected the sanitized unavailable result`);
+}
+
+function readCurrentEvidence(canonicalId = canonical): { observations: unknown[]; complete: boolean } {
+  return JSON.parse(sql(`select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`)) as { observations: unknown[]; complete: boolean };
 }
 
 function assertCompleteMigrationChain(): void {
@@ -276,71 +279,38 @@ function assertFreshApplicationDatabase(): void {
 }
 
 function assertDatabaseSecurityCatalog(): void {
+  check(sql(`select rolbypassrls and not rolsuper from pg_roles where rolname='postgres'`) === "t",
+    "disposable postgres is not the confirmed non-superuser BYPASSRLS principal");
   check(sql(`select bool_and(c.relrowsecurity and c.relforcerowsecurity and c.relowner='postgres'::regrole)
     from pg_class c where c.oid in ('public.validation_evidence_consumption_authority'::regclass,
-      'public.validation_evidence_source_restrictions'::regclass)`) === "t", "B43 fact table RLS/ownership invariant failed");
-  check(sql(`select bool_and(r.rolcanlogin is false and r.rolinherit is false and r.rolbypassrls is false
-      and r.rolsuper is false and r.rolcreatedb is false and r.rolcreaterole is false and r.rolreplication is false)
-    from pg_roles r where r.rolname in ('saasscout_b43_fact_writer','saasscout_b43_current_reader')`) === "t", "B43 internal role attributes are unsafe");
-  check(sql(`select not exists(select 1 from pg_auth_members m
-      where m.roleid in ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole)
-         or m.member in ('saasscout_b43_fact_writer'::regrole,'saasscout_b43_current_reader'::regrole))
-    and not (pg_has_role('anon','saasscout_b43_fact_writer','SET') or pg_has_role('authenticated','saasscout_b43_fact_writer','SET')
-      or pg_has_role('service_role','saasscout_b43_fact_writer','SET') or pg_has_role('authenticator','saasscout_b43_fact_writer','SET')
-      or pg_has_role('anon','saasscout_b43_current_reader','SET') or pg_has_role('authenticated','saasscout_b43_current_reader','SET')
-      or pg_has_role('service_role','saasscout_b43_current_reader','SET') or pg_has_role('authenticator','saasscout_b43_current_reader','SET'))`) === "t", "B43 internal role membership/SET boundary failed");
+      'public.validation_evidence_source_restrictions'::regclass)`) === "t", "B43 fact table defense-in-depth RLS/ownership invariant failed");
+  check(sql(`select not exists(select 1 from pg_roles where rolname like 'saasscout_b43_%')`) === "t",
+    "B43 unexpectedly provisioned an internal role");
 
   const privateTables = ["validation_evidence_consumption_authority", "validation_evidence_source_restrictions"];
   for (const table of privateTables) {
     const q = `public.${table}`;
-    const serviceDenied = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"].every((privilege) =>
-      sql(`select not has_table_privilege('service_role','${q}','${privilege}')`) === "t");
-    check(serviceDenied, `service_role has direct privileges on ${table}`);
-    for (const role of ["anon", "authenticated"]) {
+    for (const role of ["anon", "authenticated", "service_role", "authenticator"]) {
       const denied = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"].every((privilege) =>
         sql(`select not has_table_privilege('${role}','${q}','${privilege}')`) === "t");
       check(denied, `${role} has direct privileges on ${table}`);
     }
-    check(sql(`select has_table_privilege('saasscout_b43_fact_writer','${q}','INSERT')
-      and not has_table_privilege('saasscout_b43_fact_writer','${q}','UPDATE')
-      and not has_table_privilege('saasscout_b43_fact_writer','${q}','DELETE')
-      and not has_table_privilege('saasscout_b43_fact_writer','${q}','TRUNCATE')`) === "t", `fact-writer privileges are too broad on ${table}`);
-    check(sql(`select has_table_privilege('saasscout_b43_current_reader','${q}','SELECT')
-      and not has_table_privilege('saasscout_b43_current_reader','${q}','INSERT')
-      and not has_table_privilege('saasscout_b43_current_reader','${q}','UPDATE')
-      and not has_table_privilege('saasscout_b43_current_reader','${q}','DELETE')
-      and not has_table_privilege('saasscout_b43_current_reader','${q}','TRUNCATE')`) === "t", `current-reader privileges are too broad on ${table}`);
+    check(sql(`select not exists(select 1 from lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) acl
+      where acl.grantee=0 and acl.privilege_type in ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE'))
+      from pg_class c where c.oid='${q}'::regclass`) === "t", `PUBLIC has direct privileges on ${table}`);
   }
-  check(sql(`select count(*)=2 and bool_and(p.polcmd='a') from pg_policy p
-    where p.polrelid in ('public.validation_evidence_consumption_authority'::regclass,
-      'public.validation_evidence_source_restrictions'::regclass)
-      and p.polname in ('validation_b43_authority_writer_insert','validation_b43_restrictions_writer_insert')`) === "t", "fact writer RLS insert policies are incomplete");
-  check(sql(`select has_function_privilege('service_role','public.validation_b43_read_current_evidence(uuid)','EXECUTE')
-    and not has_function_privilege('anon','public.validation_b43_read_current_evidence(uuid)','EXECUTE')
-    and not has_function_privilege('authenticated','public.validation_b43_read_current_evidence(uuid)','EXECUTE')
-    and not exists(select 1 from pg_proc p, lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
-      where p.oid='public.validation_b43_read_current_evidence(uuid)'::regprocedure and acl.grantee=0 and acl.privilege_type='EXECUTE')`) === "t", "current RPC execute grants are not service-role-only");
-  check(sql(`select p.prosecdef and p.proowner='saasscout_b43_current_reader'::regrole
-    and exists(select 1 from unnest(p.proconfig) x where x like 'search_path=pg_catalog%')
-    and has_function_privilege('service_role',p.oid,'EXECUTE')
-    and not has_function_privilege('anon',p.oid,'EXECUTE')
-    and not has_function_privilege('authenticated',p.oid,'EXECUTE')
-    and not exists(select 1 from lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
-      where acl.grantee=0 and acl.privilege_type='EXECUTE')
-    from pg_proc p where p.oid='public.validation_b43_read_current_evidence(uuid)'::regprocedure`) === "t", "current RPC owner/SECURITY DEFINER/search_path invariant failed");
-  check(sql(`select p.prosecdef and p.proowner='saasscout_b43_fact_writer'::regrole
-    and not has_function_privilege('service_role',p.oid,'EXECUTE')
-    and not has_function_privilege('anon',p.oid,'EXECUTE')
-    and not has_function_privilege('authenticated',p.oid,'EXECUTE')
-    from pg_proc p where p.oid='public.validation_b43_capture_new_promotion_authority()'::regprocedure`) === "t", "promotion trigger function owner/grants are unsafe");
-  check(sql(`select count(*)=11
+
+  check(sql(`select count(*)=11 and bool_and(p.proowner='postgres'::regrole)
+      and bool_and(exists(select 1 from unnest(p.proconfig) x where x='search_path=pg_catalog, pg_temp'))
+      and bool_and(not has_function_privilege('anon',p.oid,'EXECUTE')
+        and not has_function_privilege('authenticated',p.oid,'EXECUTE')
+        and not has_function_privilege('service_role',p.oid,'EXECUTE')
+        and not has_function_privilege('authenticator',p.oid,'EXECUTE'))
+      and bool_and(not exists(select 1 from lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+        where acl.grantee=0 and acl.privilege_type='EXECUTE'))
       and bool_and(p.prosecdef) filter(where p.proname<>'validation_b43_reject_fact_change')
       and bool_and(not p.prosecdef) filter(where p.proname='validation_b43_reject_fact_change')
-      and count(*) filter(where p.proowner='postgres'::regrole)=1
-      and count(*) filter(where p.proowner='saasscout_b43_fact_writer'::regrole)=9
-      and count(*) filter(where p.proowner='saasscout_b43_current_reader'::regrole)=1
-    from pg_proc p
-    where p.oid in (
+    from pg_proc p where p.oid in (
       'public.validation_b43_reject_fact_change()'::regprocedure,
       'public.validation_b43_capture_new_promotion_authority()'::regprocedure,
       'public.validation_b43_insert_restriction(text,text,uuid,uuid,uuid)'::regprocedure,
@@ -352,59 +322,24 @@ function assertDatabaseSecurityCatalog(): void {
       'public.validation_b43_capture_classification_restriction()'::regprocedure,
       'public.validation_b43_capture_canonical_restriction()'::regprocedure,
       'public.validation_b43_read_current_evidence(uuid)'::regprocedure
-    )`) === "t", "B43 SECURITY DEFINER function inventory is incomplete");
+    )`) === "t", "B43 ownership, grants, SECURITY DEFINER or search_path invariant failed");
 }
 
-function verifyOwnershipFailureRollsBack(): void {
-  const suffix = `${process.pid}_${Date.now()}`;
-  const role = `b43_rollback_owner_${suffix}`;
-  const fn = `b43_rollback_probe_${suffix}`;
-  expectSqlState(`begin;
-    create role ${role} nologin nosuperuser nocreatedb nocreaterole noinherit;
-    create function public.${fn}() returns integer language sql as 'select 1';
-    alter function public.${fn}() owner to ${role};
-    do $$ begin raise exception 'intentional B43 rollback probe' using errcode='P0001'; end $$;
-  `, "P0001", "forced ownership migration failure");
-  check(sql(`select not exists(select 1 from pg_roles where rolname='${role}')
-    and to_regprocedure('public.${fn}()') is null`) === "t", "failed ownership migration left partial role or function state");
-}
-
-function verifyDirectAndTransitiveRoleEscalationDetection(): void {
-  const suffix = `${process.pid}_${Date.now()}`;
-  const target = `b43_probe_target_${suffix}`;
-  const bridge = `b43_probe_bridge_${suffix}`;
-  const direct = `b43_probe_direct_${suffix}`;
-  sql(`begin;
-    create role ${target} nologin;
-    create role ${bridge} nologin;
-    create role ${direct} nologin;
-    grant ${target} to ${bridge} with admin true, inherit false, set false;
-    grant ${bridge} to service_role with admin false, inherit false, set true;
-    grant ${direct} to service_role with admin true, inherit false, set false;
-    set local role service_role;
-    set local role ${bridge};
-    grant ${target} to service_role with admin false, inherit false, set true;
-    set local role postgres;
-    set local role service_role;
-    grant ${direct} to service_role with admin false, inherit false, set true;
-    set local role postgres;
-    do $$ begin
-      if not exists(select 1 from pg_auth_members m where m.roleid='${target}'::regrole and m.admin_option
-          and pg_has_role('service_role',m.member,'SET')) then
-        raise exception 'transitive admin bridge was not detected';
-      end if;
-      if not exists(select 1 from pg_auth_members m where m.roleid='${direct}'::regrole and m.admin_option
-          and pg_has_role('service_role',m.member,'SET')) then
-        raise exception 'direct admin escalation was not detected';
-      end if;
-      if not pg_has_role('service_role','${bridge}','SET') then
-        raise exception 'service_role unexpectedly lacks the configured bridge SET path';
-      end if;
-      if not pg_has_role('service_role','${target}','SET') or not pg_has_role('service_role','${direct}','SET') then
-        raise exception 'simulated direct or transitive role escalation did not grant SET capability';
-      end if;
-    end $$;
-  rollback;`);
+function verifyApplicationRoleEscalationDenied(): void {
+  check(sql(`select bool_and(not pg_has_role(r.rolname,'postgres','SET'))
+    from (values ('anon'),('authenticated'),('service_role'),('authenticator')) r(rolname)`) === "t",
+    "an application role can SET ROLE postgres");
+  for (const role of ["anon", "authenticated", "service_role", "authenticator"]) {
+    expectSqlState(`set role ${role}; set role postgres;`, "42501", `${role} escalation to postgres`);
+    expectSqlState(`set role ${role}; alter table public.validation_evidence_source_restrictions disable trigger all;`,
+      "42501", `${role} trigger tampering`);
+  }
+  expectSqlState(`insert into public.validation_evidence_consumption_authority(
+      purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,promotion_fingerprint,projection_version,authority_state)
+    values('qualified_validation_shared_evidence','00000000-0000-0000-0000-000000000001',
+      '00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',
+      '00000000-0000-0000-0000-000000000004',repeat('0',64),'v8-b3.1-projection.1','active')`,
+    "23514", "positive authority forgery");
 }
 
 function insertStatement(table: string, row: Record<string, unknown>): string {
@@ -472,7 +407,7 @@ async function expectNoRuntimeFactAccess(admin: SupabaseClient, anonymous: Supab
     const { error } = await request();
     expectPostgrestPermissionDenied(error, label);
   }
-  for (const role of ["service_role", "anon", "authenticated", "saasscout_b43_fact_writer", "saasscout_b43_current_reader"]) {
+  for (const role of ["service_role", "anon", "authenticated"]) {
     for (const table of ["validation_evidence_consumption_authority", "validation_evidence_source_restrictions"]) {
       expectSqlState(`set role ${role}; truncate public.${table};`, "42501", `${role} truncate ${table}`);
     }
@@ -499,12 +434,17 @@ function restoreSnapshot(observationId: string): void {
 }
 
 async function verifyPostgrestExecutionBoundary(admin: SupabaseClient, anonymous: SupabaseClient, authenticated: SupabaseClient): Promise<void> {
-  for (const client of [anonymous, authenticated]) {
+  for (const client of [admin, anonymous, authenticated]) {
     const { error } = await client.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-    expectPostgrestPermissionDenied(error, "browser current RPC execution");
+    expectPostgrestPermissionDenied(error, "application current RPC execution");
+    const writer = await client.rpc("validation_b43_insert_restriction", {
+      p_reason: "canonical_merged", p_kind: "canonical_problem", p_scope: canonical, p_owner: null, p_observation: null,
+    });
+    expectPostgrestPermissionDenied(writer.error, "application restriction-writer RPC execution");
   }
-  const { data, error } = await admin.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-  check(!error && data?.complete === true && Array.isArray(data.observations), "service-role PostgREST RPC did not execute the current boundary");
+  const direct = readCurrentEvidence();
+  check(direct.complete === true && Array.isArray(direct.observations) && direct.observations.length === 0,
+    "trusted direct SQL read did not return the explicit withheld-only empty result");
 }
 
 function makePsqlProcess(): ReturnType<typeof spawn> {
@@ -590,9 +530,8 @@ async function run(): Promise<void> {
   assertCompleteMigrationChain();
   assertFreshApplicationDatabase();
   assertDatabaseSecurityCatalog();
-  phase = "ownership DDL rollback and transitive administrator-path regression";
-  verifyOwnershipFailureRollsBack();
-  verifyDirectAndTransitiveRoleEscalationDetection();
+  phase = "application role escalation regression";
+  verifyApplicationRoleEscalationDenied();
 
   const { admin, anonymous, authenticated } = clients(status);
   phase = "browser PostgREST execution denial";
@@ -768,14 +707,10 @@ async function run(): Promise<void> {
     update public.canonical_problems set status='merged',merged_into_problem_id='${targetCanonical}' where id='${canonical}';`);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions
     where reason_code='canonical_merged' and scope_id='${canonical}'`) === "1", "canonical merge restriction missing");
-  const mergeUnavailable = await admin.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-  check(mergeUnavailable.error?.code === "P0001" && mergeUnavailable.error.message === "current evidence unavailable",
-    "merged canonical was not failed closed");
+  await expectCurrentReadUnavailable(admin, "merged canonical", canonical);
   sql(`update public.canonical_problems set merged_into_problem_id='${targetCanonical}' where id='${conflictCanonical}';
     update public.canonical_problems set status='deprecated' where id='${targetCanonical}';`);
-  const conflictUnavailable = await admin.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: conflictCanonical });
-  check(conflictUnavailable.error?.code === "P0001" && conflictUnavailable.error.message === "current evidence unavailable",
-    "active canonical with merge target was not failed closed");
+  await expectCurrentReadUnavailable(admin, "active canonical with merge target", conflictCanonical);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions where reason_code='canonical_deactivated' and scope_id='${targetCanonical}'`) === "1",
     "canonical deactivation restriction missing");
 
@@ -785,9 +720,7 @@ async function run(): Promise<void> {
   }
   check(sql(`select count(*) from public.validation_evidence_promotions
     where canonical_problem_id='${canonical}' and problem_observation_id is not null`) === "101", "overflow fixture did not exceed the 100 candidate bound");
-  const overflow = await admin.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-  check(overflow.error?.code === "P0001" && overflow.error.message === "current evidence unavailable",
-    "candidate population overflow was treated as complete or empty");
+  await expectCurrentReadUnavailable(admin, "candidate population overflow", canonical);
 
   console.log("PASS B4.3 disposable identity, privilege, authority, proof, source restriction, concurrency, completeness and compatibility checks");
 }
