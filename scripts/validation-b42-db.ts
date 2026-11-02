@@ -299,8 +299,22 @@ async function run() {
     return code;
   }
   async function insert(table: string, row: Record<string, unknown>) {
-    sql(insertStatement(table, row), phase);
-  }
+  const allowedTables = [
+    "problem_observations",
+    "validation_evidence_promotions",
+    "canonical_problems",
+  ];
+
+  check(allowedTables.includes(table), "unexpected fixture table");
+
+  const statement = insertStatement(table, row);
+  const result = sqlCode(statement);
+
+  check(
+    result === "00000",
+    `${phase}: synthetic INSERT failed for ${table}, SQLSTATE ${result}`
+  );
+}
   async function unchanged() {
     const result = await readTrustedQualifiedValidationEvidence(canonical, admin);
     check(result.complete && result.observations.length === 3 &&
