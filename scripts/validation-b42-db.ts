@@ -113,11 +113,28 @@ async function run() {
     try { return await promoteCustomerInterviewEvidence(owner, source(19), admin); }
     finally { sql(newRpc, phase); }
   }
-  phase = "historical-only complete population";
+  phase = "historical-only promotion";
   const historicalOnly = await historicalPromotion();
+
+  phase = "historical-only trusted read";
   await expectReadFailure();
-  check((await promoteCustomerInterviewEvidence(owner, source(19), admin)).duplicate, "historical-only retry changed");
-  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots;`, phase) === "0", "historical-only retry attested history");
+
+  phase = "historical-only retry";
+  check(
+    (await promoteCustomerInterviewEvidence(owner, source(19), admin)).duplicate,
+    "historical-only retry changed"
+  );
+
+  phase = "historical-only snapshot assertion";
+  check(
+    sql(
+      `select count(*) from public.validation_qualified_evidence_snapshots;`,
+      phase
+    ) === "0",
+    "historical-only retry attested history"
+  );
+
+  phase = "historical-only cleanup";
   removeHistorical(19, historicalOnly.problemObservationId);
   console.log("PASS historical-only qualified population fails generically; retry never attests history");
 
