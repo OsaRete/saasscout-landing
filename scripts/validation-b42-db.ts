@@ -393,7 +393,7 @@ async function run() {
   await unchanged();
   for (const [i, extra] of [
     [6, { policy_version: "unsupported" }], [7, { resolver_version: "unsupported" }],
-    [8, { projection_version: "unsupported" }],
+    
     [9, { problem_observation_id: null }],
     [10, { problem_observation_id: null, eligible: false, representative_selected: false }],
     [11, { problem_observation_id: null, representative_selected: false }],
@@ -422,6 +422,21 @@ async function run() {
   check(empty.complete && empty.observations.length === 0, "empty query fabricated evidence");
   console.log("PASS real FK/CHECK/unique/append-only constraints and possible inconsistent/nonfinal reader rejects");
 
+  // B4.3 must reject unsupported projection versions at the SQL boundary.
+  phase = "unsupported projection version constraint";
+  await insert("problem_observations", shared(8));
+
+  check(
+    sqlCode(
+      insertStatement(
+        "validation_evidence_promotions",
+        ledger(8, { projection_version: "unsupported" })
+      )
+    ) === "23514",
+    "unsupported projection version was not rejected by SQL"
+  );
+
+  await unchanged();
   phase = "service-role preparation trust boundary";
   const state = await admin.rpc("validation_b31_representative_state", {
     p_owner_id: owner, p_participant_id: participant(16),
