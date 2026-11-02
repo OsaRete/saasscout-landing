@@ -97,11 +97,40 @@ async function run() {
   }
   // Administrator-only disposable fault injection, never runtime privileges.
   function removeHistorical(i: number, id: string) {
-    sql(`begin; alter table public.validation_evidence_promotions disable trigger USER;
-      delete from public.validation_evidence_promotions where observation_id='${source(i)}';
-      alter table public.validation_evidence_promotions enable trigger USER;
-      delete from public.problem_observations where id='${id}'; commit;`, phase);
-  }
+  sql(`
+    begin;
+
+    -- Disposable-test cleanup only.
+    -- Remove the dependent B4.3 authority fact first.
+    alter table public.validation_evidence_consumption_authority
+      disable trigger USER;
+
+    delete from public.validation_evidence_consumption_authority
+    where promotion_id in (
+      select id
+      from public.validation_evidence_promotions
+      where observation_id = '${source(i)}'
+    );
+
+    alter table public.validation_evidence_consumption_authority
+      enable trigger USER;
+
+    -- Remove the historical promotion fixture.
+    alter table public.validation_evidence_promotions
+      disable trigger USER;
+
+    delete from public.validation_evidence_promotions
+    where observation_id = '${source(i)}';
+
+    alter table public.validation_evidence_promotions
+      enable trigger USER;
+
+    delete from public.problem_observations
+    where id = '${id}';
+
+    commit;
+  `, phase);
+}
   const baselineMigration = readFileSync(new URL("../supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", import.meta.url), "utf8");
   const oldRpc = baselineMigration.slice(baselineMigration.indexOf("create function public.validation_promote_customer_interview_evidence("),
     baselineMigration.indexOf("-- ---------------------------------------------------------------------\n-- Membership-changing coordinators"))
