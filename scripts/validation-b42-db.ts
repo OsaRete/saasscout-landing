@@ -97,11 +97,40 @@ async function run() {
   }
   // Administrator-only disposable fault injection, never runtime privileges.
   function removeHistorical(i: number, id: string) {
-    sql(`begin; alter table public.validation_evidence_promotions disable trigger USER;
-      delete from public.validation_evidence_promotions where observation_id='${source(i)}';
-      alter table public.validation_evidence_promotions enable trigger USER;
-      delete from public.problem_observations where id='${id}'; commit;`, phase);
-  }
+  sql(`
+    begin;
+
+    -- Disposable-test cleanup only.
+    -- Remove the dependent B4.3 authority fact first.
+    alter table public.validation_evidence_consumption_authority
+      disable trigger USER;
+
+    delete from public.validation_evidence_consumption_authority
+    where promotion_id in (
+      select id
+      from public.validation_evidence_promotions
+      where observation_id = '${source(i)}'
+    );
+
+    alter table public.validation_evidence_consumption_authority
+      enable trigger USER;
+
+    -- Remove the historical promotion fixture.
+    alter table public.validation_evidence_promotions
+      disable trigger USER;
+
+    delete from public.validation_evidence_promotions
+    where observation_id = '${source(i)}';
+
+    alter table public.validation_evidence_promotions
+      enable trigger USER;
+
+    delete from public.problem_observations
+    where id = '${id}';
+
+    commit;
+  `, phase);
+}
   const baselineMigration = readFileSync(new URL("../supabase/migrations/20260926000000_controlled_customer_interview_promotion.sql", import.meta.url), "utf8");
   const oldRpc = baselineMigration.slice(baselineMigration.indexOf("create function public.validation_promote_customer_interview_evidence("),
     baselineMigration.indexOf("-- ---------------------------------------------------------------------\n-- Membership-changing coordinators"))
@@ -113,11 +142,28 @@ async function run() {
     try { return await promoteCustomerInterviewEvidence(owner, source(19), admin); }
     finally { sql(newRpc, phase); }
   }
-  phase = "historical-only complete population";
+  phase = "historical-only promotion";
   const historicalOnly = await historicalPromotion();
+
+  phase = "historical-only trusted read";
   await expectReadFailure();
-  check((await promoteCustomerInterviewEvidence(owner, source(19), admin)).duplicate, "historical-only retry changed");
-  check(sql(`select count(*) from public.validation_qualified_evidence_snapshots;`, phase) === "0", "historical-only retry attested history");
+
+  phase = "historical-only retry";
+  check(
+    (await promoteCustomerInterviewEvidence(owner, source(19), admin)).duplicate,
+    "historical-only retry changed"
+  );
+
+  phase = "historical-only snapshot assertion";
+  check(
+    sql(
+      `select count(*) from public.validation_qualified_evidence_snapshots;`,
+      phase
+    ) === "0",
+    "historical-only retry attested history"
+  );
+
+  phase = "historical-only cleanup";
   removeHistorical(19, historicalOnly.problemObservationId);
   console.log("PASS historical-only qualified population fails generically; retry never attests history");
 
@@ -253,8 +299,32 @@ async function run() {
     return code;
   }
   async function insert(table: string, row: Record<string, unknown>) {
-    sql(insertStatement(table, row), phase);
-  }
+  const allowedTables = [
+    "problem_observations",
+    "validation_evidence_promotions",
+    "canonical_problems",
+  ];
+
+  check(allowedTables.includes(table), "unexpected fixture table");
+
+  const statement = insertStatement(table, row);
+  const result = sqlCode(statement);
+
+  const observationId =
+    typeof row.observation_id === "string"
+      ? row.observation_id
+      : "not-applicable";
+
+  const fixtureNumber =
+    observationId === "not-applicable"
+      ? "not-applicable"
+      : observationId.slice(-12);
+
+  check(
+    result === "00000",
+    `${phase}: INSERT ${table}, fixture ${fixtureNumber}, SQLSTATE ${result}`
+  );
+}
   async function unchanged() {
     const result = await readTrustedQualifiedValidationEvidence(canonical, admin);
     check(result.complete && result.observations.length === 3 &&
@@ -323,7 +393,7 @@ async function run() {
   await unchanged();
   for (const [i, extra] of [
     [6, { policy_version: "unsupported" }], [7, { resolver_version: "unsupported" }],
-    [8, { projection_version: "unsupported" }],
+    
     [9, { problem_observation_id: null }],
     [10, { problem_observation_id: null, eligible: false, representative_selected: false }],
     [11, { problem_observation_id: null, representative_selected: false }],
@@ -352,6 +422,21 @@ async function run() {
   check(empty.complete && empty.observations.length === 0, "empty query fabricated evidence");
   console.log("PASS real FK/CHECK/unique/append-only constraints and possible inconsistent/nonfinal reader rejects");
 
+  // B4.3 must reject unsupported projection versions at the SQL boundary.
+  phase = "unsupported projection version constraint";
+  await insert("problem_observations", shared(8));
+
+  check(
+    sqlCode(
+      insertStatement(
+        "validation_evidence_promotions",
+        ledger(8, { projection_version: "unsupported" })
+      )
+    ) === "23514",
+    "unsupported projection version was not rejected by SQL"
+  );
+
+  await unchanged();
   phase = "service-role preparation trust boundary";
   const state = await admin.rpc("validation_b31_representative_state", {
     p_owner_id: owner, p_participant_id: participant(16),
