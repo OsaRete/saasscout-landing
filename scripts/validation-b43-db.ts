@@ -20,6 +20,7 @@ import {
   B43_DATABASE_URL,
   B43_MANIFEST_NAME,
   expectedB43NetworkName,
+  isTrustedMigrationPrincipalResult,
   type ContainerIdentity,
   type DockerNetworkIdentity,
   type DisposableManifest,
@@ -181,10 +182,10 @@ function verifyDisposableIdentity(): Readonly<{ projectId: string; dbContainerId
        and (pg_has_role('anon',m.member,'SET') or pg_has_role('authenticated',m.member,'SET') or
          pg_has_role('service_role',m.member,'SET') or pg_has_role('authenticator',m.member,'SET'))))::text`,
     "migration principal privilege preflight failed");
-  const [sessionUser, currentUser, bypassRls, applicationCanAssumePrincipal] = principal.split("|");
+  const [sessionUser, currentUser] = principal.split("|");
   check(sessionUser === "postgres" && currentUser === "postgres",
     "database login and effective migration principal must be Supabase postgres");
-  check(bypassRls === "true" && applicationCanAssumePrincipal === "f",
+  check(isTrustedMigrationPrincipalResult(principal),
     "postgres BYPASSRLS assumption or application role boundary is invalid");
   return { projectId, dbContainerId: containers.database.id, clusterId, status };
 }
@@ -589,7 +590,7 @@ async function run(): Promise<void> {
   try { await promoteCustomerInterviewEvidence(owner, observation(17), admin); }
   catch (error) { authorityRejected = error instanceof Error && "code" in error && (error as { code?: string }).code === "constraint_conflict"; }
   sql("drop trigger b43_test_authority_rejection on public.validation_evidence_consumption_authority; drop function public.b43_reject_authority_insert();");
-  check(authorityRejected && sql("select last_value||'|'||is_called from public.b43_authority_rejection_hits") === "1|t",
+  check(authorityRejected && sql("select last_value=1 and is_called from public.b43_authority_rejection_hits") === "t",
     "promotion did not reach the injected authority-write failure");
   check(sql(`select not exists(select 1 from public.validation_evidence_promotions where observation_id='${observation(17)}')
     and not exists(select 1 from public.validation_qualified_evidence_snapshots s join public.validation_evidence_promotions p on p.id=s.promotion_id where p.observation_id='${observation(17)}')

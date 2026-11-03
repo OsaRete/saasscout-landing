@@ -11,6 +11,12 @@ export const B43_DATABASE_PORT = 55432;
 export const B43_SHADOW_PORT = 55430;
 export const B43_MANIFEST_NAME = ".b43-disposable-identity.json";
 
+export function isTrustedMigrationPrincipalResult(result: unknown): boolean {
+  // The preflight explicitly casts both booleans to text, not psql's t/f
+  // boolean output. Exact matching also rejects extra fields or result rows.
+  return result === "postgres|postgres|true|false";
+}
+
 export type DisposableManifest = Readonly<{
   schemaVersion: 2;
   projectId: string;

@@ -20,6 +20,7 @@ import {
   B43_PROJECT_PREFIX,
   B43_SHADOW_PORT,
   expectedB43NetworkName,
+  isTrustedMigrationPrincipalResult,
   type ContainerIdentity,
   type DockerNetworkIdentity,
   type DisposableManifest,
@@ -27,6 +28,42 @@ import {
 
 const projectId = `${B43_PROJECT_PREFIX}a1b2c3d4e5f6`;
 const projectDir = join(tmpdir(), projectId);
+
+test("migration principal accepts the secure PostgreSQL text-cast result", () => {
+  assert.equal(isTrustedMigrationPrincipalResult("postgres|postgres|true|false"), true);
+});
+
+test("migration principal rejects insecure identities and privilege combinations", () => {
+  for (const result of [
+    "service_role|postgres|true|false",
+    "postgres|service_role|true|false",
+    "postgres|postgres|false|false",
+    "postgres|postgres|true|true",
+    "postgres|postgres|false|true",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
+test("migration principal rejects missing, malformed and additional result data", () => {
+  for (const result of [
+    undefined, null, false, 0, {}, [],
+    "", "postgres|postgres", "postgres|postgres|true",
+    "postgres|postgres||false", "postgres|postgres|true|",
+    "postgres|postgres|true|false|unexpected",
+    "postgres|postgres|true|false\npostgres|postgres|true|false",
+    "postgres|postgres|true|false\npostgres|postgres|true|true",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
+test("migration principal rejects unexpected boolean encodings and whitespace", () => {
+  for (const result of [
+    "postgres|postgres|true|f", "postgres|postgres|t|f",
+    "postgres|postgres|TRUE|FALSE", "postgres|postgres|1|0",
+    "postgres|postgres|true|NULL", "postgres|postgres|true|unknown",
+    " postgres|postgres|true|false", "postgres|postgres|true|false ",
+    "postgres|postgres|true|false\n",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
 const config = `project_id = "${projectId}"
 [api]
 enabled = true
