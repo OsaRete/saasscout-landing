@@ -547,6 +547,18 @@ async function run(): Promise<void> {
   check(setup.length > 1000, "B3.1 fixture setup is incomplete");
   sql(`begin;${setup}\ncommit;`);
 
+  phase = "B4.3-C1 source transitions, no-ops and atomic rollback";
+  sql(readFileSync(new URL("../tests/sql/validation-b43-source-transitions.sql", import.meta.url), "utf8"));
+  check(sql(`select
+    not exists(select 1 from public.validation_evidence_source_restrictions)
+    and not exists(select 1 from public.validation_evidence_observations where ingestion_key='b43-c1-during-withdrawal')
+    and (select status='active' from public.validation_participants where id='${participant(1)}')
+    and (select status='in_progress' and participant_relevance='target_segment_match'
+      from public.validation_interview_sessions where id='a0000000-0000-0000-0000-000000000001')
+    and (select lifecycle='running' from public.validation_experiment_versions
+      where id='70000000-0000-0000-0000-000000000001')`) === "t",
+  "source transition regression transaction did not roll back cleanly");
+
   phase = "new promotion WITHHELD authority and historical proof preservation";
   for (const i of [1, 2, 3, 4]) await promoteCustomerInterviewEvidence(owner, observation(i), admin);
   check(sql("select count(*) from public.validation_evidence_consumption_authority where authority_state='withheld'") === "4", "new promotions did not receive exactly one WITHHELD fact each");
@@ -670,9 +682,9 @@ async function run(): Promise<void> {
     "experiment completion incorrectly restricted evidence");
   sql(`insert into public.validation_experiments(id,owner_id,subject_id) values
       ('61000000-0000-0000-0000-000000000001','${owner}','30000000-0000-0000-0000-000000000001');
-    insert into public.validation_experiment_versions(owner_id,subject_id,experiment_id,hypothesis_id,hypothesis_version_id,
+    insert into public.validation_experiment_versions(id,owner_id,subject_id,experiment_id,hypothesis_id,hypothesis_version_id,
       version_number,family,target_audience,collection_method,design_snapshot,consent_privacy_mode,lifecycle,started_at)
-    values('${owner}','30000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000001',
+    values('71000000-0000-0000-0000-000000000001','${owner}','30000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000001',
       '40000000-0000-0000-0000-000000000001','50000000-0000-0000-0000-000000000001',1,'customer_interview',
       '["operators"]','interview','{}','pseudonymous_notes','running',now())`);
   const experimentCancel = await admin.rpc("validation_transition_experiment_version", {
