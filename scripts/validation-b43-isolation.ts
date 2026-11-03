@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const B43_PROJECT_PREFIX = "saasscout-b43-disposable-";
 export const ORDINARY_PROJECT_ID = "saasscout-landing";
@@ -10,6 +10,72 @@ export const B43_API_PORT = 55431;
 export const B43_DATABASE_PORT = 55432;
 export const B43_SHADOW_PORT = 55430;
 export const B43_MANIFEST_NAME = ".b43-disposable-identity.json";
+
+const record = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+export function isExpectedLocalRpcCredential(apiUrl: string, token: unknown, secret: unknown, role: string): boolean {
+  if (apiUrl !== B43_API_URL || typeof token !== "string" || typeof secret !== "string" || !secret ||
+      !["anon", "authenticated", "service_role"].includes(role)) return false;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3 || !parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))) return false;
+    const header: unknown = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    const claims: unknown = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const signature = Buffer.from(parts[2], "base64url");
+    const expected = createHmac("sha256", secret).update(`${parts[0]}.${parts[1]}`).digest();
+    return record(header) && header.alg === "HS256" && record(claims) && claims.role === role &&
+      signature.length === expected.length && timingSafeEqual(signature, expected);
+  } catch { return false; }
+}
+
+// Return protocol metadata only; never return upstream messages, details, hints,
+// credentials, evidence, response bodies or exception text in diagnostics.
+export function sqlStateDiagnostic(stderr: unknown): string {
+  if (typeof stderr !== "string") return "unclassified_sql_error";
+  const states = [...stderr.matchAll(/(?:^|\n)(?:psql:[^\n]*?:\s*)?ERROR:\s+([A-Z0-9]{5})(?=\s|$)/g)];
+  return states.length === 1 ? `sqlstate:${states[0][1]}` : "unclassified_sql_error";
+}
+
+export function classifyPostgrestDenial(response: unknown): string {
+  if (!record(response) || !Number.isInteger(response.status) || typeof response.status !== "number" ||
+      response.status < 0 || response.status > 599 || !("data" in response) || !("error" in response)) {
+    return "malformed_response";
+  }
+  if (response.error === null) return response.status >= 200 && response.status < 300
+    ? "unexpected_success" : "malformed_response";
+  if (!record(response.error) || typeof response.error.code !== "string" ||
+      typeof response.error.message !== "string" || response.data !== null) return "malformed_response";
+  if (response.status === 0) return "transport_error";
+  if (response.error.code === "42501") return [401, 403].includes(response.status)
+    ? "expected_denial" : `unexpected_http_status:${response.status}`;
+  if (/^[A-Z0-9]{5}$/.test(response.error.code)) return `unexpected_sqlstate:${response.error.code}`;
+  if (/^PGRST[0-9]{3}$/.test(response.error.code)) return `unexpected_postgrest_error:${response.error.code}`;
+  return `unexpected_http_status:${response.status}`;
+}
+
+export function classifyTrustedCurrentRead(result: unknown, expectation: "empty" | "unavailable"): string {
+  if (!record(result)) return "malformed_response";
+  if (result.error != null || result.status === null) return "transport_error";
+  if (typeof result.status !== "number" || !Number.isInteger(result.status) || result.status < 0 ||
+      typeof result.stdout !== "string" || typeof result.stderr !== "string") return "malformed_response";
+  const rows = result.stdout.split(/\r?\n/).filter((line) => line !== "");
+  if (rows[0] !== "postgres|postgres") return "wrong_identity";
+  if (result.status !== 0) {
+    const diagnostic = sqlStateDiagnostic(result.stderr);
+    const stateOnly = /^(?:psql:[^\n]*?:\s*)?ERROR:\s+P0001\s*$/.test(result.stderr.trim());
+    return expectation === "unavailable" && rows.length === 1 && diagnostic === "sqlstate:P0001" && stateOnly
+      ? "expected_denial" : diagnostic;
+  }
+  if (expectation === "unavailable") return "unexpected_success";
+  if (rows.length !== 2 || result.stderr.trim() !== "") return "malformed_response";
+  try {
+    const data: unknown = JSON.parse(rows[1]);
+    return record(data) && data.complete === true && Array.isArray(data.observations) &&
+      data.observations.length === 0 && Object.keys(data).sort().join(",") === "complete,observations"
+      ? "expected_success" : "malformed_response";
+  } catch { return "malformed_response"; }
+}
 
 export function isTrustedMigrationPrincipalResult(result: unknown): boolean {
   // The preflight explicitly casts both booleans to text, not psql's t/f

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,8 @@ import {
   assertPublishedContainerIsExpected,
   buildRoleBoundaryNegativeControls,
   buildRoleBoundaryQuery,
+  classifyPostgrestDenial,
+  classifyTrustedCurrentRead,
   B43_API_PORT,
   B43_API_URL,
   B43_DATABASE_PORT,
@@ -23,7 +25,9 @@ import {
   B43_SHADOW_PORT,
   expectedB43NetworkName,
   hasEffectiveRoleIdentity,
+  isExpectedLocalRpcCredential,
   isTrustedMigrationPrincipalResult,
+  sqlStateDiagnostic,
   type ContainerIdentity,
   type DockerNetworkIdentity,
   type DisposableManifest,
@@ -31,6 +35,92 @@ import {
 
 const projectId = `${B43_PROJECT_PREFIX}a1b2c3d4e5f6`;
 const projectDir = join(tmpdir(), projectId);
+
+test("RPC denial requires structured 42501, null data and HTTP permission status", () => {
+  const denied = { status: 403, data: null, error: { code: "42501", message: "PRIVATE_MESSAGE", details: "PRIVATE_DETAILS" } };
+  assert.equal(classifyPostgrestDenial(denied), "expected_denial");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 401 }), "expected_denial");
+  assert.equal(classifyPostgrestDenial({ status: 200, data: {}, error: null }), "unexpected_success");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 500 }), "unexpected_http_status:500");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 0 }), "transport_error");
+  assert.equal(classifyPostgrestDenial({ ...denied, error: { code: "42P01", message: "PRIVATE" } }), "unexpected_sqlstate:42P01");
+  assert.equal(classifyPostgrestDenial({ ...denied, error: { code: "PGRST202", message: "PRIVATE" } }), "unexpected_postgrest_error:PGRST202");
+  for (const response of [null, [], {}, { ...denied, status: "403" }, { ...denied, data: [] },
+    { ...denied, error: "42501" }, { ...denied, error: { code: "42501" } }]) {
+    assert.equal(classifyPostgrestDenial(response), "malformed_response");
+  }
+});
+
+test("trusted SQL unavailable control requires postgres identity and exactly P0001", () => {
+  const denied = { status: 1, stdout: "postgres|postgres\n", stderr: "ERROR:  P0001\n" };
+  assert.equal(classifyTrustedCurrentRead(denied, "unavailable"), "expected_denial");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, status: 0, stderr: "" }, "unavailable"), "unexpected_success");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stdout: "postgres|anon\n" }, "unavailable"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stdout: "authenticator|anon\n" }, "unavailable"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stderr: "ERROR:  42501\n" }, "unavailable"), "sqlstate:42501");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stderr: "PRIVATE_ERROR" }, "unavailable"), "unclassified_sql_error");
+  assert.notEqual(classifyTrustedCurrentRead({ ...denied, stderr: "ERROR: P0001\nMALFORMED_EXTRA_OUTPUT" }, "unavailable"), "expected_denial");
+  assert.notEqual(classifyTrustedCurrentRead({ ...denied, stdout: "postgres|postgres\nEXTRA_ROW\n" }, "unavailable"), "expected_denial");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, status: null }, "unavailable"), "transport_error");
+});
+
+test("trusted SQL success requires an actual complete empty result, never malformed or private data", () => {
+  const result = { status: 0, stdout: 'postgres|postgres\n{"complete":true,"observations":[]}\n', stderr: "" };
+  assert.equal(classifyTrustedCurrentRead(result, "empty"), "expected_success");
+  for (const data of [null, {}, { complete: false, observations: [] }, { complete: true, observations: [{}] },
+    { complete: true, observations: [], privateEvidence: "PRIVATE" }]) {
+    assert.equal(classifyTrustedCurrentRead({ ...result, stdout: `postgres|postgres\n${JSON.stringify(data)}\n` }, "empty"), "malformed_response");
+  }
+  assert.equal(classifyTrustedCurrentRead({ ...result, stdout: "postgres|postgres\nnot-json\n" }, "empty"), "malformed_response");
+  assert.equal(classifyTrustedCurrentRead({ ...result, stderr: "ERROR: PRIVATE_UNCLASSIFIED_ERROR" }, "empty"), "malformed_response");
+  assert.equal(classifyTrustedCurrentRead({ ...result, stdout: result.stdout.replace("postgres|postgres", "postgres|anon") }, "empty"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ status: 1, stdout: "postgres|postgres\n", stderr: "ERROR: P0001\n" }, "empty"), "sqlstate:P0001");
+  assert.equal(classifyTrustedCurrentRead(undefined, "empty"), "malformed_response");
+});
+
+test("diagnostics contain protocol metadata, never raw private errors", () => {
+  assert.equal(sqlStateDiagnostic("ERROR:  XX000 PRIVATE_TOKEN_AND_EVIDENCE\n"), "sqlstate:XX000");
+  assert.equal(sqlStateDiagnostic("PRIVATE_TOKEN_AND_EVIDENCE"), "unclassified_sql_error");
+  assert.equal(sqlStateDiagnostic("ERROR: P0001\nERROR: XX000\n"), "unclassified_sql_error");
+  const diagnostic = classifyPostgrestDenial({ status: 502, data: null,
+    error: { code: "PRIVATE_TOKEN_AND_EVIDENCE", message: "PRIVATE_TOKEN_AND_EVIDENCE" } });
+  assert.equal(diagnostic, "unexpected_http_status:502");
+});
+
+test("local RPC credential proof rejects wrong role, signature, algorithm and destination", () => {
+  const secret = "synthetic-test-secret";
+  const token = (role: string, alg = "HS256") => {
+    const input = `${Buffer.from(JSON.stringify({ alg })).toString("base64url")}.${Buffer.from(JSON.stringify({ role })).toString("base64url")}`;
+    return `${input}.${createHmac("sha256", secret).update(input).digest("base64url")}`;
+  };
+  for (const role of ["anon", "authenticated", "service_role"]) {
+    assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token(role), secret, role), true);
+  }
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("service_role"), secret, "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("postgres"), secret, "postgres"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("anon"), "wrong-secret", "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("anon", "none"), secret, "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential("https://unexpected.invalid", token("anon"), secret, "anon"), false);
+  for (const credential of [null, "", "bad.jwt", "!.!.!", "e30.e30.invalid"]) {
+    assert.equal(isExpectedLocalRpcCredential(B43_API_URL, credential, secret, "anon"), false);
+  }
+});
+
+test("runner separates RPC denials, pre-fixture rejection and post-fixture SQL success", () => {
+  const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  const boundary = runner.slice(runner.indexOf("async function verifyPostgrestExecutionBoundary"), runner.indexOf("function makePsqlProcess"));
+  assert.match(boundary, /expectCurrentReadUnavailable\("missing canonical must fail closed"\)/);
+  assert.doesNotMatch(boundary, /readCurrentEvidence\(/);
+  const run = runner.slice(runner.indexOf("async function run()"));
+  const commit = run.indexOf("commit;");
+  const success = run.indexOf("const direct = readCurrentEvidence()");
+  assert.ok(commit >= 0 && success > commit);
+  assert.doesNotMatch(runner, /readCurrentQualifiedValidationEvidence/);
+  assert.match(runner, /isExpectedLocalRpcCredential\(B43_API_URL, credential, status.JWT_SECRET, role\)/);
+  assert.match(runner, /classifyPostgrestDenial\(response\)/);
+  assert.match(runner, /classifyTrustedCurrentRead\(result, "unavailable"\)/);
+  assert.match(runner, /transport_exception/);
+});
 
 test("effective-role denials require a marker after SET ROLE, not a failed SET ROLE", () => {
   assert.equal(hasEffectiveRoleIdentity("postgres|anon\n", "anon"), true);

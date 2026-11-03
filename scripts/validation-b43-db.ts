@@ -5,7 +5,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { promoteCustomerInterviewEvidence } from "../lib/validation/promotion/promotion-service.ts";
-import { readCurrentQualifiedValidationEvidence } from "../lib/validation/promotion/current-qualified-evidence-reader.ts";
 import { readTrustedQualifiedValidationEvidence } from "../lib/validation/promotion/trusted-qualified-evidence-reader.ts";
 import {
   assertClusterIdentity,
@@ -16,6 +15,8 @@ import {
   assertPublishedContainerIsExpected,
   buildRoleBoundaryNegativeControls,
   buildRoleBoundaryQuery,
+  classifyPostgrestDenial,
+  classifyTrustedCurrentRead,
   B43_API_PORT,
   B43_API_URL,
   B43_DATABASE_PORT,
@@ -23,7 +24,9 @@ import {
   B43_MANIFEST_NAME,
   expectedB43NetworkName,
   hasEffectiveRoleIdentity,
+  isExpectedLocalRpcCredential,
   isTrustedMigrationPrincipalResult,
+  sqlStateDiagnostic,
   type ContainerIdentity,
   type DockerNetworkIdentity,
   type DisposableManifest,
@@ -198,13 +201,13 @@ function sqlRaw(statement: string, label = phase) {
     input: `set statement_timeout='20s';\n${statement}`,
     encoding: "utf8", timeout: 25000, maxBuffer: 2 * 1024 * 1024, env: sanitizedProcessEnv(),
   });
-  check(!result.error && result.status !== null, `${label}: psql unavailable`);
+  check(!result.error && result.status !== null, `${label}: sql_transport_error`);
   return result;
 }
 
 function sql(statement: string, label = phase): string {
   const result = sqlRaw(statement, label);
-  check(result.status === 0, `${label}: SQL failed`);
+  check(result.status === 0, `${label}: ${sqlStateDiagnostic(result.stderr)}`);
   return result.stdout.split(/\r?\n/).filter((line) => line && !line.startsWith("SET")).join("\n");
 }
 
@@ -236,32 +239,40 @@ function encodeBase64Url(value: unknown): string {
 
 function clients(status: Record<string, string>): Readonly<{ admin: SupabaseClient; anonymous: SupabaseClient; authenticated: SupabaseClient }> {
   const options = { auth: { persistSession: false, autoRefreshToken: false } };
-  const admin = createClient(B43_API_URL, status.SERVICE_ROLE_KEY, options);
-  const anonymous = createClient(B43_API_URL, status.ANON_KEY, options);
   const tokenInput = `${encodeBase64Url({ alg: "HS256", typ: "JWT" })}.${encodeBase64Url({
     role: "authenticated", sub: owner, aud: "authenticated", iss: "supabase",
     iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600,
   })}`;
   const token = `${tokenInput}.${createHmac("sha256", status.JWT_SECRET).update(tokenInput).digest("base64url")}`;
+  for (const [role, credential] of [["service_role", status.SERVICE_ROLE_KEY], ["anon", status.ANON_KEY], ["authenticated", token]]) {
+    check(isExpectedLocalRpcCredential(B43_API_URL, credential, status.JWT_SECRET, role), `local ${role} RPC credential identity invalid`);
+  }
+  const admin = createClient(B43_API_URL, status.SERVICE_ROLE_KEY, options);
+  const anonymous = createClient(B43_API_URL, status.ANON_KEY, options);
   const authenticated = createClient(B43_API_URL, status.ANON_KEY, {
     ...options, global: { headers: { Authorization: `Bearer ${token}` } },
   });
   return { admin, anonymous, authenticated };
 }
 
-function expectPostgrestPermissionDenied(error: { code?: string; message?: string } | null, label: string): void {
-  check(error?.code === "42501", `${label}: expected PostgreSQL permission denial 42501`);
+function expectPostgrestPermissionDenied(response: unknown, label: string): void {
+  const diagnostic = classifyPostgrestDenial(response);
+  check(diagnostic === "expected_denial", `${label}: ${diagnostic}`);
 }
 
-async function expectCurrentReadUnavailable(admin: SupabaseClient, label: string, canonicalId = canonical): Promise<void> {
-  void admin;
-  const result = sqlRaw(`select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`);
-  check(result.status !== 0 && /ERROR:\s+P0001/.test(result.stderr) && /current evidence unavailable/.test(result.stderr),
-    `${label}: expected the sanitized unavailable result`);
+function expectCurrentReadUnavailable(label: string, canonicalId = canonical): void {
+  const result = sqlRaw(`select session_user||'|'||current_user;
+    select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`);
+  const diagnostic = classifyTrustedCurrentRead(result, "unavailable");
+  check(diagnostic === "expected_denial", `${label}: ${diagnostic}`);
 }
 
 function readCurrentEvidence(canonicalId = canonical): { observations: unknown[]; complete: boolean } {
-  return JSON.parse(sql(`select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`)) as { observations: unknown[]; complete: boolean };
+  const result = sqlRaw(`select session_user||'|'||current_user;
+    select public.validation_b43_read_current_evidence('${canonicalId}'::uuid)`);
+  const diagnostic = classifyTrustedCurrentRead(result, "empty");
+  check(diagnostic === "expected_success", `trusted current SQL read: ${diagnostic}`);
+  return JSON.parse(result.stdout.split(/\r?\n/).filter((line) => line !== "")[1]) as { observations: unknown[]; complete: boolean };
 }
 
 function assertCompleteMigrationChain(): void {
@@ -449,8 +460,10 @@ async function expectNoRuntimeFactAccess(admin: SupabaseClient, anonymous: Supab
     }
   }
   for (const [label, request] of cases) {
-    const { error } = await request();
-    expectPostgrestPermissionDenied(error, label);
+    let response: unknown;
+    try { response = await request(); }
+    catch { check(false, `${label}: transport_exception`); }
+    expectPostgrestPermissionDenied(response, label);
   }
   for (const role of ["service_role", "anon", "authenticated"]) {
     for (const table of ["validation_evidence_consumption_authority", "validation_evidence_source_restrictions"]) {
@@ -480,17 +493,19 @@ function restoreSnapshot(observationId: string): void {
 }
 
 async function verifyPostgrestExecutionBoundary(admin: SupabaseClient, anonymous: SupabaseClient, authenticated: SupabaseClient): Promise<void> {
-  for (const client of [admin, anonymous, authenticated]) {
-    const { error } = await client.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
-    expectPostgrestPermissionDenied(error, "application current RPC execution");
-    const writer = await client.rpc("validation_b43_insert_restriction", {
+  for (const [role, client] of [["service_role", admin], ["anon", anonymous], ["authenticated", authenticated]] as const) {
+    let response: unknown;
+    try { response = await client.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical }); }
+    catch { check(false, `${role} current RPC: transport_exception`); }
+    expectPostgrestPermissionDenied(response, `${role} current RPC`);
+    try { response = await client.rpc("validation_b43_insert_restriction", {
       p_reason: "canonical_merged", p_kind: "canonical_problem", p_scope: canonical, p_owner: null, p_observation: null,
-    });
-    expectPostgrestPermissionDenied(writer.error, "application restriction-writer RPC execution");
+    }); } catch { check(false, `${role} restriction RPC: transport_exception`); }
+    expectPostgrestPermissionDenied(response, `${role} restriction RPC`);
   }
-  const direct = readCurrentEvidence();
-  check(direct.complete === true && Array.isArray(direct.observations) && direct.observations.length === 0,
-    "trusted direct SQL read did not return the explicit withheld-only empty result");
+  console.log("PASS B4.3 service_role, anon and authenticated RPC execution denials");
+  phase = "trusted SQL missing-canonical rejection";
+  expectCurrentReadUnavailable("missing canonical must fail closed");
 }
 
 function makePsqlProcess(): ReturnType<typeof spawn> {
@@ -549,7 +564,7 @@ async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<
         and r.scope_id=p.id and r.owner_id=p.owner_id and r.contribution_observation_id='${observation(3)}')
       from public.validation_participants p where p.id='${participantId}' and p.owner_id='${owner}'`);
     check(state === "withdrawn|1", "post-commit participant restriction is absent or inconsistent");
-    const current = await readCurrentQualifiedValidationEvidence(canonical, admin);
+    const current = readCurrentEvidence();
     check(current.complete && current.observations.length === 0, "post-commit current read was not complete and excluded");
     const restored = await admin.rpc("validation_update_participant_status", {
       p_owner_id: owner, p_participant_id: participantId, p_expected_status: "withdrawn", p_target_status: "active",
@@ -579,6 +594,7 @@ async function run(): Promise<void> {
   phase = "application role escalation regression";
   verifyApplicationRoleEscalationDenied();
 
+  phase = "local PostgREST credential identity";
   const { admin, anonymous, authenticated } = clients(status);
   phase = "browser PostgREST execution denial";
   await verifyPostgrestExecutionBoundary(admin, anonymous, authenticated);
@@ -592,6 +608,8 @@ async function run(): Promise<void> {
     .replaceAll("least(i,14)", "i");
   check(setup.length > 1000, "B3.1 fixture setup is incomplete");
   sql(`begin;${setup}\ncommit;`);
+  const direct = readCurrentEvidence();
+  check(direct.complete && direct.observations.length === 0, "fixture canonical trusted SQL read was not empty");
 
   phase = "B4.3-C1 source transitions, no-ops and atomic rollback";
   sql(readFileSync(new URL("../tests/sql/validation-b43-source-transitions.sql", import.meta.url), "utf8"));
@@ -609,7 +627,7 @@ async function run(): Promise<void> {
   for (const i of [1, 2, 3, 4]) await promoteCustomerInterviewEvidence(owner, observation(i), admin);
   check(sql("select count(*) from public.validation_evidence_consumption_authority where authority_state='withheld'") === "4", "new promotions did not receive exactly one WITHHELD fact each");
   check(sql("select count(*) from public.validation_qualified_evidence_snapshots where attestation_version='v8-b4.2-b1-full-row.2'") === "4", "new promotions did not preserve B4.2 v2 proofs");
-  const current = await readCurrentQualifiedValidationEvidence(canonical, admin);
+  const current = readCurrentEvidence();
   check(current.complete && current.observations.length === 0, "WITHHELD evidence was not excluded from a complete current read");
   const history = await readTrustedQualifiedValidationEvidence(canonical, admin);
   check(history.complete && history.observations.length === 4 &&
@@ -648,7 +666,7 @@ async function run(): Promise<void> {
     delete from public.validation_evidence_consumption_authority a using public.validation_evidence_promotions p
       where a.promotion_id=p.id and p.observation_id='${observation(4)}';
     alter table public.validation_evidence_consumption_authority enable trigger all;`);
-  await expectCurrentReadUnavailable(admin, "missing authority candidate");
+  expectCurrentReadUnavailable("missing authority candidate");
   sql(`insert into public.validation_evidence_consumption_authority(
       purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,promotion_fingerprint,projection_version,authority_state)
     select 'qualified_validation_shared_evidence',p.id,p.owner_id,p.problem_observation_id,p.canonical_problem_id,
@@ -661,7 +679,7 @@ async function run(): Promise<void> {
   ] as const;
   for (const [label, mutation] of proofCases) {
     sql(`alter table public.validation_qualified_evidence_snapshots disable trigger all; ${mutation}; alter table public.validation_qualified_evidence_snapshots enable trigger all;`);
-    await expectCurrentReadUnavailable(admin, label);
+    expectCurrentReadUnavailable(label);
     restoreSnapshot(sharedId(2));
     check(sql(`select public.validation_b42_snapshot_verified(p) from public.validation_evidence_promotions p where p.observation_id='${observation(2)}'`) === "t",
       `${label}: B4.2 proof was not restored after fault injection`);
@@ -749,7 +767,7 @@ async function run(): Promise<void> {
     p_rationale: null, p_supersedes_classification_id: null,
   });
   check(!ambiguousClassification.error, "ambiguous authoritative classification fixture could not be created");
-  await expectCurrentReadUnavailable(admin, "multiple current authoritative classification terminals");
+  expectCurrentReadUnavailable("multiple current authoritative classification terminals");
   const superseded = await admin.rpc("validation_insert_classification", {
     p_owner_id: owner, p_observation_id: observation(1), p_polarity: "inconclusive",
     p_classification_source: "ai_model_suggested", p_authority_status: "suggested",
@@ -765,10 +783,10 @@ async function run(): Promise<void> {
     update public.canonical_problems set status='merged',merged_into_problem_id='${targetCanonical}' where id='${canonical}';`);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions
     where reason_code='canonical_merged' and scope_id='${canonical}'`) === "1", "canonical merge restriction missing");
-  await expectCurrentReadUnavailable(admin, "merged canonical", canonical);
+  expectCurrentReadUnavailable("merged canonical", canonical);
   sql(`update public.canonical_problems set merged_into_problem_id='${targetCanonical}' where id='${conflictCanonical}';
     update public.canonical_problems set status='deprecated' where id='${targetCanonical}';`);
-  await expectCurrentReadUnavailable(admin, "active canonical with merge target", conflictCanonical);
+  expectCurrentReadUnavailable("active canonical with merge target", conflictCanonical);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions where reason_code='canonical_deactivated' and scope_id='${targetCanonical}'`) === "1",
     "canonical deactivation restriction missing");
 
@@ -778,7 +796,7 @@ async function run(): Promise<void> {
   }
   check(sql(`select count(*) from public.validation_evidence_promotions
     where canonical_problem_id='${canonical}' and problem_observation_id is not null`) === "101", "overflow fixture did not exceed the 100 candidate bound");
-  await expectCurrentReadUnavailable(admin, "candidate population overflow", canonical);
+  expectCurrentReadUnavailable("candidate population overflow", canonical);
 
   console.log("PASS B4.3 disposable identity, privilege, authority, proof, source restriction, concurrency, completeness and compatibility checks");
 }

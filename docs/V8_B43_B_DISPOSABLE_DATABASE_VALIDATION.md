@@ -257,3 +257,65 @@ its intended role-switch assertion under a non-superuser login; that separate
 test is not treated as independent proof of B4.3 escalation safety or changed
 here. The private-reader/service-role success-path mismatch remains a separate
 unresolved issue. F3 concurrency and the complete B4.3 suite remain unverified.
+
+## C1 RPC denial / missing-canonical diagnostic — 2026-11-03
+
+[Manual run 41715660210](https://github.com/OsaRete/saasscout-landing/actions/runs/41715660210),
+job `126194845918`, checked out `ee0ef0649ba4b978483ac773826874ea6fe00943`.
+Preparation, preflight and reset succeeded. The suite reached browser PostgREST
+execution denial, then reported `browser PostgREST execution denial: SQL failed`.
+The inspected local and remote branch HEADs matched that SHA before edits.
+
+The exact failing control flow identifies a harness error. Six sequential RPC
+checks (reader and restriction writer, each using service_role/anon/authenticated)
+required error.code 42501 before the only SQL call in that function. That SQL call
+used the fixed postgres connection to expect an empty successful current read,
+but it ran before source fixtures. The freshness check had established that the
+canonical table was empty. The private reader deliberately rejects a missing
+canonical and wraps failure as P0001. The retained log does not include SQLSTATE,
+so P0001 is the source-supported expected cause, not a retrospectively observed
+state. The log does not demonstrate a privilege defect. Nor does passing the old
+code-only RPC assertion prove response shape or HTTP status; those were not logged.
+
+The harness now expects a trusted SQL rejection before fixtures, requiring a
+postgres/postgres identity marker and exactly the SQLSTATE-only P0001 error.
+Unexpected success, wrong identity, transport failure or another SQLSTATE fails.
+After fixtures create the canonical, a positive SQL control requires an actual
+complete empty JSON result. It does not synthesize success from an error. All
+other positive current-reader harness calls also use that trusted SQL path.
+This corrects the separately tracked service-role positive-read harness mismatch;
+the production TypeScript wrapper's lack of an application EXECUTE grant remains
+intentional and no consumer/issuer is activated. Its formatting unit tests remain
+mock-based and are not evidence of runtime application execution permission.
+Application-side current-reader availability remains a separate unresolved
+activation/design decision; this correction supplies no new EXECUTE path.
+
+RPC denials now require the full SDK response: null data, a structured error with
+code 42501, and HTTP 401 or 403. PGRST function-not-found/schema-cache errors are
+not accepted as permission proof. Unexpected success, other SQLSTATEs/PostgREST
+codes, broken shapes, transport failures and wrong HTTP status fail separately.
+Before client creation, local legacy HS256 JWTs must have the expected role and
+verify with the generated project's JWT secret; the destination must be the fixed
+loopback URL. Tokens with another role, signature, algorithm or destination fail.
+This proves the configured credential identity, not a live query of PostgREST's
+session_user/current_user. It relies on the previously verified local deployment
+and normal PostgREST JWT-role mapping; no identity-inspection RPC is exposed.
+
+Diagnostics contain only fixed role/operation labels, numeric HTTP status and
+validated SQLSTATE/PostgREST codes or fixed categories. They never print JWTs,
+keys, raw exceptions, response bodies, error messages/details/hints, private rows
+or evidence. SQL transport errors are separate from SQLSTATE failures. A dedicated
+phase distinguishes local credential validation, application RPC denial and the
+trusted SQL missing-canonical control. A successful RPC-denial phase emits only
+a fixed PASS marker. Nothing changes the private reader's EXECUTE revocations,
+postgres-session guard, RLS, ACLs, permanent restrictions or evidence immutability.
+
+Focused tests include SDK mock-response envelopes (including simulated transport
+exceptions), expected permission denial, unexpected success/errors, malformed
+responses, signed role/endpoint mismatches, SQL identity markers and complete
+empty-result validation. Private sentinel errors must not appear in diagnostics.
+These are local unit/static tests; no database or workflow is executed by them.
+The next separately authorized isolated run must establish the new runtime
+results, source-transition SQL execution and full suite completion. F3 tuple/
+advisory inversion and cross-command schedules still require an independent
+evidence-backed disposition. Merge and production migration remain NO-GO.
