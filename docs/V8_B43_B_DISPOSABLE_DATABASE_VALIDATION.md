@@ -160,3 +160,100 @@ replacement database on the fallback network is rejected by the unchanged
 container identity validator. These are static/unit checks, not Docker runtime
 verification. Controlled F3 schedules and the separate private-reader RPC harness
 issue remain open. No further workflow was dispatched in preparing this fix.
+
+## C1 application-role session diagnostic — 2026-11-03
+
+[Manual run 41711543469](https://github.com/OsaRete/saasscout-landing/actions/runs/41711543469),
+job `126180599995`, used commit `263a7ff9efc59ce5eed66103089ee32888a9d261`.
+Preflight and local reset succeeded; the real suite then failed at
+`anon escalation to postgres: expected SQLSTATE 42501, statement succeeded`.
+No complete B4.3 suite pass is established. The CLI's reset message naming branch
+`main` describes the generated temporary project's CLI branch context; it is not
+evidence that the GitHub run checked out or changed repository main.
+
+### Root cause and PostgreSQL identity semantics
+
+Every SQL helper connects to the fixed disposable URL as postgres. `session_user`
+is the session identity (initially the authenticated login); `current_user` is
+the effective identity used for ordinary SQL object permission checks.
+`SET ROLE anon` changes only current_user. Subsequent SET ROLE authorization still
+uses session_user, so this postgres session may restore postgres. Changing
+current_user does not convert it into an anon-authenticated connection.
+[PostgreSQL 17 SET ROLE documentation](https://www.postgresql.org/docs/17/sql-set-role.html)
+explicitly describes this distinction. RESET ROLE / SET ROLE NONE likewise
+restore session defaults/identity and are not application escalation probes.
+
+SET membership options control whether the session can assume another role;
+INHERIT options control whether role privileges are available without switching.
+`pg_has_role(source,target,'SET')` and USAGE evaluate those respective paths.
+MEMBER detects direct/transitive membership even when privileges are currently
+disabled. ADMIN OPTION permits management of membership and is not simply an
+inherited object privilege. Catalog checks must include intermediate roles whose
+administration or membership options could expose a protected owner.
+
+The non-superuser postgres connection cannot manufacture a genuine application
+session by using SET SESSION AUTHORIZATION. Browser/service roles are ordinarily
+NOLOGIN, and this harness has no separately provisioned authenticator login
+credential. It does not alter role login flags, passwords or production grants.
+Explicit-source catalog checks are therefore used rather than claiming real
+application-login escalation attempts. Existing PostgREST denial tests exercise
+the actual API execution boundary separately.
+
+### Corrected fail-closed harness
+
+The suite now discovers postgres, actual protected table/schema and validation
+function owners (including SECURITY DEFINER owners), and
+superuser/CREATEROLE/non-application BYPASSRLS roles.
+For each of anon, authenticated, service_role and authenticator it checks SET,
+USAGE, MEMBER and reachable ADMIN paths using explicit source/target role OIDs.
+Missing roles, malformed owner discovery, unexpected identifiers and non-true
+query results fail. It also rejects unexpected privileged source-role attributes;
+service_role's existing BYPASSRLS threat model remains unchanged. All prior object
+ownership/ACL/RLS, SQL privilege and disposable identity checks remain in place.
+
+MEMBER rejection is intentionally conservative: even a dormant owner membership
+with SET/INHERIT/ADMIN all false fails this policy. Such a relationship alone is
+not described as a currently usable escalation. A new failure must be reviewed,
+not resolved by deleting a path check. This audit does not prove absence of SQL
+injection, exploitable privileged function bodies, concurrent administrator DDL,
+or credential compromise; the schema administrator remains trusted.
+
+Positive SQL controls verify postgres/anon after SET ROLE and postgres/postgres
+after restoration. These document expected session behavior. Ordinary trigger
+tampering and TRUNCATE tests still require 42501 under the effective application
+role. Each now emits and verifies a session/current-user marker before the denied
+statement, preventing a failed initial SET ROLE from masquerading as a DML denial.
+All B4.3 runner SET ROLE uses were reviewed. The preflight's explicit-source
+pg_has_role checks do not have the session-identity defect.
+
+### Real-catalog negative controls without application privilege grants
+
+After the verified disposable identity/security checks and before source fixtures,
+one transaction creates three unprivileged NOLOGIN stand-ins (probe application,
+bridge and protected-owner sentinel). They have NOSUPERUSER, NOCREATEROLE and
+NOBYPASSRLS and receive no object privileges. The baseline detector must return
+true. Eight savepoint-scoped cases must return false for actual pg_auth_members
+entries: direct/transitive SET; direct/transitive inherited USAGE; dormant MEMBER;
+direct ADMIN; SET-to-admin-intermediate; and administration of an intermediate
+role with a path to the sentinel. The same query builder audits the real roles.
+Each savepoint is rolled back and must restore a true result.
+
+The outer transaction rolls back the roles and memberships. The runner then
+requires all probe names to be absent. Existing names cause CREATE ROLE to fail;
+the harness never drops a pre-existing role. Any error terminates the psql session
+and rolls back its uncommitted transaction. No grant targets actual application
+roles, postgres, actual privileged owners or their objects. If the trusted
+disposable principal cannot create/manage these probe roles, validation fails;
+there is no skip, temporary grant to the application, or superuser fallback.
+These are real catalog-membership controls against a designated sentinel, not a
+deliberate exposure of an actual privileged owner.
+
+Focused local tests cover explicit-source SQL generation, membership/admin checks,
+invalid role identifiers, marker validation, control-case rollback structure and
+runner integration. The newly added SQL controls have not been executed locally;
+the next separately authorized disposable run must validate them on PostgreSQL.
+The sibling B4.2 harness's SET SESSION AUTHORIZATION chain can also fail before
+its intended role-switch assertion under a non-superuser login; that separate
+test is not treated as independent proof of B4.3 escalation safety or changed
+here. The private-reader/service-role success-path mismatch remains a separate
+unresolved issue. F3 concurrency and the complete B4.3 suite remain unverified.

@@ -14,12 +14,15 @@ import {
   assertDisposableConfig,
   assertIsolatedPath,
   assertPublishedContainerIsExpected,
+  buildRoleBoundaryNegativeControls,
+  buildRoleBoundaryQuery,
   B43_API_PORT,
   B43_API_URL,
   B43_DATABASE_PORT,
   B43_DATABASE_URL,
   B43_MANIFEST_NAME,
   expectedB43NetworkName,
+  hasEffectiveRoleIdentity,
   isTrustedMigrationPrincipalResult,
   type ContainerIdentity,
   type DockerNetworkIdentity,
@@ -205,11 +208,14 @@ function sql(statement: string, label = phase): string {
   return result.stdout.split(/\r?\n/).filter((line) => line && !line.startsWith("SET")).join("\n");
 }
 
-function expectSqlState(statement: string, expectedState: string, label: string): void {
+function expectSqlState(statement: string, expectedState: string, label: string, effectiveRole?: string): void {
   const result = sqlRaw(statement, label);
   check(result.status !== 0, `${label}: expected SQLSTATE ${expectedState}, statement succeeded`);
   const actual = /ERROR:\s+([0-9A-Z]{5})/.exec(result.stderr)?.[1];
   check(actual === expectedState, `${label}: expected SQLSTATE ${expectedState}, got ${actual ?? "unclassified SQL error"}`);
+  if (effectiveRole !== undefined) {
+    check(hasEffectiveRoleIdentity(result.stdout, effectiveRole), `${label}: effective-role identity was not established`);
+  }
 }
 
 function fingerprint(i: number, polarity = "supporting") {
@@ -327,13 +333,51 @@ function assertDatabaseSecurityCatalog(): void {
 }
 
 function verifyApplicationRoleEscalationDenied(): void {
-  check(sql(`select bool_and(not pg_has_role(r.rolname,'postgres','SET'))
-    from (values ('anon'),('authenticated'),('service_role'),('authenticator')) r(rolname)`) === "t",
-    "an application role can SET ROLE postgres");
-  for (const role of ["anon", "authenticated", "service_role", "authenticator"]) {
-    expectSqlState(`set role ${role}; set role postgres;`, "42501", `${role} escalation to postgres`);
-    expectSqlState(`set role ${role}; alter table public.validation_evidence_source_restrictions disable trigger all;`,
-      "42501", `${role} trigger tampering`);
+  const roles = ["anon", "authenticated", "service_role", "authenticator"];
+  const owners = JSON.parse(sql(`select jsonb_agg(rolname order by rolname) from pg_roles
+    where rolname='postgres' or rolsuper or rolcreaterole
+      or (rolbypassrls and rolname not in ('anon','authenticated','service_role','authenticator'))
+      or oid in (
+      select relowner from pg_class where oid in (
+        'public.validation_evidence_consumption_authority'::regclass,
+        'public.validation_evidence_source_restrictions'::regclass,
+        'public.validation_evidence_promotions'::regclass,
+        'public.validation_qualified_evidence_snapshots'::regclass,
+        'public.problem_observations'::regclass,
+        'public.validation_participants'::regclass,
+        'public.validation_interview_sessions'::regclass,
+        'public.validation_experiment_versions'::regclass,
+        'public.validation_evidence_observations'::regclass,
+        'public.validation_evidence_classifications'::regclass,
+        'public.validation_customer_interview_shareable_evidence'::regclass,
+        'public.canonical_problems'::regclass,
+        'public.problem_aliases'::regclass,
+        'auth.users'::regclass)
+      union select p.proowner from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public' and p.proname like 'validation_%'
+      union select nspowner from pg_namespace where nspname in ('public','auth')
+    )`)) as unknown;
+  check(Array.isArray(owners) && owners.length > 0 && owners.every((owner) => typeof owner === "string"),
+    "privileged owner catalog is malformed");
+  check(sql(buildRoleBoundaryQuery(roles, owners)) === "t",
+    "application role has an unsafe membership, inherited, SET or administration path to a privileged owner");
+  // anon/authenticated/service_role are normally NOLOGIN; this non-superuser
+  // postgres connection cannot impersonate their authenticated session_user.
+  // These positive controls demonstrate why the former escalation test was invalid.
+  check(sql("set role anon; select session_user||'|'||current_user") === "postgres|anon",
+    "SET ROLE unexpectedly changed the authenticated principal");
+  check(sql("set role anon; set role postgres; select session_user||'|'||current_user") === "postgres|postgres",
+    "trusted session could not restore its original principal");
+  sql(buildRoleBoundaryNegativeControls(), "transactional role boundary negative controls");
+  check(sql(`select not exists(select 1 from pg_roles where rolname in (
+    'b43_boundary_probe_app','b43_boundary_probe_bridge','b43_boundary_probe_owner'))`) === "t",
+  "role boundary negative controls did not roll back");
+  for (const role of roles) {
+    // DDL/DML permissions use current_user; these are valid effective-role
+    // checks, unlike SET ROLE authorization, which uses session_user.
+    expectSqlState(`set role ${role}; select session_user||'|'||current_user;
+      alter table public.validation_evidence_source_restrictions disable trigger all;`,
+    "42501", `${role} trigger tampering`, role);
   }
   expectSqlState(`insert into public.validation_evidence_consumption_authority(
       purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,promotion_fingerprint,projection_version,authority_state)
@@ -410,7 +454,8 @@ async function expectNoRuntimeFactAccess(admin: SupabaseClient, anonymous: Supab
   }
   for (const role of ["service_role", "anon", "authenticated"]) {
     for (const table of ["validation_evidence_consumption_authority", "validation_evidence_source_restrictions"]) {
-      expectSqlState(`set role ${role}; truncate public.${table};`, "42501", `${role} truncate ${table}`);
+      expectSqlState(`set role ${role}; select session_user||'|'||current_user; truncate public.${table};`,
+        "42501", `${role} truncate ${table}`, role);
     }
   }
 }

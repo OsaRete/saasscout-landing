@@ -12,6 +12,8 @@ import {
   assertIsolatedPath,
   assertProjectId,
   assertPublishedContainerIsExpected,
+  buildRoleBoundaryNegativeControls,
+  buildRoleBoundaryQuery,
   B43_API_PORT,
   B43_API_URL,
   B43_DATABASE_PORT,
@@ -20,6 +22,7 @@ import {
   B43_PROJECT_PREFIX,
   B43_SHADOW_PORT,
   expectedB43NetworkName,
+  hasEffectiveRoleIdentity,
   isTrustedMigrationPrincipalResult,
   type ContainerIdentity,
   type DockerNetworkIdentity,
@@ -28,6 +31,73 @@ import {
 
 const projectId = `${B43_PROJECT_PREFIX}a1b2c3d4e5f6`;
 const projectDir = join(tmpdir(), projectId);
+
+test("effective-role denials require a marker after SET ROLE, not a failed SET ROLE", () => {
+  assert.equal(hasEffectiveRoleIdentity("postgres|anon\n", "anon"), true);
+  assert.equal(hasEffectiveRoleIdentity("postgres|service_role\r\n", "service_role"), true);
+  for (const output of ["", "postgres|postgres\n", "anon|anon\n", "postgres|service_role\n",
+    "postgres|anon|extra\n", "postgres|anon\npostgres|anon\n"]) {
+    assert.equal(hasEffectiveRoleIdentity(output, "anon"), false);
+  }
+});
+
+test("role boundary checks named catalog roles rather than the postgres session", () => {
+  const query = buildRoleBoundaryQuery(["anon", "authenticated", "service_role", "authenticator"], ["postgres"]);
+  assert.match(query, /rolname in \('anon','authenticated','service_role','authenticator'\)/);
+  assert.match(query, /rolname in \('postgres'\)/);
+  assert.match(query, /count\(\*\) from sources\)=4/);
+  assert.match(query, /count\(\*\) from targets\)=1/);
+  for (const privilege of ["SET", "USAGE", "MEMBER"]) {
+    assert.ok(query.includes(`pg_catalog.pg_has_role(s.oid,t.oid,'${privilege}')`));
+  }
+  assert.match(query, /where rolsuper or rolcreaterole/);
+  assert.match(query, /rolbypassrls and rolname<>'service_role'/);
+  assert.match(query, /m.admin_option/);
+  assert.match(query, /pg_catalog.pg_has_role\(s.oid,m.member,'MEMBER'\)/);
+  assert.match(query, /pg_catalog.pg_has_role\(m.roleid,t.oid,'MEMBER'\)/);
+  assert.doesNotMatch(query, /session_user|current_user|set role/i);
+});
+
+test("role boundary refuses empty, duplicate or unsafe role identifiers", () => {
+  for (const names of [[], ["anon", "anon"], [""], ["missing role"], ["anon'; reset role; --"]]) {
+    assert.throws(() => buildRoleBoundaryQuery(names, ["postgres"]));
+    assert.throws(() => buildRoleBoundaryQuery(["anon"], names));
+  }
+});
+
+test("negative controls use real transactional memberships only between unprivileged stand-ins", () => {
+  const controls = buildRoleBoundaryNegativeControls();
+  assert.ok(controls.startsWith("begin;"));
+  assert.ok(controls.endsWith("rollback;"));
+  assert.equal((controls.match(/create role .* nologin nosuperuser nocreaterole nobypassrls;/g) ?? []).length, 3);
+  assert.equal((controls.match(/^\s*savepoint boundary_case;/gm) ?? []).length, 8);
+  assert.equal((controls.match(/rollback to savepoint boundary_case;/g) ?? []).length, 8);
+  assert.equal((controls.match(/is distinct from false/g) ?? []).length, 8);
+  assert.equal((controls.match(/is distinct from true/g) ?? []).length, 9);
+  for (const option of ["set true", "set false", "inherit true", "inherit false", "admin true", "admin false"]) {
+    assert.ok(controls.includes(`with ${option};`));
+  }
+  const grants = controls.split("\n").filter((line) => /^\s*grant /i.test(line));
+  assert.ok(grants.length > 0);
+  for (const grant of grants) {
+    assert.match(grant, /^\s*grant b43_boundary_probe_(?:owner|bridge) to b43_boundary_probe_(?:app|bridge) with (?:set|inherit|admin) (?:true|false);/);
+  }
+  assert.doesNotMatch(controls, /alter role|drop role|grant .* on /);
+});
+
+test("runner replaces the invalid escalation assertion without losing DML or catalog checks", () => {
+  const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  assert.match(runner, /sql\(buildRoleBoundaryQuery\(roles, owners\)\) === "t"/);
+  assert.match(runner, /sql\(buildRoleBoundaryNegativeControls\(\)/);
+  assert.match(runner, /role boundary negative controls did not roll back/);
+  assert.match(runner, /set role anon; set role postgres; select session_user/);
+  assert.doesNotMatch(runner, /expectSqlState\(`set role \$\{role\}; set role postgres;/);
+  assert.match(runner, /alter table public.validation_evidence_source_restrictions disable trigger all/);
+  assert.match(runner, /hasEffectiveRoleIdentity\(result.stdout, effectiveRole\)/);
+  assert.match(runner, /select session_user\|\|'\|'\|\|current_user; truncate public/);
+  assert.match(runner, /union select p.proowner/);
+  assert.match(runner, /union select nspowner/);
+});
 
 test("migration principal accepts the secure PostgreSQL text-cast result", () => {
   assert.equal(isTrustedMigrationPrincipalResult("postgres|postgres|true|false"), true);

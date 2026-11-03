@@ -17,6 +17,79 @@ export function isTrustedMigrationPrincipalResult(result: unknown): boolean {
   return result === "postgres|postgres|true|false";
 }
 
+export function hasEffectiveRoleIdentity(output: string, role: string): boolean {
+  const rows = output.split(/\r?\n/).filter((line) => line !== "");
+  return rows.length === 1 && rows[0] === `postgres|${role}`;
+}
+
+// Explicit source-role arguments are essential: SET ROLE does not change the
+// authenticated session_user or its right to restore its original role.
+export function buildRoleBoundaryQuery(sources: readonly string[], targets: readonly string[]): string {
+  const literals = (names: readonly string[]) => {
+    if (names.length === 0 || new Set(names).size !== names.length ||
+        names.some((name) => !/^[a-z_][a-z0-9_]*$/.test(name))) {
+      throw new Error("invalid role boundary identifiers");
+    }
+    return names.map((name) => `'${name}'`).join(",");
+  };
+  const sourceNames = literals(sources);
+  const targetNames = literals(targets);
+  return `with sources as (select * from pg_catalog.pg_roles where rolname in (${sourceNames})),
+    targets as (select oid from pg_catalog.pg_roles where rolname in (${targetNames}))
+    select (select count(*) from sources)=${sources.length}
+      and (select count(*) from targets)=${targets.length}
+      and not exists(select 1 from sources where rolsuper or rolcreaterole
+        or (rolbypassrls and rolname<>'service_role'))
+      and not exists(select 1 from sources s cross join targets t
+        where pg_catalog.pg_has_role(s.oid,t.oid,'SET')
+          or pg_catalog.pg_has_role(s.oid,t.oid,'USAGE')
+          or pg_catalog.pg_has_role(s.oid,t.oid,'MEMBER'))
+      and not exists(select 1 from sources s cross join targets t
+        cross join pg_catalog.pg_auth_members m
+        where m.admin_option and pg_catalog.pg_has_role(s.oid,m.member,'MEMBER')
+          and pg_catalog.pg_has_role(m.roleid,t.oid,'MEMBER'))`;
+}
+
+// Only the already-verified disposable runner executes this transaction.
+// Real catalog memberships exercise the same detector, without granting any
+// application role membership in postgres or an actual privileged owner.
+export function buildRoleBoundaryNegativeControls(): string {
+  const app = "b43_boundary_probe_app";
+  const bridge = "b43_boundary_probe_bridge";
+  const owner = "b43_boundary_probe_owner";
+  const query = buildRoleBoundaryQuery([app], [owner]);
+  const expect = (safe: boolean) => `do $$ begin
+    if (${query}) is distinct from ${safe ? "true" : "false"} then
+      raise exception 'B43 role boundary control failed';
+    end if;
+  end $$;`;
+  const membership = (role: string, member: string, set: boolean, inherit: boolean, admin: boolean) =>
+    `grant ${role} to ${member} with set ${set};
+     grant ${role} to ${member} with inherit ${inherit};
+     grant ${role} to ${member} with admin ${admin};`;
+  const cases = [
+    membership(owner, app, true, false, false),
+    membership(bridge, app, true, false, false) + membership(owner, bridge, true, false, false),
+    membership(owner, app, false, true, false),
+    membership(bridge, app, false, true, false) + membership(owner, bridge, false, true, false),
+    membership(owner, app, false, false, false),
+    membership(owner, app, false, false, true),
+    membership(bridge, app, true, false, false) + membership(owner, bridge, false, false, true),
+    membership(bridge, app, false, false, true) + membership(owner, bridge, true, false, false),
+  ];
+  return `begin;
+    create role ${app} nologin nosuperuser nocreaterole nobypassrls;
+    create role ${bridge} nologin nosuperuser nocreaterole nobypassrls;
+    create role ${owner} nologin nosuperuser nocreaterole nobypassrls;
+    ${expect(true)}
+    ${cases.map((grant) => `savepoint boundary_case;
+      ${grant}\n${expect(false)}
+      rollback to savepoint boundary_case;
+      release savepoint boundary_case;
+      ${expect(true)}`).join("\n")}
+    rollback;`;
+}
+
 export type DisposableManifest = Readonly<{
   schemaVersion: 2;
   projectId: string;

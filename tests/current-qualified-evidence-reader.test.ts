@@ -103,7 +103,7 @@ test("migration uses only the postgres principal and provisions no roles or memb
   assert.equal((migration.match(/revoke all on function public\.validation_b43_/gi) ?? []).length, 11);
   assert.match(databaseRunner, /session_user\|\|'\|'\|\|current_user/i);
   assert.match(databaseRunner, /rolbypassrls/i);
-  assert.match(databaseRunner, /not pg_has_role\(r\.rolname,'postgres','SET'\)/i);
+  assert.match(databaseRunner, /sql\(buildRoleBoundaryQuery\(roles, owners\)\) === "t"/);
   assert.match(databaseRunner, /p\.proowner='postgres'::regrole/i);
   assert.match(databaseRunner, /not has_function_privilege\('service_role',p\.oid/i);
   assert.match(databaseRunner, /not has_function_privilege\('anon',p\.oid/i);
