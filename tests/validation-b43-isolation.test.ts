@@ -218,10 +218,37 @@ test("workflow gates B4.3 reset behind manual authorization and network plus ide
   const start = job.indexOf('start --network-id "$NETWORK_ID"');
   const preflight = job.indexOf("node scripts/validation-b43-db.ts --preflight-only");
   const reset = job.indexOf("db reset --local --no-seed");
-  const testRun = job.indexOf("npm run test:validation-b43-db");
+  const testRun = job.indexOf("run: node scripts/validation-b43-db.ts\n");
   assert.ok(networkCreate >= 0 && networkCreate < start && start < preflight && preflight < reset && reset < testRun);
   assert.equal((job.match(/VALIDATION_B43_DOCKER_NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/g) ?? []).length, 2);
   assert.doesNotMatch(job, /supabase link|--linked|https:\/\/[^\s]+\.supabase\.co/i);
+});
+
+test("reset recreates PostgreSQL on the same verified network used by startup", () => {
+  const workflow = readFileSync(".github/workflows/validation-b31-database.yml", "utf8");
+  const job = workflow.slice(workflow.indexOf("  b43-disposable-database:"));
+  const start = job.slice(job.indexOf("      - name: Start only"), job.indexOf("      - name: Verify container"));
+  const reset = job.slice(job.indexOf("      - name: Reset only"), job.indexOf("      - name: Execute B4.3-B"));
+  for (const step of [start, reset]) {
+    assert.match(step, /PROJECT_DIR: \$\{\{ steps\.disposable\.outputs\.projectDir \}\}/);
+    assert.match(step, /NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/);
+    assert.match(step, /--network-id "\$NETWORK_ID"/);
+    assert.match(step, /--workdir "\$PROJECT_DIR"/);
+  }
+  assert.match(reset, /run: supabase --workdir "\$PROJECT_DIR" --network-id "\$NETWORK_ID" db reset --local --no-seed/);
+});
+
+test("isolated suite preserves setup-cli PATH instead of selecting npm's different CLI", () => {
+  const workflow = readFileSync(".github/workflows/validation-b31-database.yml", "utf8");
+  const job = workflow.slice(workflow.indexOf("  b43-disposable-database:"));
+  assert.match(job, /version: 2\.118\.0/);
+  assert.match(job, /run: node scripts\/validation-b43-db\.ts\n/);
+  assert.doesNotMatch(job, /run: npm run test:validation-b43-db/);
+});
+
+test("a recreated database on the fallback network fails the existing identity boundary", () => {
+  const recreatedDb = { ...db, id: "recreated-db", networkIds: ["fallback-network"] };
+  assert.throws(() => assertContainerIdentity([recreatedDb, api], projectId));
 });
 
 test("database suite contains real privilege, lifecycle, proof, completeness, rollback, and concurrency assertions", () => {

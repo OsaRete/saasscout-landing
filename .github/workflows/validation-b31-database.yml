@@ -154,7 +154,8 @@ jobs:
       - name: Reset only the newly generated disposable project
         env:
           PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
-        run: supabase --workdir "$PROJECT_DIR" db reset --local --no-seed
+          NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: supabase --workdir "$PROJECT_DIR" --network-id "$NETWORK_ID" db reset --local --no-seed
       - name: Execute B4.3-B PostgreSQL and PostgREST suite
         env:
           VALIDATION_B43_DISPOSABLE: "1"
@@ -163,4 +164,4 @@ jobs:
           VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
           VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
           VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
-        run: npm run test:validation-b43-db
+        run: node scripts/validation-b43-db.ts
