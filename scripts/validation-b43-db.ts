@@ -591,6 +591,8 @@ async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<
 }
 
 async function run(): Promise<void> {
+  check(!(process.argv.includes("--preflight-only") && process.argv.includes("--security-preflight-only")),
+    "conflicting disposable preflight modes");
   const identity = verifyDisposableIdentity();
   if (process.argv.includes("--preflight-only")) {
     console.log("PASS B4.3 disposable identity verified before reset");
@@ -608,6 +610,14 @@ async function run(): Promise<void> {
   const { admin, anonymous, authenticated } = clients(status);
   phase = "browser PostgREST execution denial";
   await verifyPostgrestExecutionBoundary(admin, anonymous, authenticated);
+
+  if (process.argv.includes("--security-preflight-only")) {
+    // This is the full existing fresh-database security prefix, not identity-only.
+    // Nothing is skipped: catalog/ACL, rollback escalation and signed local RPC
+    // denial checks must all complete before this exact success marker is emitted.
+    console.log("PASS B4.3 full disposable security preflight");
+    return;
+  }
 
   phase = "fixture setup";
   const fixture = readFileSync(new URL("../tests/sql/validation-b31.sql", import.meta.url), "utf8");

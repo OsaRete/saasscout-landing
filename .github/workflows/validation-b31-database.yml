@@ -10,6 +10,8 @@ on:
       - "scripts/validation-b42-db.ts"
       - "scripts/validation-b43-db.ts"
       - "scripts/validation-b43-isolation.ts"
+      - "scripts/validation-b43-f3*.py"
+      - "tests/test_validation_b43_f3.py"
       - "scripts/validation-b43-harness.ts"
       - "tests/validation-b43-harness.test.ts"
       - "tests/validation-b43-source-transition-migration.test.ts"
@@ -34,14 +36,39 @@ on:
         type: boolean
         required: true
         default: false
+      authorize_f3:
+        description: "Additionally authorize the 24 controlled F3 schedules in the same fresh local disposable project"
+        type: boolean
+        required: false
+        default: false
+      expected_b43_sha:
+        description: "Full reviewed PR #235 HEAD SHA required for every manual dispatch"
+        type: string
+        required: false
+        default: ""
 
 jobs:
   b43-static:
     name: B4.3-B static regression and isolation checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify reviewed branch and SHA before any manual tests or database work
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          F3_AUTHORIZED: ${{ inputs.authorize_f3 }}
+          F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
+          F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
+        run: python3 scripts/validation-b43-f3-authorize.py --dispatch-check
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,12 +81,30 @@ jobs:
       - name: Type-check B4.3 test infrastructure without emitting files
         run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-harness.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/validation-b43-harness.test.ts tests/validation-b43-source-transition-migration.test.ts
 
+      - name: Offline F3 authorization and isolation regressions
+        run: python3 -m unittest discover -s tests -p test_validation_b43_f3.py -v
+
   database:
     name: database
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify reviewed branch and SHA before any manual tests or database work
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          F3_AUTHORIZED: ${{ inputs.authorize_f3 }}
+          F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
+          F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
+        run: python3 scripts/validation-b43-f3-authorize.py --dispatch-check
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -91,16 +136,36 @@ jobs:
   b43-disposable-database:
     name: isolated B4.3-B database
     if: github.event_name == 'workflow_dispatch' && inputs.authorize_disposable_reset == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     environment: b43-disposable-database-validation
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify reviewed branch and SHA before isolated manual execution
+        id: f3_authorized
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          F3_AUTHORIZED: ${{ inputs.authorize_f3 }}
+          F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
+          F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/validation-b43-f3-authorize.py --dispatch-check
+          test "$(docker context inspect --format '{{.Endpoints.docker.Host}}')" = unix:///var/run/docker.sock
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+        timeout-minutes: 5
       - uses: supabase/setup-cli@v1
         with:
           version: 2.118.0
@@ -110,9 +175,11 @@ jobs:
           docker --version
           psql --version
       - name: Prepare isolated disposable project outside the repository
+        timeout-minutes: 1
         id: disposable
         run: node scripts/prepare-validation-b43-disposable.ts --github-output
       - name: Create and verify a unique loopback-only Docker network
+        timeout-minutes: 2
         id: network
         env:
           PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
@@ -133,6 +200,7 @@ jobs:
             echo "Docker did not return a valid dedicated network id" >&2
             exit 1
           fi
+          echo "networkId=$network_id" >> "$GITHUB_OUTPUT"
           inspect="$(docker network inspect --format '{{.Id}}|{{.Name}}|{{.Driver}}|{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}|{{json .Containers}}' "$network_id")"
           IFS='|' read -r actual_id actual_name driver host_binding attached <<< "$inspect"
           if [[ "$actual_id" != "$network_id" || "$actual_name" != "$network_name" || "$driver" != bridge || "$host_binding" != 127.0.0.1 || ( "$attached" != null && "$attached" != '{}' ) ]]; then
@@ -142,10 +210,11 @@ jobs:
           echo "networkId=$network_id" >> "$GITHUB_OUTPUT"
           echo "networkName=$network_name" >> "$GITHUB_OUTPUT"
       - name: Start only the generated disposable Supabase project
+        timeout-minutes: 8
         env:
           PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
           NETWORK_ID: ${{ steps.network.outputs.networkId }}
-        run: supabase --workdir "$PROJECT_DIR" start --network-id "$NETWORK_ID"
+        run: supabase --workdir "$PROJECT_DIR" start --network-id "$NETWORK_ID" > "$RUNNER_TEMP/b43-private-cli.log" 2>&1
       - name: Verify container and PostgreSQL identity before reset
         env:
           VALIDATION_B43_DISPOSABLE: "1"
@@ -156,11 +225,14 @@ jobs:
           VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
         run: node scripts/validation-b43-db.ts --preflight-only
       - name: Reset only the newly generated disposable project
+        timeout-minutes: 5
         env:
           PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
           NETWORK_ID: ${{ steps.network.outputs.networkId }}
-        run: supabase --workdir "$PROJECT_DIR" --network-id "$NETWORK_ID" db reset --local --no-seed
+        run: supabase --workdir "$PROJECT_DIR" --network-id "$NETWORK_ID" db reset --local --no-seed > "$RUNNER_TEMP/b43-private-cli.log" 2>&1
       - name: Execute B4.3-B PostgreSQL and PostgREST suite
+        id: b43_suite
+        timeout-minutes: 25
         env:
           VALIDATION_B43_DISPOSABLE: "1"
           VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
@@ -169,3 +241,93 @@ jobs:
           VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
           VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
         run: node scripts/validation-b43-db.ts
+      - name: Install F3 diagnostic client after the independent B4.3 suite
+        id: f3_dependencies
+        if: ${{ !cancelled() && inputs.authorize_f3 == true && steps.f3_authorized.outcome == 'success' && (steps.b43_suite.outcome == 'success' || steps.b43_suite.outcome == 'failure') }}
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3,12) else 1)'
+          python3 -m venv "$RUNNER_TEMP/b43-f3-python"
+          "$RUNNER_TEMP/b43-f3-python/bin/pip" install --disable-pip-version-check --only-binary=:all: --no-deps psycopg==3.2.10 psycopg-binary==3.2.10 typing-extensions==4.15.0
+          "$RUNNER_TEMP/b43-f3-python/bin/python" -c 'import psycopg; assert psycopg.__version__ == "3.2.10"'
+          test "$(supabase --version)" = 2.118.0
+      - name: Reauthorize live Draft PR before F3 local reset
+        id: f3_reauthorized
+        if: ${{ !cancelled() && steps.f3_dependencies.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          F3_AUTHORIZED: ${{ inputs.authorize_f3 }}
+          F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
+          F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
+        run: python3 scripts/validation-b43-f3-authorize.py
+      - name: Preflight and reset the same generated disposable instance for F3
+        id: f3_reset
+        if: ${{ !cancelled() && steps.f3_reauthorized.outcome == 'success' }}
+        timeout-minutes: 5
+        env:
+          VALIDATION_B43_DISPOSABLE: "1"
+          VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          VALIDATION_B43_PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
+          VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
+          VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: |
+          set -euo pipefail
+          node scripts/validation-b43-db.ts --preflight-only
+          supabase --workdir "$VALIDATION_B43_PROJECT_DIR" --network-id "$VALIDATION_B43_DOCKER_NETWORK_ID" db reset --local --no-seed > "$RUNNER_TEMP/b43-private-cli.log" 2>&1
+      - name: Require complete fresh-database security preflight before F3
+        id: f3_security
+        if: ${{ !cancelled() && steps.f3_reset.outcome == 'success' }}
+        timeout-minutes: 5
+        env:
+          VALIDATION_B43_DISPOSABLE: "1"
+          VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          VALIDATION_B43_PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
+          VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
+          VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: |
+          set -euo pipefail
+          node scripts/validation-b43-db.ts --security-preflight-only > "$RUNNER_TEMP/b43-f3-security.out"
+          test "$(cat "$RUNNER_TEMP/b43-f3-security.out")" = "PASS B4.3 full disposable security preflight"
+      - name: Execute all 24 isolated F3 schedules
+        if: ${{ !cancelled() && steps.f3_security.outcome == 'success' }}
+        timeout-minutes: 14
+        env:
+          VALIDATION_B43_DISPOSABLE: "1"
+          VALIDATION_B43_PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          VALIDATION_B43_PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
+          VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
+          VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
+          F3_AUTHORIZED: ${{ inputs.authorize_f3 }}
+          F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
+          F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
+          F3_SOURCE_SHA: ${{ github.sha }}
+          F3_ARTIFACT: ${{ runner.temp }}/b43-f3-diagnostic.json
+        run: |
+          set -euo pipefail
+          node scripts/validation-b43-db.ts --preflight-only
+          F3_CLUSTER_ID="$(docker exec "supabase_db_$VALIDATION_B43_PROJECT_ID" psql -U postgres -d postgres -XAtqw -c 'select system_identifier::text from pg_control_system()')"
+          [[ "$F3_CLUSTER_ID" =~ ^[0-9]+$ ]]
+          export F3_CLUSTER_ID
+          timeout --signal=TERM --kill-after=10s 780s "$RUNNER_TEMP/b43-f3-python/bin/python" scripts/validation-b43-f3.py
+      - name: Clean up only the generated B4.3 project and dedicated network
+        if: always()
+        timeout-minutes: 4
+        env:
+          PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
+          PROJECT_ID: ${{ steps.disposable.outputs.projectId }}
+          NETWORK_ID: ${{ steps.network.outputs.networkId }}
+        run: python3 scripts/validation-b43-f3-cleanup.py
+      - name: Upload only sanitized F3 diagnostic metadata
+        if: ${{ always() && inputs.authorize_f3 == true }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b43-f3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/b43-f3-diagnostic.json
+          if-no-files-found: ignore
+          retention-days: 3
+          include-hidden-files: false

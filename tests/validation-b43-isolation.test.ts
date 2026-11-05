@@ -380,7 +380,9 @@ test("workflow gates B4.3 reset behind manual authorization and network plus ide
   const reset = job.indexOf("db reset --local --no-seed");
   const testRun = job.indexOf("run: node scripts/validation-b43-db.ts\n");
   assert.ok(networkCreate >= 0 && networkCreate < start && start < preflight && preflight < reset && reset < testRun);
-  assert.equal((job.match(/VALIDATION_B43_DOCKER_NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/g) ?? []).length, 2);
+  const f3Boundary = job.indexOf("      - name: Install F3 diagnostic client");
+  assert.ok(f3Boundary > testRun);
+  assert.equal((job.slice(0, f3Boundary).match(/VALIDATION_B43_DOCKER_NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/g) ?? []).length, 2);
   assert.doesNotMatch(job, /supabase link|--linked|https:\/\/[^\s]+\.supabase\.co/i);
 });
 
