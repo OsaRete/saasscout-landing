@@ -4,7 +4,28 @@ begin;
 set local statement_timeout='8s';
 create function pg_temp.b43_assert(ok boolean, label text) returns void
 language plpgsql as $$ begin
-  if ok is distinct from true then raise exception 'B43-C1: %',label; end if;
+  if ok is distinct from true then
+    raise exception 'B43 invariant failed' using errcode=case label
+      when 'participant no-op response' then 'ZC001'
+      when 'session notes persisted through status no-op' then 'ZC002'
+      when 'no-op created restriction' then 'ZC003'
+      when 'withdrawal response and persisted state' then 'ZC004'
+      when 'withdrawal contribution restriction' then 'ZC005'
+      when 'INSERT while withdrawn' then 'ZC006'
+      when 'restoration persisted' then 'ZC007'
+      when 'repeated transition idempotency' then 'ZC008'
+      when 'archive and both contributions' then 'ZC009'
+      when 'individual consent capture' then 'ZC010'
+      when 'consent rollback' then 'ZC011'
+      when 'relevance loss' then 'ZC012'
+      when 'relevance restoration retains restriction' then 'ZC013'
+      when 'session cancellation' then 'ZC014'
+      when 'pause persisted' then 'ZC015'
+      when 'resume persisted' then 'ZC016'
+      when 'completion without restriction' then 'ZC017'
+      when 'experiment cancellation' then 'ZC018'
+      else 'ZC999' end;
+  end if;
 end $$;
 
 do $$
@@ -83,7 +104,7 @@ begin
     exists(select 1 from public.validation_evidence_source_restrictions where reason_code='session_cancelled' and scope_id=sid),'session cancellation');
   begin
     perform public.validation_update_interview_session(own,sid,'cancelled','in_progress',null);
-    raise exception 'terminal session unexpectedly mutable';
+    raise exception 'B43 invariant failed' using errcode='ZC019';
   exception when check_violation then null;
   end;
 
@@ -104,12 +125,12 @@ begin
     exists(select 1 from public.validation_evidence_source_restrictions where reason_code='experiment_cancelled' and scope_id=eid),'experiment cancellation');
   begin
     perform public.validation_transition_experiment_version(own,eid,'cancelled','running');
-    raise exception 'terminal experiment unexpectedly mutable';
+    raise exception 'B43 invariant failed' using errcode='ZC020';
   exception when object_not_in_prerequisite_state then null;
   end;
   begin
     perform public.validation_update_participant_status(own,pid,'withdrawn','active');
-    raise exception 'stale expected state unexpectedly accepted';
+    raise exception 'B43 invariant failed' using errcode='ZC021';
   exception when serialization_failure then null;
   end;
 end $$;
@@ -144,7 +165,7 @@ begin
   ] loop
     begin
       execute command;
-      raise exception 'restriction failure did not abort update';
+      raise exception 'B43 invariant failed' using errcode='ZC022';
     exception when check_violation then
       if sqlerrm <> 'C1 injected restriction failure' then raise; end if;
     end;
@@ -154,7 +175,7 @@ begin
       (select to_jsonb(e) from public.validation_experiment_versions e where id='70000000-0000-0000-0000-000000000001')) into after_rows;
     if before_rows is distinct from after_rows or
       (select count(*) from public.validation_evidence_source_restrictions) <> before_count then
-      raise exception 'failed capture left source or restrictions changed';
+      raise exception 'B43 invariant failed' using errcode='ZC023';
     end if;
   end loop;
 end $$;

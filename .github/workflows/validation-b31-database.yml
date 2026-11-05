@@ -10,6 +10,10 @@ on:
       - "scripts/validation-b42-db.ts"
       - "scripts/validation-b43-db.ts"
       - "scripts/validation-b43-isolation.ts"
+      - "scripts/validation-b43-harness.ts"
+      - "tests/validation-b43-harness.test.ts"
+      - "tests/validation-b43-source-transition-migration.test.ts"
+      - "tests/sql/validation-b43-source-transitions.sql"
       - "scripts/prepare-validation-b43-disposable.ts"
       - "tests/qualified-evidence-integrity.test.ts"
       - "tests/current-qualified-evidence-reader.test.ts"
@@ -44,11 +48,11 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Execute TypeScript regression and isolation tests without a database
-        run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
+        run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/validation-b43-harness.test.ts tests/validation-b43-source-transition-migration.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
       - name: Lint B4.3 TypeScript boundary and tests
-        run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
+        run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-harness.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/validation-b43-harness.test.ts tests/validation-b43-source-transition-migration.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
       - name: Type-check B4.3 test infrastructure without emitting files
-        run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts
+        run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-harness.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/validation-b43-harness.test.ts tests/validation-b43-source-transition-migration.test.ts
 
   database:
     name: database

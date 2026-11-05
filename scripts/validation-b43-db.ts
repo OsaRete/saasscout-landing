@@ -32,6 +32,8 @@ import {
   type DisposableManifest,
 } from "./validation-b43-isolation.ts";
 
+import { buildB43Fixture, diagnosticFetch, requirePromotionResult, singleMutation, waitForMarker, waitForExit, sourceInvariantDiagnostic } from "./validation-b43-harness.ts";
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceMigrationsDir = join(repositoryRoot, "supabase", "migrations");
 const owner = "10000000-0000-0000-0000-000000000001";
@@ -42,16 +44,38 @@ const participant = (n: number) => `90000000-0000-0000-0000-${String(n).padStart
 const observation = (n: number) => `b0000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const classification = (n: number) => `c0000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const uuid = (prefix: string, n: number) => `${prefix}0000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
-const sharedId = (n: number) => uuid("d", n);
 const postgresIdentityQuery = "select current_database()||'|'||inet_server_port()||'|'||(select system_identifier::text from pg_control_system())";
 let phase = "disposable project identity";
-let failure = "test assertion failed";
+let failure = "unexpected_exception";
+let operation = "startup";
+let protocolFailure = "no_protocol_failure_observed";
+
+async function step<T>(label: string, action: () => Promise<T>): Promise<T> {
+  operation = label;
+  protocolFailure = "no_protocol_failure_observed";
+  failure = `${label}: unexpected_exception`;
+  try { const result = await action(); operation = "harness"; return result; }
+  catch (error) {
+    const category = error instanceof Error && error.message === "promotion_result_malformed"
+      ? "promotion_result_malformed" : protocolFailure;
+    failure = `${label}: ${category}`; throw new Error("harness_step_failed"); }
+}
+
+const observedFetch = diagnosticFetch((category) => { protocolFailure = category; });
 
 function check(value: unknown, label: string): asserts value {
   if (!value) {
     failure = label;
     throw new Error(label);
   }
+}
+
+async function rpc(client: SupabaseClient, name: string, args: Record<string, unknown>) {
+  return step(name, async () => {
+    const result = await client.rpc(name, args);
+    check(!result.error && result.data !== null, `${name}: rpc_result_failed`);
+    return result;
+  });
 }
 
 function sanitizedProcessEnv(): NodeJS.ProcessEnv {
@@ -196,10 +220,11 @@ function verifyDisposableIdentity(): Readonly<{ projectId: string; dbContainerId
   return { projectId, dbContainerId: containers.database.id, clusterId, status };
 }
 
-function sqlRaw(statement: string, label = phase) {
+function sqlRaw(statement: string, label = phase, timeoutMs = 25000) {
+  operation = label;
   const result = spawnSync("psql", [B43_DATABASE_URL, "-X", "-A", "-t", "-q", "-w", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=sqlstate"], {
     input: `set statement_timeout='20s';\n${statement}`,
-    encoding: "utf8", timeout: 25000, maxBuffer: 2 * 1024 * 1024, env: sanitizedProcessEnv(),
+    encoding: "utf8", timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, env: sanitizedProcessEnv(),
   });
   check(!result.error && result.status !== null, `${label}: sql_transport_error`);
   return result;
@@ -207,7 +232,7 @@ function sqlRaw(statement: string, label = phase) {
 
 function sql(statement: string, label = phase): string {
   const result = sqlRaw(statement, label);
-  check(result.status === 0, `${label}: ${sqlStateDiagnostic(result.stderr)}`);
+  check(result.status === 0, `${label}: ${sourceInvariantDiagnostic(sqlStateDiagnostic(result.stderr))}`);
   return result.stdout.split(/\r?\n/).filter((line) => line && !line.startsWith("SET")).join("\n");
 }
 
@@ -238,7 +263,7 @@ function encodeBase64Url(value: unknown): string {
 }
 
 function clients(status: Record<string, string>): Readonly<{ admin: SupabaseClient; anonymous: SupabaseClient; authenticated: SupabaseClient }> {
-  const options = { auth: { persistSession: false, autoRefreshToken: false } };
+  const options = { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: observedFetch } };
   const tokenInput = `${encodeBase64Url({ alg: "HS256", typ: "JWT" })}.${encodeBase64Url({
     role: "authenticated", sub: owner, aud: "authenticated", iss: "supabase",
     iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600,
@@ -250,7 +275,7 @@ function clients(status: Record<string, string>): Readonly<{ admin: SupabaseClie
   const admin = createClient(B43_API_URL, status.SERVICE_ROLE_KEY, options);
   const anonymous = createClient(B43_API_URL, status.ANON_KEY, options);
   const authenticated = createClient(B43_API_URL, status.ANON_KEY, {
-    ...options, global: { headers: { Authorization: `Bearer ${token}` } },
+    ...options, global: { fetch: observedFetch, headers: { Authorization: `Bearer ${token}` } },
   });
   return { admin, anonymous, authenticated };
 }
@@ -398,65 +423,38 @@ function verifyApplicationRoleEscalationDenied(): void {
     "23514", "positive authority forgery");
 }
 
-function insertStatement(table: string, row: Record<string, unknown>): string {
-  check(["problem_observations", "validation_evidence_promotions"].includes(table), "unapproved synthetic table");
-  const columns = Object.keys(row);
-  check(columns.every((column) => /^[a-z_]+$/.test(column)), "unsafe synthetic fixture column");
-  const recordType = `public.${table}`;
-  const serialized = JSON.stringify(row).replaceAll("'", "''");
-  return `insert into ${recordType} (${columns.join(",")}) select ${columns.join(",")}
-    from jsonb_populate_record(null::${recordType},'${serialized}'::jsonb);`;
+// Distinct, fully reviewed fixture participants: SQL supplies freshness only;
+// this bulk boundary control does not replace interactive TypeScript selection.
+function fixturePromotion(i: number): string {
+  return `do $$ begin perform public.validation_promote_customer_interview_evidence(
+    '${owner}','${observation(i)}','${classification(i)}','${canonical}','supporting',
+    'participant:${participant(i)}|${canonical}|supporting','${fingerprint(i)}',
+    public.validation_b31_representative_state('${owner}','${participant(i)}'),
+    public.validation_b31_authority_snapshot('${uuid("3",1)}','${uuid("5",1)}'),
+    'Slow reports','slow reports','v8-b1.2','v8-b3.0.2-exact.1','v8-b3.1-projection.1'); end $$;`;
 }
 
-function candidateLedger(i: number): Record<string, unknown> {
-  const fp = fingerprint(i);
-  return {
-    owner_id: owner, observation_id: observation(i), classification_id: classification(i),
-    subject_id: uuid("3", 1), hypothesis_id: uuid("4", 1), hypothesis_version_id: uuid("5", 1),
-    experiment_id: uuid("6", 1), experiment_version_id: uuid("7", 1),
-    participant_id: participant(i), interview_session_id: uuid("a", i),
-    policy_version: "v8-b1.2", resolver_version: "v8-b3.0.2-exact.1", projection_version: "v8-b3.1-projection.1",
-    eligible: true, eligibility_reasons: ["eligible"], representative_selected: true,
-    independence_kind: "participant", independence_private_id: participant(i), polarity: "supporting",
-    representative_group_key: `participant:${participant(i)}|${canonical}|supporting`,
-    canonical_problem_id: canonical, resolution_status: "resolved", resolution_reason: "server_exact_authority_snapshot",
-    problem_observation_id: sharedId(i), promotion_fingerprint: fp,
-  };
-}
-
-function candidateShared(i: number): Record<string, unknown> {
-  const fp = fingerprint(i);
-  return {
-    id: sharedId(i), canonical_problem_id: canonical,
-    problem_title: "Slow reports", normalized_problem_title: "slow reports",
-    source_type: "customer_interview_human_reviewed", source_evidence: `Disposable candidate ${i}`,
-    evidence_polarity: "supporting", observed_at: "2026-09-26T00:00:00+00:00",
-    observation_fingerprint: `validation-promotion:${fp}`,
-    metadata: { projectionVersion: "v8-b3.1-projection.1" },
-  };
-}
-
-async function expectNoRuntimeFactAccess(admin: SupabaseClient, anonymous: SupabaseClient, authenticated: SupabaseClient, authorityId: string): Promise<void> {
+async function expectNoRuntimeFactAccess(admin: SupabaseClient, anonymous: SupabaseClient, authenticated: SupabaseClient, authorityId: string, promotedId: string): Promise<void> {
   const cases: Array<readonly [string, () => Promise<{ error: { code?: string; message?: string } | null }>]> = [
     ["service authority select", async () => admin.from("validation_evidence_consumption_authority").select("id")],
     ["service restriction select", async () => admin.from("validation_evidence_source_restrictions").select("id")],
     ["service authority insert", async () => admin.from("validation_evidence_consumption_authority").insert({
-      purpose_id: "qualified_validation_shared_evidence", promotion_id: authorityId, authority_state: "withheld",
+      purpose_id: "qualified_validation_shared_evidence", promotion_id: promotedId, authority_state: "withheld",
     })],
     ["service restriction insert", async () => admin.from("validation_evidence_source_restrictions").insert({
       purpose_id: "qualified_validation_shared_evidence", reason_code: "canonical_merged", scope_kind: "canonical_problem", scope_id: canonical,
     })],
     ["service authority update", async () => admin.from("validation_evidence_consumption_authority").update({ authority_state: "withheld" }).eq("id", authorityId)],
     ["service authority delete", async () => admin.from("validation_evidence_consumption_authority").delete().eq("id", authorityId)],
-    ["service restriction update", async () => admin.from("validation_evidence_source_restrictions").update({ reason_code: "canonical_merged" }).neq("id", "")],
-    ["service restriction delete", async () => admin.from("validation_evidence_source_restrictions").delete().neq("id", "")],
+    ["service restriction update", async () => admin.from("validation_evidence_source_restrictions").update({ reason_code: "canonical_merged" }).eq("id", authorityId)],
+    ["service restriction delete", async () => admin.from("validation_evidence_source_restrictions").delete().eq("id", authorityId)],
   ];
   for (const roleClient of [anonymous, authenticated]) {
     for (const table of ["validation_evidence_consumption_authority", "validation_evidence_source_restrictions"]) {
       cases.push([`browser ${table} select`, async () => roleClient.from(table).select("id")]);
       cases.push([`browser ${table} insert`, async () => roleClient.from(table).insert({})]);
-      cases.push([`browser ${table} update`, async () => roleClient.from(table).update({}).neq("id", "")]);
-      cases.push([`browser ${table} delete`, async () => roleClient.from(table).delete().neq("id", "")]);
+      cases.push([`browser ${table} update`, async () => roleClient.from(table).update(table === "validation_evidence_consumption_authority" ? { authority_state: "withheld" } : { reason_code: "canonical_merged" }).eq("id", authorityId)]);
+      cases.push([`browser ${table} delete`, async () => roleClient.from(table).delete().eq("id", authorityId)]);
     }
   }
   for (const [label, request] of cases) {
@@ -482,14 +480,32 @@ function assertImmutableFacts(authorityId: string, restrictionId: string): void 
   ]) expectSqlState(operation, "55000", "B43 append-only trigger");
 }
 
-function restoreSnapshot(observationId: string): void {
-  sql(`alter table public.validation_qualified_evidence_snapshots disable trigger all;
-    update public.validation_qualified_evidence_snapshots s set
-      attestation_version='v8-b4.2-b1-full-row.2',
-      protected_record=public.validation_b42_row_record(po),
-      protected_schema=public.validation_b42_protected_schema()
-    from public.problem_observations po where s.problem_observation_id='${observationId}' and po.id=s.problem_observation_id;
-    alter table public.validation_qualified_evidence_snapshots enable trigger all;`, phase);
+// Every injected fault is isolated in one backend transaction. ON_ERROR_STOP
+// closes that connection after the expected reader error, rolling back the fault.
+function probeUnavailable(statement: string, label: string, timeoutMs = 25000): void {
+  readCurrentEvidence();
+  const before = sql(`select md5(jsonb_build_array(
+    (select jsonb_agg(to_jsonb(po) order by po.id) from public.problem_observations po),
+    (select jsonb_agg(to_jsonb(p) order by p.id) from public.validation_evidence_promotions p),
+    (select jsonb_agg(to_jsonb(s) order by s.promotion_id) from public.validation_qualified_evidence_snapshots s),
+    (select jsonb_agg(to_jsonb(a) order by a.id) from public.validation_evidence_consumption_authority a),
+    (select jsonb_agg(to_jsonb(c) order by c.id) from public.validation_evidence_classifications c),
+    (select jsonb_agg(to_jsonb(r) order by r.id) from public.validation_evidence_source_restrictions r))::text)`);
+  const result = sqlRaw(`begin;
+    ${statement}
+    select session_user||'|'||current_user;
+    select public.validation_b43_read_current_evidence('${canonical}'::uuid); rollback;`, label, timeoutMs);
+  check(classifyTrustedCurrentRead(result, "unavailable") === "expected_denial",
+    `${label}: ${classifyTrustedCurrentRead(result, "unavailable")};${sqlStateDiagnostic(result.stderr)}`);
+  const after = sql(`select md5(jsonb_build_array(
+    (select jsonb_agg(to_jsonb(po) order by po.id) from public.problem_observations po),
+    (select jsonb_agg(to_jsonb(p) order by p.id) from public.validation_evidence_promotions p),
+    (select jsonb_agg(to_jsonb(s) order by s.promotion_id) from public.validation_qualified_evidence_snapshots s),
+    (select jsonb_agg(to_jsonb(a) order by a.id) from public.validation_evidence_consumption_authority a),
+    (select jsonb_agg(to_jsonb(c) order by c.id) from public.validation_evidence_classifications c),
+    (select jsonb_agg(to_jsonb(r) order by r.id) from public.validation_evidence_source_restrictions r))::text)`);
+  check(before === after, `${label}: fault_transaction_not_restored`);
+  readCurrentEvidence();
 }
 
 async function verifyPostgrestExecutionBoundary(admin: SupabaseClient, anonymous: SupabaseClient, authenticated: SupabaseClient): Promise<void> {
@@ -514,50 +530,41 @@ function makePsqlProcess(): ReturnType<typeof spawn> {
   });
 }
 
-function waitForMarker(child: ReturnType<typeof spawn>, marker: string, onText: (text: string) => void): Promise<string> {
-  return new Promise((resolveMarker, reject) => {
-    let accumulated = "";
-    const timeout = setTimeout(() => reject(new Error("controlled concurrency marker timeout")), 10000);
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      accumulated += text;
-      onText(text);
-      const line = accumulated.split(/\r?\n/).find((entry) => entry.startsWith(marker));
-      if (line) { clearTimeout(timeout); resolveMarker(line.slice(marker.length)); }
-    });
-    child.on("error", () => { clearTimeout(timeout); reject(new Error("controlled concurrency process failed")); });
-    child.on("exit", (code) => { if (code !== 0) { clearTimeout(timeout); reject(new Error("controlled concurrency process exited early")); } });
-  });
-}
-
 async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<void> {
   phase = "independent backend participant lock and post-commit exclusion";
   const participantId = participant(3);
   const blocker = makePsqlProcess();
+  let competitor: ReturnType<typeof spawn> | undefined;
+  const blockerExit = waitForExit(blocker);
+  // Observe rejection immediately, including failures before the final await.
+  void blockerExit.catch(() => {});
   let blockerOutput = "";
   const blockerMarker = waitForMarker(blocker, "B43_BLOCKER:", (text) => { blockerOutput += text; });
-  blocker.stdin?.write(`begin;\nselect public.validation_b31_lock('participant','${participantId}');\nselect 'B43_BLOCKER:'||pg_backend_pid();\n`);
+  blocker.stdin?.write(`set statement_timeout='12s';\nset idle_in_transaction_session_timeout='12s';\nbegin;\nselect public.validation_b31_lock('participant','${participantId}');\nselect 'B43_BLOCKER:'||pg_backend_pid();\n`);
   let blockerPid: number;
   try {
     blockerPid = Number(await blockerMarker);
     check(Number.isInteger(blockerPid) && blockerPid > 0, "participant lock backend identity invalid");
-    const competitor = makePsqlProcess();
+    competitor = makePsqlProcess();
+    const competitorExitPromise = waitForExit(competitor);
+    void competitorExitPromise.catch(() => {});
     let competitorOutput = "";
     const competitorMarker = waitForMarker(competitor, "B43_COMPETITOR:", (text) => { competitorOutput += text; });
-    competitor.stdin?.write(`select 'B43_COMPETITOR:'||pg_backend_pid();\nselect public.validation_update_participant_status(
+    competitor.stdin?.write(`set statement_timeout='12s';\nselect 'B43_COMPETITOR:'||pg_backend_pid();\nselect public.validation_update_participant_status(
       '${owner}','${participantId}','active','withdrawn');\n\\q\n`);
     const competitorPid = Number(await competitorMarker);
     check(Number.isInteger(competitorPid) && competitorPid > 0 && competitorPid !== blockerPid,
       "participant race did not use distinct PostgreSQL backends");
     let observedLockWait = false;
     for (let attempt = 0; attempt < 100; attempt++) {
-      const wait = sql(`select coalesce(wait_event_type,'')||'|'||coalesce(state,'') from pg_stat_activity where pid=${competitorPid}`);
-      if (wait === "Lock|active") { observedLockWait = true; break; }
+      const wait = sql(`select coalesce(wait_event_type,'')||'|'||coalesce(wait_event,'')||'|'||coalesce(state,'')||'|'||(${blockerPid}=any(pg_blocking_pids(${competitorPid})))::text from pg_stat_activity where pid=${competitorPid}`);
+      if (wait === "Lock|advisory|active|true") { observedLockWait = true; break; }
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
     check(observedLockWait, "independent participant writer was not observed waiting on the held advisory lock");
     blocker.stdin?.write("commit;\n\\q\n");
-    const competitorExit = await new Promise<number | null>((resolveExit) => competitor.on("exit", (code) => resolveExit(code)));
+    const competitorExit = await competitorExitPromise;
+    check(await blockerExit === 0, "blocker_did_not_exit_cleanly");
     check(competitorExit === 0 && competitorOutput.includes('"status": "withdrawn"'), "serialized participant mutation did not commit after lock release");
     const state = sql(`select p.status||'|'||(select count(*) from public.validation_evidence_source_restrictions r
       where r.reason_code='participant_withdrawn' and r.scope_kind='participant'
@@ -566,7 +573,7 @@ async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<
     check(state === "withdrawn|1", "post-commit participant restriction is absent or inconsistent");
     const current = readCurrentEvidence();
     check(current.complete && current.observations.length === 0, "post-commit current read was not complete and excluded");
-    const restored = await admin.rpc("validation_update_participant_status", {
+    const restored = await rpc(admin, "validation_update_participant_status", {
       p_owner_id: owner, p_participant_id: participantId, p_expected_status: "withdrawn", p_target_status: "active",
     });
     check(!restored.error && sql(`select count(*) from public.validation_evidence_source_restrictions
@@ -576,6 +583,9 @@ async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<
     blocker.stdin?.write("rollback;\n\\q\n");
     blocker.kill();
     throw new Error("controlled independent-backend concurrency assertion failed");
+  } finally {
+    competitor?.stdin?.end(); competitor?.kill();
+    blocker.stdin?.end(); blocker.kill();
   }
   check(blockerOutput.includes(`B43_BLOCKER:${blockerPid}`), "controlled concurrency backend evidence was not captured");
 }
@@ -601,13 +611,16 @@ async function run(): Promise<void> {
 
   phase = "fixture setup";
   const fixture = readFileSync(new URL("../tests/sql/validation-b31.sql", import.meta.url), "utf8");
-  check(fixture.split("create function public.b31_test_promote(").length === 2, "B3.1 fixture boundary changed");
-  const setup = fixture.split("create function public.b31_test_promote(")[0]
-    .replaceAll("generate_series(1,14)", "generate_series(1,120)")
-    .replaceAll("generate_series(1,15)", "generate_series(1,120)")
-    .replaceAll("least(i,14)", "i");
-  check(setup.length > 1000, "B3.1 fixture setup is incomplete");
+  const setup = buildB43Fixture(fixture);
   sql(`begin;${setup}\ncommit;`);
+  check(sql(`select (select count(*) from public.validation_participants)=120
+    and (select count(*) from public.validation_interview_sessions)=120
+    and (select count(*) from public.validation_evidence_observations)=120
+    and (select count(*) from public.validation_evidence_classifications)=120
+    and (select count(*) from public.validation_customer_interview_shareable_evidence)=119
+    and exists(select 1 from public.validation_customer_interview_shareable_evidence where source_observation_id='${observation(4)}')
+    and not exists(select 1 from public.validation_customer_interview_shareable_evidence where source_observation_id='${observation(18)}')`) === "t",
+    "fixture_cardinality_or_review_contract_failed");
   const direct = readCurrentEvidence();
   check(direct.complete && direct.observations.length === 0, "fixture canonical trusted SQL read was not empty");
 
@@ -624,22 +637,59 @@ async function run(): Promise<void> {
   "source transition regression transaction did not roll back cleanly");
 
   phase = "new promotion WITHHELD authority and historical proof preservation";
-  for (const i of [1, 2, 3, 4]) await promoteCustomerInterviewEvidence(owner, observation(i), admin);
+  const promoted = new Map<number, ReturnType<typeof requirePromotionResult>>();
+  for (const i of [1, 2, 3, 4]) {
+    const result = await step(`promotion_${i}`, async () => requirePromotionResult(await promoteCustomerInterviewEvidence(owner, observation(i), admin)));
+    check(!result.duplicate, `promotion_${i}: unexpected_duplicate`);
+    check(sql(`select exists(select 1 from public.validation_evidence_promotions p
+      where p.id='${result.promotionId}' and p.problem_observation_id='${result.problemObservationId}'
+        and p.owner_id='${owner}' and p.observation_id='${observation(i)}' and p.canonical_problem_id='${canonical}')`) === "t",
+      `promotion_${i}: returned_identity_lineage_mismatch`);
+    promoted.set(i, result);
+  }
+  let missingReviewRejected = false;
+  try { await step("missing_review_negative_control", () => promoteCustomerInterviewEvidence(owner, observation(18), admin)); }
+  catch { missingReviewRejected = protocolFailure === "http:400;sqlstate:23514"; }
+  check(missingReviewRejected && sql(`select count(*) from public.validation_evidence_promotions where observation_id='${observation(18)}'`) === "0",
+    "missing_review_negative_control: expected_23514_and_no_promotion");
   check(sql("select count(*) from public.validation_evidence_consumption_authority where authority_state='withheld'") === "4", "new promotions did not receive exactly one WITHHELD fact each");
   check(sql("select count(*) from public.validation_qualified_evidence_snapshots where attestation_version='v8-b4.2-b1-full-row.2'") === "4", "new promotions did not preserve B4.2 v2 proofs");
   const current = readCurrentEvidence();
   check(current.complete && current.observations.length === 0, "WITHHELD evidence was not excluded from a complete current read");
-  const history = await readTrustedQualifiedValidationEvidence(canonical, admin);
+  const history = await step("historical_reader", () => readTrustedQualifiedValidationEvidence(canonical, admin));
   check(history.complete && history.observations.length === 4 &&
     ["supporting", "contradicting", "mixed"].every((polarity) => history.observations.some((row) => row.evidence_polarity === polarity)),
   "B3.1/B4.2 historical reader or original polarity behavior changed");
-  check((await promoteCustomerInterviewEvidence(owner, observation(1), admin)).duplicate === true &&
+  check((await step("exact_retry", () => promoteCustomerInterviewEvidence(owner, observation(1), admin))).duplicate === true &&
     sql("select count(*) from public.validation_evidence_consumption_authority") === "4", "exact retry created duplicate authority");
 
+  const historicalDigestQuery = `select md5(jsonb_build_array(
+    (select jsonb_agg(to_jsonb(s) order by s.promotion_id) from public.validation_qualified_evidence_snapshots s),
+    (select jsonb_agg(to_jsonb(p) order by p.id) from public.validation_evidence_promotions p),
+    (select jsonb_agg(to_jsonb(po) order by po.id) from public.problem_observations po),
+    (select jsonb_agg(to_jsonb(a) order by a.id) from public.validation_evidence_consumption_authority a))::text)`;
+  const historicalDigest = sql(historicalDigestQuery);
+
+  phase = "candidate population overflow with valid boundary control";
+  const atBound = Array.from({ length: 96 }, (_, index) => fixturePromotion(index + 20)).join("\n");
+  probeUnavailable(`${atBound}
+    do $$ begin
+      if (select count(*) from public.validation_evidence_promotions where canonical_problem_id='${canonical}') <> 100
+        then raise exception using errcode='ZX002'; end if;
+      if public.validation_b43_read_current_evidence('${canonical}') <> '{"complete":true,"observations":[]}'::jsonb
+        then raise exception using errcode='ZX002'; end if;
+    end $$;
+    ${fixturePromotion(116)}
+    do $$ begin
+      if (select count(*) from public.validation_evidence_promotions where canonical_problem_id='${canonical}') <> 101
+        then raise exception using errcode='ZX002'; end if;
+    end $$;`, "candidate_population_101_after_valid_100", 120000);
+
   phase = "PostgREST cannot access private facts or write authority";
-  const authorityId = sql(`select id from public.validation_evidence_consumption_authority a
+  const authorityId = sql(`select a.id from public.validation_evidence_consumption_authority a
     join public.validation_evidence_promotions p on p.id=a.promotion_id where p.observation_id='${observation(1)}'`);
-  await expectNoRuntimeFactAccess(admin, anonymous, authenticated, authorityId);
+  check(/^[0-9a-f-]{36}$/.test(authorityId), "authority_identity_missing_or_ambiguous");
+  await expectNoRuntimeFactAccess(admin, anonymous, authenticated, authorityId, promoted.get(1)!.promotionId);
 
   phase = "withheld authority insertion failure rolls back promotion transaction";
   const sharedBefore = sql("select count(*) from public.problem_observations where source_type='customer_interview_human_reviewed'");
@@ -650,8 +700,8 @@ async function run(): Promise<void> {
     create trigger b43_test_authority_rejection before insert on public.validation_evidence_consumption_authority
       for each row execute function public.b43_reject_authority_insert();`);
   let authorityRejected = false;
-  try { await promoteCustomerInterviewEvidence(owner, observation(17), admin); }
-  catch (error) { authorityRejected = error instanceof Error && "code" in error && (error as { code?: string }).code === "constraint_conflict"; }
+  try { await step("authority_write_failure", () => promoteCustomerInterviewEvidence(owner, observation(17), admin)); }
+  catch (error) { void error; authorityRejected = protocolFailure === "http:400;sqlstate:23514"; }
   sql("drop trigger b43_test_authority_rejection on public.validation_evidence_consumption_authority; drop function public.b43_reject_authority_insert();");
   check(authorityRejected && sql("select last_value=1 and is_called from public.b43_authority_rejection_hits") === "t",
     "promotion did not reach the injected authority-write failure");
@@ -662,31 +712,27 @@ async function run(): Promise<void> {
   sql("drop sequence public.b43_authority_rejection_hits");
 
   phase = "missing authority and corrupted/unsupported B4.2 proofs fail closed";
-  sql(`alter table public.validation_evidence_consumption_authority disable trigger all;
-    delete from public.validation_evidence_consumption_authority a using public.validation_evidence_promotions p
-      where a.promotion_id=p.id and p.observation_id='${observation(4)}';
-    alter table public.validation_evidence_consumption_authority enable trigger all;`);
-  expectCurrentReadUnavailable("missing authority candidate");
-  sql(`insert into public.validation_evidence_consumption_authority(
-      purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,promotion_fingerprint,projection_version,authority_state)
-    select 'qualified_validation_shared_evidence',p.id,p.owner_id,p.problem_observation_id,p.canonical_problem_id,
-      p.promotion_fingerprint,p.projection_version,'withheld'
-    from public.validation_evidence_promotions p where p.observation_id='${observation(4)}';`);
+  expectSqlState(`begin; ${singleMutation("delete from public.validation_evidence_consumption_authority where false")} rollback;`,
+    "ZX002", "fault_guard_rejects_missing_target");
+  expectSqlState(`begin; alter table public.validation_evidence_consumption_authority disable trigger USER;
+    ${singleMutation("update public.validation_evidence_consumption_authority set authority_state=authority_state")} rollback;`,
+    "ZX002", "fault_guard_rejects_multiple_targets");
+  probeUnavailable(`alter table public.validation_evidence_consumption_authority disable trigger USER;
+    ${singleMutation(`delete from public.validation_evidence_consumption_authority where promotion_id='${promoted.get(4)!.promotionId}'`)}
+    alter table public.validation_evidence_consumption_authority enable trigger USER;`, "missing authority candidate");
   const proofCases = [
-    ["protected_record malformed", `update public.validation_qualified_evidence_snapshots set protected_record='bad-codec' where problem_observation_id='${sharedId(2)}'`],
-    ["unsupported proof version", `update public.validation_qualified_evidence_snapshots set attestation_version='v8-b4.2-b1-snapshot.1' where problem_observation_id='${sharedId(2)}'`],
-    ["unsupported schema version", `update public.validation_qualified_evidence_snapshots set protected_schema=array['unsupported']::text[] where problem_observation_id='${sharedId(2)}'`],
+    ["protected_record malformed", "protected_record='bad-codec'"],
+    ["unsupported proof version", "attestation_version='v8-b4.2-b1-snapshot.1'"],
+    ["unsupported schema version", "protected_schema=array['unsupported']::text[]"],
   ] as const;
   for (const [label, mutation] of proofCases) {
-    sql(`alter table public.validation_qualified_evidence_snapshots disable trigger all; ${mutation}; alter table public.validation_qualified_evidence_snapshots enable trigger all;`);
-    expectCurrentReadUnavailable(label);
-    restoreSnapshot(sharedId(2));
-    check(sql(`select public.validation_b42_snapshot_verified(p) from public.validation_evidence_promotions p where p.observation_id='${observation(2)}'`) === "t",
-      `${label}: B4.2 proof was not restored after fault injection`);
+    probeUnavailable(`alter table public.validation_qualified_evidence_snapshots disable trigger USER;
+      ${singleMutation(`update public.validation_qualified_evidence_snapshots set ${mutation} where problem_observation_id='${promoted.get(2)!.problemObservationId}'`)}
+      alter table public.validation_qualified_evidence_snapshots enable trigger USER;`, label);
   }
 
   phase = "authority/restriction immutability and participant restoration";
-  const withdraw = await admin.rpc("validation_update_participant_status", {
+  const withdraw = await rpc(admin, "validation_update_participant_status", {
     p_owner_id: owner, p_participant_id: participant(1), p_expected_status: "active", p_target_status: "withdrawn",
   });
   check(!withdraw.error, "authorized participant withdrawal RPC failed");
@@ -694,7 +740,7 @@ async function run(): Promise<void> {
     where reason_code='participant_withdrawn' and scope_id='${participant(1)}' and contribution_observation_id='${observation(1)}'`);
   check(Boolean(restrictionId), "participant withdrawal restriction missing");
   assertImmutableFacts(authorityId, restrictionId);
-  const restore = await admin.rpc("validation_update_participant_status", {
+  const restore = await rpc(admin, "validation_update_participant_status", {
     p_owner_id: owner, p_participant_id: participant(1), p_expected_status: "withdrawn", p_target_status: "active",
   });
   check(!restore.error && sql(`select count(*) from public.validation_evidence_source_restrictions
@@ -718,18 +764,18 @@ async function run(): Promise<void> {
     where reason_code='consent_metadata_changed' and scope_id='${participant(1)}'`) === "2", "consent metadata transition missed existing contributions");
 
   phase = "session cancellation and relevance loss restrictions";
-  const relevance = await admin.rpc("validation_update_interview_relevance", {
+  const relevance = await rpc(admin, "validation_update_interview_relevance", {
     p_owner_id: owner, p_session_id: "a0000000-0000-0000-0000-000000000001",
     p_expected_relevance: "target_segment_match", p_target_relevance: "adjacent_segment",
   });
   check(!relevance.error, "session relevance mutation failed");
-  const relevanceRestore = await admin.rpc("validation_update_interview_relevance", {
+  const relevanceRestore = await rpc(admin, "validation_update_interview_relevance", {
     p_owner_id: owner, p_session_id: "a0000000-0000-0000-0000-000000000001",
     p_expected_relevance: "adjacent_segment", p_target_relevance: "target_segment_match",
   });
   check(!relevanceRestore.error && sql("select count(*) from public.validation_evidence_source_restrictions where reason_code='session_relevance_lost'") === "1",
     "relevance restoration cleared permanent restriction");
-  const cancellation = await admin.rpc("validation_update_interview_session", {
+  const cancellation = await rpc(admin, "validation_update_interview_session", {
     p_owner_id: owner, p_session_id: "a0000000-0000-0000-0000-000000000002",
     p_expected_status: "in_progress", p_target_status: "cancelled", p_notes: null,
   });
@@ -738,7 +784,7 @@ async function run(): Promise<void> {
   "session cancellation did not append its permanent restriction");
 
   phase = "experiment completion and cancellation semantics";
-  const completion = await admin.rpc("validation_transition_experiment_version", {
+  const completion = await rpc(admin, "validation_transition_experiment_version", {
     p_owner_id: owner, p_version_id: "70000000-0000-0000-0000-000000000001",
     p_expected_lifecycle: "running", p_target_lifecycle: "completed",
   });
@@ -751,7 +797,7 @@ async function run(): Promise<void> {
     values('71000000-0000-0000-0000-000000000001','${owner}','30000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000001',
       '40000000-0000-0000-0000-000000000001','50000000-0000-0000-0000-000000000001',1,'customer_interview',
       '["operators"]','interview','{}','pseudonymous_notes','running',now())`);
-  const experimentCancel = await admin.rpc("validation_transition_experiment_version", {
+  const experimentCancel = await rpc(admin, "validation_transition_experiment_version", {
     p_owner_id: owner, p_version_id: "71000000-0000-0000-0000-000000000001",
     p_expected_lifecycle: "running", p_target_lifecycle: "cancelled",
   });
@@ -761,20 +807,14 @@ async function run(): Promise<void> {
   await controlledParticipantConcurrency(admin);
 
   phase = "classification ambiguity and supersession restrictions";
-  const ambiguousClassification = await admin.rpc("validation_insert_classification", {
-    p_owner_id: owner, p_observation_id: observation(2), p_polarity: "contradicting",
-    p_classification_source: "user_supplied", p_authority_status: "authoritative",
-    p_rationale: null, p_supersedes_classification_id: null,
-  });
-  check(!ambiguousClassification.error, "ambiguous authoritative classification fixture could not be created");
-  expectCurrentReadUnavailable("multiple current authoritative classification terminals");
-  const superseded = await admin.rpc("validation_insert_classification", {
-    p_owner_id: owner, p_observation_id: observation(1), p_polarity: "inconclusive",
-    p_classification_source: "ai_model_suggested", p_authority_status: "suggested",
-    p_rationale: null, p_supersedes_classification_id: classification(1),
-  });
-  check(!superseded.error && sql("select count(*) from public.validation_evidence_source_restrictions where reason_code='classification_superseded'") === "1",
-    "AI-suggested classification successor did not restrict its predecessor");
+  probeUnavailable(singleMutation(`perform public.validation_insert_classification(
+    '${owner}','${observation(2)}','contradicting','user_supplied','authoritative',null,null)`),
+    "multiple current authoritative classification terminals");
+  probeUnavailable(`do $$ begin
+    perform public.validation_insert_classification('${owner}','${observation(1)}','inconclusive',
+      'ai_model_suggested','suggested',null,'${classification(1)}');
+    if (select count(*) from public.validation_evidence_source_restrictions where reason_code='classification_superseded') <> 1
+      then raise exception using errcode='ZX002'; end if; end $$;`, "classification supersession");
 
   phase = "canonical merge, deactivation, and conflicting merge state";
   sql(`insert into public.canonical_problems(id,canonical_key,canonical_title,normalized_title,status)
@@ -783,27 +823,25 @@ async function run(): Promise<void> {
     update public.canonical_problems set status='merged',merged_into_problem_id='${targetCanonical}' where id='${canonical}';`);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions
     where reason_code='canonical_merged' and scope_id='${canonical}'`) === "1", "canonical merge restriction missing");
-  expectCurrentReadUnavailable("merged canonical", canonical);
+  // A consistent merged canonical has a permanent restriction and is excluded;
+  // the reader contract reserves P0001 for inconsistent or incomplete proof.
+  check(readCurrentEvidence().complete, "consistent_merged_canonical_not_complete");
   sql(`update public.canonical_problems set merged_into_problem_id='${targetCanonical}' where id='${conflictCanonical}';
     update public.canonical_problems set status='deprecated' where id='${targetCanonical}';`);
   expectCurrentReadUnavailable("active canonical with merge target", conflictCanonical);
   check(sql(`select count(*) from public.validation_evidence_source_restrictions where reason_code='canonical_deactivated' and scope_id='${targetCanonical}'`) === "1",
     "canonical deactivation restriction missing");
 
-  phase = "candidate population overflow";
-  for (let i = 20; i < 117; i++) {
-    sql(`${insertStatement("problem_observations", candidateShared(i))}\n${insertStatement("validation_evidence_promotions", candidateLedger(i))}`);
-  }
-  check(sql(`select count(*) from public.validation_evidence_promotions
-    where canonical_problem_id='${canonical}' and problem_observation_id is not null`) === "101", "overflow fixture did not exceed the 100 candidate bound");
-  expectCurrentReadUnavailable("candidate population overflow", canonical);
-
+  check(sql(historicalDigestQuery) === historicalDigest, "historical_proofs_or_authority_changed_after_source_transitions");
+  const preservedHistory = await step("historical_reader_after_restrictions", () => readTrustedQualifiedValidationEvidence(canonical, admin));
+  check(preservedHistory.complete && preservedHistory.observations.length === 4,
+    "historical_reader_after_restrictions_incomplete");
   console.log("PASS B4.3 disposable identity, privilege, authority, proof, source restriction, concurrency, completeness and compatibility checks");
 }
 
 try {
   await run();
 } catch {
-  console.error(`FAIL B4.3: ${phase}; ${failure}; database, private rows and credentials suppressed`);
+  console.error(`FAIL B4.3: ${phase}; operation:${operation}; ${failure}; database, private rows and credentials suppressed`);
   process.exitCode = 1;
 }
