@@ -291,7 +291,11 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/validation-b43-db.ts --security-preflight-only > "$RUNNER_TEMP/b43-f3-security.out"
-          test "$(cat "$RUNNER_TEMP/b43-f3-security.out")" = "PASS B4.3 full disposable security preflight"
+          printf '%s\n' \
+            "PASS B4.3 service_role, anon and authenticated RPC execution denials" \
+            "PASS B4.3 full disposable security preflight" \
+            > "$RUNNER_TEMP/b43-f3-expected.out"
+          cmp -s "$RUNNER_TEMP/b43-f3-expected.out" "$RUNNER_TEMP/b43-f3-security.out"
       - name: Execute all 24 isolated F3 schedules
         if: ${{ !cancelled() && steps.f3_security.outcome == 'success' }}
         timeout-minutes: 14

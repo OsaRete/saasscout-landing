@@ -132,11 +132,23 @@ def preflight():
 
 def security_preflight():
     require_runtime()
-    result = subprocess.run(['node', 'scripts/validation-b43-db.ts', '--security-preflight-only'],
-        capture_output=True, text=True, timeout=240)
-    check(result.returncode == 0 and
-        result.stdout == 'PASS B4.3 full disposable security preflight\n',
-        'full_security_preflight_not_complete')
+
+    result = subprocess.run(
+        ['node', 'scripts/validation-b43-db.ts', '--security-preflight-only'],
+        capture_output=True,
+        text=True,
+        timeout=240
+    )
+
+    expected_output = (
+        'PASS B4.3 service_role, anon and authenticated RPC execution denials\n'
+        'PASS B4.3 full disposable security preflight\n'
+    )
+
+    check(
+        result.returncode == 0 and result.stdout == expected_output,
+        'full_security_preflight_not_complete'
+    )
 
 
 def connect(label, isolation=None):

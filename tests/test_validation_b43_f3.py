@@ -21,6 +21,14 @@ PROJECT = 'saasscout-b43-disposable-aabbccddeeff'
 NETWORK = 'b' * 64
 NODE = shutil.which('node')
 
+# Preserve only Windows OS variables before test isolation clears os.environ.
+WINDOWS_NODE_ENV = {
+    key: value
+    for key, value in os.environ.items()
+    if key.upper() in ('SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'TEMP', 'TMP')
+}
+
+
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts' / (name + '.py'))
@@ -260,7 +268,10 @@ class SecurityTests(unittest.TestCase):
         self.assertLess(job.index('id: f3_security'),job.index('Execute all 24'))
 
     def test_incomplete_failed_or_identity_only_security_results_reject(self):
-        marker='PASS B4.3 full disposable security preflight\n'
+        marker = (
+            'PASS B4.3 service_role, anon and authenticated RPC execution denials\n'
+            'PASS B4.3 full disposable security preflight\n'
+        )
         for stdout,status in [('',0),('PASS B4.3 disposable identity verified before reset\n',0),
                               (marker,1),(marker, None),(marker+'unexpected\n',0)]:
             with self.subTest(stdout=stdout,status=status),patch.object(f3,'require_runtime'), \
@@ -296,7 +307,7 @@ class SecurityTests(unittest.TestCase):
         code+='async function reviewedPrefix(){'+body+'}\n'
         code+="let success=false;try{await reviewedPrefix();success=true;}catch{};globalThis.console.log(JSON.stringify({success,events,logs}));"
         self.assertIsNotNone(NODE)
-        result=subprocess.run([NODE,'--input-type=module'],input=code,capture_output=True,text=True,check=True,timeout=10)
+        result=subprocess.run([NODE,'--input-type=module'],input=code,capture_output=True,text=True,check=True,timeout=10,env=WINDOWS_NODE_ENV.copy() if os.name == 'nt' else {})
         return json.loads(result.stdout)
 
     def test_complete_security_prefix_reuses_every_existing_relevant_gate(self):
