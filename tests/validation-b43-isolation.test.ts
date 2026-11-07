@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,10 @@ import {
   assertIsolatedPath,
   assertProjectId,
   assertPublishedContainerIsExpected,
+  buildRoleBoundaryNegativeControls,
+  buildRoleBoundaryQuery,
+  classifyPostgrestDenial,
+  classifyTrustedCurrentRead,
   B43_API_PORT,
   B43_API_URL,
   B43_DATABASE_PORT,
@@ -20,6 +24,10 @@ import {
   B43_PROJECT_PREFIX,
   B43_SHADOW_PORT,
   expectedB43NetworkName,
+  hasEffectiveRoleIdentity,
+  isExpectedLocalRpcCredential,
+  isTrustedMigrationPrincipalResult,
+  sqlStateDiagnostic,
   type ContainerIdentity,
   type DockerNetworkIdentity,
   type DisposableManifest,
@@ -27,6 +35,195 @@ import {
 
 const projectId = `${B43_PROJECT_PREFIX}a1b2c3d4e5f6`;
 const projectDir = join(tmpdir(), projectId);
+
+test("RPC denial requires structured 42501, null data and HTTP permission status", () => {
+  const denied = { status: 403, data: null, error: { code: "42501", message: "PRIVATE_MESSAGE", details: "PRIVATE_DETAILS" } };
+  assert.equal(classifyPostgrestDenial(denied), "expected_denial");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 401 }), "expected_denial");
+  assert.equal(classifyPostgrestDenial({ status: 200, data: {}, error: null }), "unexpected_success");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 500 }), "unexpected_http_status:500");
+  assert.equal(classifyPostgrestDenial({ ...denied, status: 0 }), "transport_error");
+  assert.equal(classifyPostgrestDenial({ ...denied, error: { code: "42P01", message: "PRIVATE" } }), "unexpected_sqlstate:42P01");
+  assert.equal(classifyPostgrestDenial({ ...denied, error: { code: "PGRST202", message: "PRIVATE" } }), "unexpected_postgrest_error:PGRST202");
+  for (const response of [null, [], {}, { ...denied, status: "403" }, { ...denied, data: [] },
+    { ...denied, error: "42501" }, { ...denied, error: { code: "42501" } }]) {
+    assert.equal(classifyPostgrestDenial(response), "malformed_response");
+  }
+});
+
+test("trusted SQL unavailable control requires postgres identity and exactly P0001", () => {
+  const denied = { status: 1, stdout: "postgres|postgres\n", stderr: "ERROR:  P0001\n" };
+  assert.equal(classifyTrustedCurrentRead(denied, "unavailable"), "expected_denial");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, status: 0, stderr: "" }, "unavailable"), "unexpected_success");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stdout: "postgres|anon\n" }, "unavailable"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stdout: "authenticator|anon\n" }, "unavailable"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stderr: "ERROR:  42501\n" }, "unavailable"), "sqlstate:42501");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, stderr: "PRIVATE_ERROR" }, "unavailable"), "unclassified_sql_error");
+  assert.notEqual(classifyTrustedCurrentRead({ ...denied, stderr: "ERROR: P0001\nMALFORMED_EXTRA_OUTPUT" }, "unavailable"), "expected_denial");
+  assert.notEqual(classifyTrustedCurrentRead({ ...denied, stdout: "postgres|postgres\nEXTRA_ROW\n" }, "unavailable"), "expected_denial");
+  assert.equal(classifyTrustedCurrentRead({ ...denied, status: null }, "unavailable"), "transport_error");
+});
+
+test("trusted SQL success requires an actual complete empty result, never malformed or private data", () => {
+  const result = { status: 0, stdout: 'postgres|postgres\n{"complete":true,"observations":[]}\n', stderr: "" };
+  assert.equal(classifyTrustedCurrentRead(result, "empty"), "expected_success");
+  for (const data of [null, {}, { complete: false, observations: [] }, { complete: true, observations: [{}] },
+    { complete: true, observations: [], privateEvidence: "PRIVATE" }]) {
+    assert.equal(classifyTrustedCurrentRead({ ...result, stdout: `postgres|postgres\n${JSON.stringify(data)}\n` }, "empty"), "malformed_response");
+  }
+  assert.equal(classifyTrustedCurrentRead({ ...result, stdout: "postgres|postgres\nnot-json\n" }, "empty"), "malformed_response");
+  assert.equal(classifyTrustedCurrentRead({ ...result, stderr: "ERROR: PRIVATE_UNCLASSIFIED_ERROR" }, "empty"), "malformed_response");
+  assert.equal(classifyTrustedCurrentRead({ ...result, stdout: result.stdout.replace("postgres|postgres", "postgres|anon") }, "empty"), "wrong_identity");
+  assert.equal(classifyTrustedCurrentRead({ status: 1, stdout: "postgres|postgres\n", stderr: "ERROR: P0001\n" }, "empty"), "sqlstate:P0001");
+  assert.equal(classifyTrustedCurrentRead(undefined, "empty"), "malformed_response");
+});
+
+test("diagnostics contain protocol metadata, never raw private errors", () => {
+  assert.equal(sqlStateDiagnostic("ERROR:  XX000 PRIVATE_TOKEN_AND_EVIDENCE\n"), "sqlstate:XX000");
+  assert.equal(sqlStateDiagnostic("PRIVATE_TOKEN_AND_EVIDENCE"), "unclassified_sql_error");
+  assert.equal(sqlStateDiagnostic("ERROR: P0001\nERROR: XX000\n"), "unclassified_sql_error");
+  const diagnostic = classifyPostgrestDenial({ status: 502, data: null,
+    error: { code: "PRIVATE_TOKEN_AND_EVIDENCE", message: "PRIVATE_TOKEN_AND_EVIDENCE" } });
+  assert.equal(diagnostic, "unexpected_http_status:502");
+});
+
+test("local RPC credential proof rejects wrong role, signature, algorithm and destination", () => {
+  const secret = "synthetic-test-secret";
+  const token = (role: string, alg = "HS256") => {
+    const input = `${Buffer.from(JSON.stringify({ alg })).toString("base64url")}.${Buffer.from(JSON.stringify({ role })).toString("base64url")}`;
+    return `${input}.${createHmac("sha256", secret).update(input).digest("base64url")}`;
+  };
+  for (const role of ["anon", "authenticated", "service_role"]) {
+    assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token(role), secret, role), true);
+  }
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("service_role"), secret, "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("postgres"), secret, "postgres"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("anon"), "wrong-secret", "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential(B43_API_URL, token("anon", "none"), secret, "anon"), false);
+  assert.equal(isExpectedLocalRpcCredential("https://unexpected.invalid", token("anon"), secret, "anon"), false);
+  for (const credential of [null, "", "bad.jwt", "!.!.!", "e30.e30.invalid"]) {
+    assert.equal(isExpectedLocalRpcCredential(B43_API_URL, credential, secret, "anon"), false);
+  }
+});
+
+test("runner separates RPC denials, pre-fixture rejection and post-fixture SQL success", () => {
+  const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  const boundary = runner.slice(runner.indexOf("async function verifyPostgrestExecutionBoundary"), runner.indexOf("function makePsqlProcess"));
+  assert.match(boundary, /expectCurrentReadUnavailable\("missing canonical must fail closed"\)/);
+  assert.doesNotMatch(boundary, /readCurrentEvidence\(/);
+  const run = runner.slice(runner.indexOf("async function run()"));
+  const commit = run.indexOf("commit;");
+  const success = run.indexOf("const direct = readCurrentEvidence()");
+  assert.ok(commit >= 0 && success > commit);
+  assert.doesNotMatch(runner, /readCurrentQualifiedValidationEvidence/);
+  assert.match(runner, /isExpectedLocalRpcCredential\(B43_API_URL, credential, status.JWT_SECRET, role\)/);
+  assert.match(runner, /classifyPostgrestDenial\(response\)/);
+  assert.match(runner, /classifyTrustedCurrentRead\(result, "unavailable"\)/);
+  assert.match(runner, /transport_exception/);
+});
+
+test("effective-role denials require a marker after SET ROLE, not a failed SET ROLE", () => {
+  assert.equal(hasEffectiveRoleIdentity("postgres|anon\n", "anon"), true);
+  assert.equal(hasEffectiveRoleIdentity("postgres|service_role\r\n", "service_role"), true);
+  for (const output of ["", "postgres|postgres\n", "anon|anon\n", "postgres|service_role\n",
+    "postgres|anon|extra\n", "postgres|anon\npostgres|anon\n"]) {
+    assert.equal(hasEffectiveRoleIdentity(output, "anon"), false);
+  }
+});
+
+test("role boundary checks named catalog roles rather than the postgres session", () => {
+  const query = buildRoleBoundaryQuery(["anon", "authenticated", "service_role", "authenticator"], ["postgres"]);
+  assert.match(query, /rolname in \('anon','authenticated','service_role','authenticator'\)/);
+  assert.match(query, /rolname in \('postgres'\)/);
+  assert.match(query, /count\(\*\) from sources\)=4/);
+  assert.match(query, /count\(\*\) from targets\)=1/);
+  for (const privilege of ["SET", "USAGE", "MEMBER"]) {
+    assert.ok(query.includes(`pg_catalog.pg_has_role(s.oid,t.oid,'${privilege}')`));
+  }
+  assert.match(query, /where rolsuper or rolcreaterole/);
+  assert.match(query, /rolbypassrls and rolname<>'service_role'/);
+  assert.match(query, /m.admin_option/);
+  assert.match(query, /pg_catalog.pg_has_role\(s.oid,m.member,'MEMBER'\)/);
+  assert.match(query, /pg_catalog.pg_has_role\(m.roleid,t.oid,'MEMBER'\)/);
+  assert.doesNotMatch(query, /session_user|current_user|set role/i);
+});
+
+test("role boundary refuses empty, duplicate or unsafe role identifiers", () => {
+  for (const names of [[], ["anon", "anon"], [""], ["missing role"], ["anon'; reset role; --"]]) {
+    assert.throws(() => buildRoleBoundaryQuery(names, ["postgres"]));
+    assert.throws(() => buildRoleBoundaryQuery(["anon"], names));
+  }
+});
+
+test("negative controls use real transactional memberships only between unprivileged stand-ins", () => {
+  const controls = buildRoleBoundaryNegativeControls();
+  assert.ok(controls.startsWith("begin;"));
+  assert.ok(controls.endsWith("rollback;"));
+  assert.equal((controls.match(/create role .* nologin nosuperuser nocreaterole nobypassrls;/g) ?? []).length, 3);
+  assert.equal((controls.match(/^\s*savepoint boundary_case;/gm) ?? []).length, 8);
+  assert.equal((controls.match(/rollback to savepoint boundary_case;/g) ?? []).length, 8);
+  assert.equal((controls.match(/is distinct from false/g) ?? []).length, 8);
+  assert.equal((controls.match(/is distinct from true/g) ?? []).length, 9);
+  for (const option of ["set true", "set false", "inherit true", "inherit false", "admin true", "admin false"]) {
+    assert.ok(controls.includes(`with ${option};`));
+  }
+  const grants = controls.split("\n").filter((line) => /^\s*grant /i.test(line));
+  assert.ok(grants.length > 0);
+  for (const grant of grants) {
+    assert.match(grant, /^\s*grant b43_boundary_probe_(?:owner|bridge) to b43_boundary_probe_(?:app|bridge) with (?:set|inherit|admin) (?:true|false);/);
+  }
+  assert.doesNotMatch(controls, /alter role|drop role|grant .* on /);
+});
+
+test("runner replaces the invalid escalation assertion without losing DML or catalog checks", () => {
+  const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  assert.match(runner, /sql\(buildRoleBoundaryQuery\(roles, owners\)\) === "t"/);
+  assert.match(runner, /sql\(buildRoleBoundaryNegativeControls\(\)/);
+  assert.match(runner, /role boundary negative controls did not roll back/);
+  assert.match(runner, /set role anon; set role postgres; select session_user/);
+  assert.doesNotMatch(runner, /expectSqlState\(`set role \$\{role\}; set role postgres;/);
+  assert.match(runner, /alter table public.validation_evidence_source_restrictions disable trigger all/);
+  assert.match(runner, /hasEffectiveRoleIdentity\(result.stdout, effectiveRole\)/);
+  assert.match(runner, /select session_user\|\|'\|'\|\|current_user; truncate public/);
+  assert.match(runner, /union select p.proowner/);
+  assert.match(runner, /union select nspowner/);
+});
+
+test("migration principal accepts the secure PostgreSQL text-cast result", () => {
+  assert.equal(isTrustedMigrationPrincipalResult("postgres|postgres|true|false"), true);
+});
+
+test("migration principal rejects insecure identities and privilege combinations", () => {
+  for (const result of [
+    "service_role|postgres|true|false",
+    "postgres|service_role|true|false",
+    "postgres|postgres|false|false",
+    "postgres|postgres|true|true",
+    "postgres|postgres|false|true",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
+test("migration principal rejects missing, malformed and additional result data", () => {
+  for (const result of [
+    undefined, null, false, 0, {}, [],
+    "", "postgres|postgres", "postgres|postgres|true",
+    "postgres|postgres||false", "postgres|postgres|true|",
+    "postgres|postgres|true|false|unexpected",
+    "postgres|postgres|true|false\npostgres|postgres|true|false",
+    "postgres|postgres|true|false\npostgres|postgres|true|true",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
+test("migration principal rejects unexpected boolean encodings and whitespace", () => {
+  for (const result of [
+    "postgres|postgres|true|f", "postgres|postgres|t|f",
+    "postgres|postgres|TRUE|FALSE", "postgres|postgres|1|0",
+    "postgres|postgres|true|NULL", "postgres|postgres|true|unknown",
+    " postgres|postgres|true|false", "postgres|postgres|true|false ",
+    "postgres|postgres|true|false\n",
+  ]) assert.equal(isTrustedMigrationPrincipalResult(result), false);
+});
+
 const config = `project_id = "${projectId}"
 [api]
 enabled = true
@@ -181,10 +378,39 @@ test("workflow gates B4.3 reset behind manual authorization and network plus ide
   const start = job.indexOf('start --network-id "$NETWORK_ID"');
   const preflight = job.indexOf("node scripts/validation-b43-db.ts --preflight-only");
   const reset = job.indexOf("db reset --local --no-seed");
-  const testRun = job.indexOf("npm run test:validation-b43-db");
+  const testRun = job.indexOf("run: node scripts/validation-b43-db.ts\n");
   assert.ok(networkCreate >= 0 && networkCreate < start && start < preflight && preflight < reset && reset < testRun);
-  assert.equal((job.match(/VALIDATION_B43_DOCKER_NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/g) ?? []).length, 2);
+  const f3Boundary = job.indexOf("      - name: Install F3 diagnostic client");
+  assert.ok(f3Boundary > testRun);
+  assert.equal((job.slice(0, f3Boundary).match(/VALIDATION_B43_DOCKER_NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/g) ?? []).length, 2);
   assert.doesNotMatch(job, /supabase link|--linked|https:\/\/[^\s]+\.supabase\.co/i);
+});
+
+test("reset recreates PostgreSQL on the same verified network used by startup", () => {
+  const workflow = readFileSync(".github/workflows/validation-b31-database.yml", "utf8");
+  const job = workflow.slice(workflow.indexOf("  b43-disposable-database:"));
+  const start = job.slice(job.indexOf("      - name: Start only"), job.indexOf("      - name: Verify container"));
+  const reset = job.slice(job.indexOf("      - name: Reset only"), job.indexOf("      - name: Execute B4.3-B"));
+  for (const step of [start, reset]) {
+    assert.match(step, /PROJECT_DIR: \$\{\{ steps\.disposable\.outputs\.projectDir \}\}/);
+    assert.match(step, /NETWORK_ID: \$\{\{ steps\.network\.outputs\.networkId \}\}/);
+    assert.match(step, /--network-id "\$NETWORK_ID"/);
+    assert.match(step, /--workdir "\$PROJECT_DIR"/);
+  }
+  assert.match(reset, /run: supabase --workdir "\$PROJECT_DIR" --network-id "\$NETWORK_ID" db reset --local --no-seed/);
+});
+
+test("isolated suite preserves setup-cli PATH instead of selecting npm's different CLI", () => {
+  const workflow = readFileSync(".github/workflows/validation-b31-database.yml", "utf8");
+  const job = workflow.slice(workflow.indexOf("  b43-disposable-database:"));
+  assert.match(job, /version: 2\.118\.0/);
+  assert.match(job, /run: node scripts\/validation-b43-db\.ts\n/);
+  assert.doesNotMatch(job, /run: npm run test:validation-b43-db/);
+});
+
+test("a recreated database on the fallback network fails the existing identity boundary", () => {
+  const recreatedDb = { ...db, id: "recreated-db", networkIds: ["fallback-network"] };
+  assert.throws(() => assertContainerIdentity([recreatedDb, api], projectId));
 });
 
 test("database suite contains real privilege, lifecycle, proof, completeness, rollback, and concurrency assertions", () => {
