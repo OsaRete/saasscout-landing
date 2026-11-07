@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """F3 diagnostic: run only after the verified disposable preflight."""
 import concurrent.futures as futures
+from contextlib import contextmanager
 import importlib.util
 import hashlib
 import json
@@ -25,6 +26,12 @@ EVENTS = []
 CONNECTIONS = []
 EVENT_LOCK = threading.Lock()
 CASE = 'setup'
+SETUP_STAGES = frozenset({
+    'runtime_authorization', 'artifact_validation', 'security_preflight',
+    'observer_connection_identity', 'migration_chain', 'fixture_database_empty',
+    'fixture_generation', 'fixture_application',
+})
+
 TITLE = 'Slow reports'
 NORMALIZED = 'slow reports'
 ISOLATIONS = ('READ COMMITTED', 'REPEATABLE READ')
@@ -34,6 +41,26 @@ VARIANTS = ('participant', 'consent', 'session', 'session_cancel', 'experiment',
 
 class DiagnosticFailure(RuntimeError):
     pass
+
+
+class SetupFailure(DiagnosticFailure):
+    pass
+
+
+@contextmanager
+def setup_stage(stage):
+    try:
+        yield
+    except Exception:
+        # Carry only a fixed stage through the actual top-level failure handler.
+        raise SetupFailure(stage) from None
+
+
+def setup_failure_category(error):
+    stage = error.args[0] if isinstance(error, SetupFailure) and len(error.args) == 1 else None
+    return ('setup_' + stage + '_failed'
+            if isinstance(stage, str) and stage in SETUP_STAGES
+            else 'preflight_or_setup_failed')
 
 
 def check(ok, label):
@@ -347,19 +374,29 @@ def race(o, pool, a, b, iso, n, variant):
 
 def main():
     global CASE, CANONICAL, TITLE, NORMALIZED, SHA
-    SHA = require_runtime()
-    artifact_path()
-    security_preflight()
-    o = connect('observer')
-    versions = sorted(p.name[:14] for p in Path('supabase/migrations').glob('*.sql'))
-    check([r[0] for r in execute(o, 'select version::text from supabase_migrations.schema_migrations order by version')] == versions, 'migration_chain')
-    for t in TABLES + ('canonical_problems','validation_subjects','validation_hypotheses','validation_hypothesis_versions','validation_experiments','validation_interview_plan_versions'):
-        check(scalar(o, f'select count(*) from public.{t}') == 0, 'nonempty_fixture_database')
-    check(scalar(o, 'select count(*) from auth.users') == 0, 'nonempty_auth_database')
-    fixture = subprocess.run(['node', '--input-type=module', '-e',
-        "import {readFileSync} from 'node:fs'; import {buildB43Fixture} from './scripts/validation-b43-harness.ts'; process.stdout.write(buildB43Fixture(readFileSync('tests/sql/validation-b31.sql','utf8')));"],
-        check=True, capture_output=True, timeout=15).stdout.decode()
-    check(attempt(o, 'begin;' + fixture + '\ncommit;', 'fixture_setup') == '00000', 'fixture_setup_failed')
+    CASE = 'setup'
+    SHA = ''
+    with setup_stage('runtime_authorization'):
+        SHA = require_runtime()
+    with setup_stage('artifact_validation'):
+        artifact_path()
+    with setup_stage('security_preflight'):
+        security_preflight()
+    with setup_stage('observer_connection_identity'):
+        o = connect('observer')
+    with setup_stage('migration_chain'):
+        versions = sorted(p.name[:14] for p in Path('supabase/migrations').glob('*.sql'))
+        check([r[0] for r in execute(o, 'select version::text from supabase_migrations.schema_migrations order by version')] == versions, 'migration_chain')
+    with setup_stage('fixture_database_empty'):
+        for t in TABLES + ('canonical_problems','validation_subjects','validation_hypotheses','validation_hypothesis_versions','validation_experiments','validation_interview_plan_versions'):
+            check(scalar(o, f'select count(*) from public.{t}') == 0, 'nonempty_fixture_database')
+        check(scalar(o, 'select count(*) from auth.users') == 0, 'nonempty_auth_database')
+    with setup_stage('fixture_generation'):
+        fixture = subprocess.run(['node', '--input-type=module', '-e',
+            "import {readFileSync} from 'node:fs'; import {buildB43Fixture} from './scripts/validation-b43-harness.ts'; process.stdout.write(buildB43Fixture(readFileSync('tests/sql/validation-b31.sql','utf8')));"],
+            check=True, capture_output=True, timeout=15).stdout.decode()
+    with setup_stage('fixture_application'):
+        check(attempt(o, 'begin;' + fixture + '\ncommit;', 'fixture_setup') == '00000', 'fixture_setup_failed')
     failures, n = 0, 20
     for iso in ISOLATIONS:
         for variant in VARIANTS:
@@ -401,9 +438,10 @@ if __name__ == '__main__':
     result = 1
     try:
         result = main()
-    except Exception:
+    except Exception as error:
         try:
-            emit('failure', category='preflight_or_setup_failed')
+            emit('failure', category=setup_failure_category(error)
+                 if isinstance(error, SetupFailure) or CASE == 'setup' else 'schedule_failed')
         except Exception:
             pass  # Never expose the original exception through a logging failure.
     finally:

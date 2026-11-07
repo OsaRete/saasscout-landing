@@ -1,4 +1,5 @@
 """Offline negative controls: no Docker, GitHub writes or database connections."""
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -90,7 +91,7 @@ class SecurityTests(unittest.TestCase):
 
     def test_missing_optin_never_runs_preflight_or_connect(self):
         with patch.object(f3,'security_preflight') as preflight, patch.object(f3,'connect') as connect:
-            with self.assertRaises(ValueError): f3.main()
+            with self.assertRaises(f3.SetupFailure): f3.main()
             preflight.assert_not_called(); connect.assert_not_called()
 
     def test_wrong_destination_rejected_before_cli(self):
@@ -332,6 +333,106 @@ class SecurityTests(unittest.TestCase):
         conflicting=self.security_prefix(['--preflight-only','--security-preflight-only'])
         self.assertFalse(conflicting['success'])
         self.assertEqual(conflicting['events'],[])
+
+    def test_setup_diagnostics_only_export_allowlisted_stage_categories(self):
+        for stage in f3.SETUP_STAGES:
+            self.assertEqual(f3.setup_failure_category(f3.SetupFailure(stage)),
+                             'setup_' + stage + '_failed')
+        for stage in ('PRIVATE_SENTINEL', '', None, [], {}):
+            self.assertEqual(f3.setup_failure_category(f3.SetupFailure(stage)),
+                             'preflight_or_setup_failed')
+        self.assertEqual(f3.setup_failure_category(RuntimeError('PRIVATE_SENTINEL')),
+                         'preflight_or_setup_failed')
+
+    def test_setup_stage_is_local_to_each_exception_and_thread(self):
+        barrier = f3.threading.Barrier(2)
+        def fail(stage):
+            try:
+                with f3.setup_stage(stage):
+                    barrier.wait(timeout=5)
+                    raise RuntimeError('PRIVATE_SENTINEL')
+            except f3.SetupFailure as error:
+                return error
+        with f3.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            errors = list(pool.map(fail, ('runtime_authorization', 'fixture_application')))
+        self.assertEqual([f3.setup_failure_category(e) for e in errors],
+            ['setup_runtime_authorization_failed', 'setup_fixture_application_failed'])
+        self.assertFalse(hasattr(f3, 'SETUP_STAGE'))
+
+    def test_actual_top_level_artifact_path_for_all_setup_stages(self):
+        # Execute the checked-in __main__ body, including sys.exit and finally.
+        # Only external setup operations are mocked; no SQL or database is used.
+        source = ROOT / 'scripts/validation-b43-f3.py'
+        entry = ast.parse(source.read_text()).body[-1]
+        self.assertIsInstance(entry, ast.If)
+        code = compile(ast.Module(body=entry.body, type_ignores=[]), str(source), 'exec')
+        versions = sorted(p.name[:14] for p in (ROOT / 'supabase/migrations').glob('*.sql'))
+        stages = ('fixture_application', 'runtime_authorization', 'artifact_validation',
+                  'security_preflight', 'observer_connection_identity', 'migration_chain',
+                  'fixture_database_empty', 'fixture_generation')
+        for stage in stages:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as root, \
+                 patch.dict(os.environ, RUNNER_TEMP=root,
+                            F3_ARTIFACT=str(Path(root) / 'b43-f3-diagnostic.json')), \
+                 patch.object(f3, 'require_runtime', return_value=SHA) as runtime, \
+                 patch.object(f3, 'artifact_path', wraps=f3.artifact_path) as artifact, \
+                 patch.object(f3, 'security_preflight') as security, \
+                 patch.object(f3, 'connect') as connect, \
+                 patch.object(f3, 'execute', return_value=[(v,) for v in versions]) as execute, \
+                 patch.object(f3, 'scalar', return_value=0) as scalar, \
+                 patch.object(f3.subprocess, 'run', return_value=SimpleNamespace(stdout=b'')) as child, \
+                 patch.object(f3, 'attempt', return_value='00000') as attempt, \
+                 patch.object(f3, 'preflight') as schedule_preflight, \
+                 patch.object(f3, 'cycle') as cycle, patch.object(f3, 'race') as race, \
+                 patch('sys.stdout', new_callable=io.StringIO) as stdout, \
+                 patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                f3.EVENTS.clear()
+                f3.CONNECTIONS.clear()
+                f3.CASE = 'stale_prior_schedule'
+                f3.SHA = 'b' * 40
+                failure = RuntimeError('PRIVATE_SENTINEL')
+                mocks = dict(runtime_authorization=runtime, security_preflight=security,
+                    observer_connection_identity=connect, migration_chain=execute,
+                    fixture_database_empty=scalar, fixture_generation=child,
+                    fixture_application=attempt)
+                if stage == 'artifact_validation':
+                    # First validation fails; handler/finalizer may safely write.
+                    artifact.side_effect = [failure, Path(root) / 'b43-f3-diagnostic.json',
+                                             Path(root) / 'b43-f3-diagnostic.json']
+                else:
+                    mocks[stage].side_effect = failure
+                with self.assertRaises(SystemExit) as exit_status:
+                    exec(code, f3.__dict__)
+                self.assertEqual(exit_status.exception.code, 1)
+                text = (Path(root) / 'b43-f3-diagnostic.json').read_text()
+                data = json.loads(text)
+                self.assertEqual(data['events'], [{'kind': 'failure', 'case': 'setup',
+                    'category': 'setup_' + stage + '_failed'}])
+                self.assertFalse(data['success'])
+                self.assertTrue(data['attempted'])
+                self.assertFalse(data['deadlock_freedom_proven'])
+                self.assertEqual(data['source_sha'], '' if stage == 'runtime_authorization' else SHA)
+                self.assertNotIn('PRIVATE_SENTINEL', text + stdout.getvalue() + stderr.getvalue())
+                self.assertEqual(stdout.getvalue() + stderr.getvalue(), '')
+                schedule_preflight.assert_not_called()
+                cycle.assert_not_called()
+                race.assert_not_called()
+
+    def test_cli_failure_artifact_is_sanitized_and_unsuccessful(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / 'b43-f3-diagnostic.json'
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/validation-b43-f3.py')],
+                env={'RUNNER_TEMP': root, 'F3_ARTIFACT': str(target),
+                     'F3_EXPECTED_SHA': 'PRIVATE_SENTINEL'},
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout + result.stderr, '')
+            data = json.loads(target.read_text())
+            self.assertFalse(data['success'])
+            self.assertFalse(data['deadlock_freedom_proven'])
+            self.assertEqual(data['events'], [{'kind': 'failure', 'case': 'setup',
+                'category': 'setup_runtime_authorization_failed'}])
+            self.assertNotIn('PRIVATE_SENTINEL', target.read_text())
 
     def test_twenty_four_unique_cases(self):
         self.assertEqual(len({(i,v) for i in f3.ISOLATIONS for v in f3.VARIANTS}),24)

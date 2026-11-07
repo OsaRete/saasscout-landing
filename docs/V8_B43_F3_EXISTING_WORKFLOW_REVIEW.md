@@ -206,3 +206,50 @@ failures remain required. Broader multi-experiment/opposite multirow schedules a
 production current-reader activation remain separate unresolved gates. These finite
 tests cannot prove universal deadlock freedom. No push, merge, dispatch or production
 access occurred while preparing this remediation.
+
+
+## Run #44 setup diagnostic follow-up (local, unpublished)
+
+Live Run 42207363033 (#44), attempt 1, used reviewed HEAD
+`aab1b820985bd9888f9ba36dd20b6a9b6b602e48`. Independent B3.1/B4.2 and
+B4.3 suites, Draft reauthorization, reset, and workflow full security preflight
+passed; the F3 execution step failed. The supplied sanitized artifact records
+only setup failure and no observer session. It does not establish which setup
+check failed. Root cause remains unconfirmed; no speculative behavioral fix.
+
+The Python consumer retains the exact two-line stdout/zero-exit contract and
+captures stderr separately. MODULE_TYPELESS_PACKAGE_JSON warnings also appear
+on successful Node invocations and do not establish a fatal failure. The repeated
+full security preflight remains mandatory. Observer connection checks precede its
+session event; migration-chain and fixture checks follow that event.
+
+This follow-up only labels setup failures with a fixed allowlist: runtime
+authorization, artifact validation, repeated full security preflight, observer
+connection/identity, migration chain, empty fixture database, fixture generation,
+and fixture application. Each stage is carried by its own scoped setup exception,
+not mutable module-global stage state. Main entry resets case and source SHA;
+setup labels cannot leak from earlier invocations. Schedule workers do not set
+setup stages. The existing harness otherwise remains a single-invocation CLI,
+not a reentrant concurrent runner. Unknown stages retain the generic category. No raw
+exception, stderr, SQL or database data is copied into diagnostics. All original
+checks, schedule behavior, failure exit status, final artifact handling, and
+identity-scoped workflow cleanup remain unchanged.
+
+A separately authorized isolated diagnostic execution is justified after review
+and separately authorized publication of this local change. No push, dispatch or
+database operation was performed for this follow-up. The 24 schedules and final
+concurrency disposition remain unverified; merge and production migration remain
+NO-GO. Passing finite schedules cannot prove general deadlock freedom.
+
+The combined observer connection/identity category intentionally identifies a
+stage, not a verified cause: client import, connection, runtime recheck and
+identity assertions can fail before a session event. Splitting it without observed
+failure evidence would add precision unsupported by Run #44.
+
+Offline tests execute the actual checked-in top-level exception handler, final
+artifact write and SystemExit for all eight injected setup failures. They verify
+exact categories, unsuccessful exit/artifact, no schedules, no private sentinel
+output, and reset of stale case/source SHA. A synchronized two-thread test checks
+stage independence. Artifact-validation coverage injects a first-call failure
+while allowing safe final writes; persistent unsafe/unwritable artifact paths
+still fail closed and may prevent an artifact from being produced.
