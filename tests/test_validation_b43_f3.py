@@ -117,6 +117,42 @@ class SecurityTests(unittest.TestCase):
                 self.assertNotIn('begin',execute.call_args.args[1])
                 self.assertEqual(client.connect.call_args.kwargs['hostaddr'],'127.0.0.1')
 
+    def test_observer_uses_fixed_connection_options_without_a_service(self):
+        c = SimpleNamespace(info=SimpleNamespace(backend_pid=101))
+        client = SimpleNamespace(connect=Mock(return_value=c))
+        with patch.dict(sys.modules, psycopg=client), patch.object(f3, 'require_runtime') as runtime, \
+             patch.dict(os.environ, F3_CLUSTER_ID='123'), \
+             patch.object(f3, 'execute', return_value=[('postgres', 'postgres', 'postgres', 5432, '123')]), \
+             patch.object(f3, 'scalar', return_value='170005'):
+            self.assertIs(f3.connect('observer'), c)
+            runtime.assert_called_once_with()
+            client.connect.assert_called_once_with(f3.DB, hostaddr='127.0.0.1', sslmode='disable',
+                autocommit=True, connect_timeout=3, application_name='b43_f3_observer',
+                options='-c statement_timeout=12000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=20000')
+            self.assertEqual(f3.EVENTS, [{'kind': 'session', 'case': 'setup',
+                                        'label': 'observer', 'pid': 101}])
+
+    def test_real_driver_empty_service_is_not_a_disable_switch_offline(self):
+        try:
+            import psycopg
+        except ImportError:
+            self.skipTest('pinned psycopg binary driver not installed')
+        self.assertEqual(psycopg.__version__, '3.2.10')
+        # Intentionally invalid SSL/address options prevent any DB connection.
+        # Private service files are not consulted: use controlled empty files.
+        with tempfile.TemporaryDirectory() as root:
+            service = Path(root) / 'pg_service.conf'
+            service.write_text('')
+            with patch.dict(os.environ, PGSERVICEFILE=str(service), PGSYSCONFDIR=root):
+                options = dict(hostaddr='invalid-numeric-address',
+                               sslmode='invalid-offline-probe-mode', connect_timeout=1)
+                for kwargs, expected in [({**options, 'service': ''},
+                                         'definition of service "" not found'),
+                                        (options, 'invalid sslmode value')]:
+                    with self.assertRaises(psycopg.OperationalError) as raised:
+                        psycopg.connect(**kwargs)
+                    self.assertIn(expected, str(raised.exception))
+
     def test_sanitized_sqlstate_excludes_driver_message(self):
         class Error(Exception): sqlstate='40P01'
         c=SimpleNamespace(info=SimpleNamespace(backend_pid=101))

@@ -181,7 +181,7 @@ def security_preflight():
 def connect(label, isolation=None):
     require_runtime()
     import psycopg
-    c = psycopg.connect(DB, hostaddr='127.0.0.1', service='', sslmode='disable',
+    c = psycopg.connect(DB, hostaddr='127.0.0.1', sslmode='disable',
         autocommit=True, connect_timeout=3,
         application_name='b43_f3_' + label,
         options='-c statement_timeout=12000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=20000')

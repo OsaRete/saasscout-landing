@@ -253,3 +253,56 @@ output, and reset of stale case/source SHA. A synchronized two-thread test check
 stage independence. Artifact-validation coverage injects a first-call failure
 while allowing safe final writes; persistent unsafe/unwritable artifact paths
 still fail closed and may prevent an artifact from being produced.
+
+
+## Run #46 observer connection investigation (local, unpublished)
+
+Run 42365104700 (#46), attempt 1, used reviewed commit
+`93ca15a01ea879c3338ee29b37e2528873f2a2b2`. Live job records confirm the
+independent B3.1/B4.2 and B4.3 suites, pinned-driver installation/import, Draft
+reauthorization, reset, workflow security preflight and cleanup passed. The
+supplied artifact records `setup_observer_connection_identity_failed` without a
+session event. The Python repeated full preflight precedes this stage and thus
+returned successfully. No F3 schedule completion is established.
+
+A client configuration defect is reproduced offline with the exact pinned
+psycopg 3.2.10/binary 3.2.10 packages (bundled libpq 17.5): `service=''` selects
+an empty service name; it does not disable service lookup. Upstream PostgreSQL
+REL_17_5 `src/interfaces/libpq/fe-connect.c`, parseServiceInfo(), skips lookup
+only for a NULL service. With no matching empty-name definition it rejects
+connection options before establishing a connection, authenticating, configuring
+the session or executing identity SQL. A deliberately invalid SSL option with
+no service instead reaches SSL-option validation. Offline syscall tracing showed
+only local name-service-cache probes, no IP or database connection attempts.
+No raw driver exception is copied into runtime diagnostics.
+
+The Node harness invokes host `psql` for SQL and Supabase JS for PostgREST; it is
+not a Node PostgreSQL-driver equivalent of the psycopg connection. Its fixed DSN
+matches Python's host/port/database/login but supplies no service name. Run #46
+used psql 16.15. Python explicitly disables SSL on the already verified IPv4
+loopback destination; psql uses libpq defaults. This change does not alter SSL.
+The server port assertion is 5432 inside PostgreSQL, distinct from host port
+55432; tuple/string result types and PostgreSQL-major assertion remain intact.
+
+The minimal correction removes only the explicit empty service argument.
+require_runtime() already rejects every PG* variable, including PGSERVICE and
+PGSERVICEFILE, before driver use. With no service selected, libpq does not load a
+service definition. The fixed DSN, hostaddr, timeouts, startup options, driver
+pins, authentication, cluster/principal/database/port/version assertions,
+preflights and bounded cleanup are unchanged. Focused tests assert the exact
+observer connection options and reproduce the local option-parsing distinction
+with invalid SSL/address options and controlled empty service files. The real
+driver test requires the workflow-pinned packages; it skips when unavailable.
+
+The service-option defect is source-proven and reproducible, but the historical
+artifact does not expose the underlying exception: exclusive attribution of
+Run #46 to this defect remains unconfirmed. Other connection/authentication,
+startup-option, identity-query or version failures remain possible after this
+blocker is removed. The successful pinned import step makes a persistent import
+failure less likely; it is not proof of observer session success. The Node
+MODULE_TYPELESS_PACKAGE_JSON warning is not established as causal.
+
+A separately authorized isolated run is justified after review and publication.
+No commit, push, dispatch, database connection, migration or production change
+was performed during this investigation. Full F3 completion, concurrency risk
+and deadlock disposition remain open; merge and production migration are NO-GO.
