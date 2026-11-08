@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig-b43-rpc.json",
+  "include": [
+    "../lib/knowledge/observation-store.ts",
+    "../lib/validation/server/repository.ts",
+    "../scripts/validation-b43-f4-preparation.ts",
+    "../scripts/validation-b43-f4-rpc.ts",
+    "observation-store.test.ts",
+    "knowledge-dual-writer.test.ts",
+    "validation-b43-rpc-adapters.test.ts",
+    "validation-b43-f4-preparation.test.ts"
+  ]
+}

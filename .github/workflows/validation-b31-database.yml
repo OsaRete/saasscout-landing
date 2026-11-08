@@ -105,6 +105,12 @@ jobs:
           F3_RESET_AUTHORIZED: ${{ inputs.authorize_disposable_reset }}
           F3_EXPECTED_SHA: ${{ inputs.expected_b43_sha }}
         run: python3 scripts/validation-b43-f3-authorize.py --dispatch-check
+      - name: Refuse fenced schema in historical database entrypoint
+        run: |
+          if test -e supabase/migrations/20261107000000_b43_executable_concurrency_contract.sql; then
+            echo "Historical database suites require an unfenced source revision; use the separately reviewed F4 workflow for this chain." >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -160,6 +166,12 @@ jobs:
           set -euo pipefail
           python3 scripts/validation-b43-f3-authorize.py --dispatch-check
           test "$(docker context inspect --format '{{.Endpoints.docker.Host}}')" = unix:///var/run/docker.sock
+      - name: Refuse fenced schema in historical database entrypoint
+        run: |
+          if test -e supabase/migrations/20261107000000_b43_executable_concurrency_contract.sql; then
+            echo "Historical database suites require an unfenced source revision; use the separately reviewed F4 workflow for this chain." >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22

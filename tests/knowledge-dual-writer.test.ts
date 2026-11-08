@@ -121,7 +121,7 @@ describe("Knowledge Evolution dual writer", () => {
   it("passes the Supabase client dependency to Knowledge Evolution persistence", async () => {
     let receivedClient = false;
     const client = {
-      from() {
+      rpc() {
         throw new Error("client dependency should only be passed to the custom writer");
       },
     };

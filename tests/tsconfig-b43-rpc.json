@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "target": "ES2022", "incremental": false, "noEmit": true },
+  "include": [
+    "../lib/knowledge/observation-store.ts",
+    "../lib/validation/server/repository.ts",
+    "observation-store.test.ts",
+    "knowledge-dual-writer.test.ts",
+    "validation-b43-rpc-adapters.test.ts"
+  ],
+  "exclude": ["../node_modules"]
+}

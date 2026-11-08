@@ -1,0 +1,94 @@
+{
+  "observations": [
+    {
+      "id": "b0000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "subject_id": "30000000-0000-0000-0000-000000000201",
+      "hypothesis_id": "40000000-0000-0000-0000-000000000201",
+      "hypothesis_version_id": "50000000-0000-0000-0000-000000000201",
+      "experiment_id": "60000000-0000-0000-0000-000000000201",
+      "experiment_version_id": "70000000-0000-0000-0000-000000000201",
+      "participant_id": "90000000-0000-0000-0000-000000000201",
+      "interview_session_id": "a0000000-0000-0000-0000-000000000201",
+      "origin": "human_interview",
+      "modality": "interview_observation",
+      "source_type": "customer_interview",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "observation_content": {
+        "content": "Synthetic human report",
+        "statementKind": "summary"
+      },
+      "participant_independence_key": null
+    }
+  ],
+  "classifications": [
+    {
+      "id": "c0000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "observation_id": "b0000000-0000-0000-0000-000000000201",
+      "polarity": "supporting",
+      "classification_source": "user_supplied",
+      "authority_status": "authoritative",
+      "supersedes_classification_id": null
+    }
+  ],
+  "subjects": [
+    {
+      "id": "30000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "label": "F4 reports 201"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "50000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "subject_id": "30000000-0000-0000-0000-000000000201",
+      "hypothesis_id": "40000000-0000-0000-0000-000000000201",
+      "problem_claim": "F4 reports 201"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "70000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "subject_id": "30000000-0000-0000-0000-000000000201",
+      "hypothesis_id": "40000000-0000-0000-0000-000000000201",
+      "hypothesis_version_id": "50000000-0000-0000-0000-000000000201",
+      "experiment_id": "60000000-0000-0000-0000-000000000201",
+      "experiment_version_id": "70000000-0000-0000-0000-000000000201",
+      "family": "customer_interview",
+      "lifecycle": "running"
+    }
+  ],
+  "participants": [
+    {
+      "id": "90000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "status": "active"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "a0000000-0000-0000-0000-000000000201",
+      "owner_id": "10000000-0000-0000-0000-000000000001",
+      "subject_id": "30000000-0000-0000-0000-000000000201",
+      "hypothesis_id": "40000000-0000-0000-0000-000000000201",
+      "hypothesis_version_id": "50000000-0000-0000-0000-000000000201",
+      "experiment_id": "60000000-0000-0000-0000-000000000201",
+      "experiment_version_id": "70000000-0000-0000-0000-000000000201",
+      "participant_id": "90000000-0000-0000-0000-000000000201",
+      "status": "in_progress",
+      "participant_relevance": "target_segment_match"
+    }
+  ],
+  "canonicalProblems": [
+    {
+      "id": "20000000-0000-0000-0000-000000000201",
+      "canonical_title": "F4 reports 201",
+      "normalized_title": "f4 reports 201",
+      "status": "active"
+    }
+  ],
+  "aliases": []
+}

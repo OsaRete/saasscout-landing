@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""F3 diagnostic: run only after the verified disposable preflight."""
+"""Historical F3 interleavings, retained from cdfa204 for regression evidence.
+
+Not a fenced-transaction acceptance runner. F4 replaces its stale retry loops.
+This entrypoint refuses a B2.2 schema; use validation-b43-f4.py after review.
+"""
 import concurrent.futures as futures
 from contextlib import contextmanager
 import importlib.util
@@ -12,6 +16,10 @@ import subprocess
 import sys
 import time
 import threading
+
+# Reviewed-source checks include untracked files. Dynamic local imports must not
+# create their own __pycache__ files immediately before that check.
+sys.dont_write_bytecode = True
 
 # The reviewed dispatch revision includes this test-only patch. The inspected
 # parent was 08302eb99ed76b0682975b1442381885ba641314; never hard-code it as
@@ -287,24 +295,9 @@ def cycle(o, pool, a, b, n, variant):
     emit('check', label='rollback_complete', passed=True, both_edges_observed=both_edges)
     check('40P01' in (code, other_code), 'cycle_not_reproduced')
     check(set((code, other_code)) <= {'00000', '40P01'}, 'cycle_unexpected_sqlstate')
-    # Retry entire intended A transaction, including its first command. Roll back
-    # after assertions so subsequent schedules start from the same baseline.
-    for _ in range(3):
-        execute(a, 'begin isolation level ' + iso)
-        retry_code = attempt(a, pre + ';' + asql, 'whole_A_transaction_retry')
-        if retry_code == '00000':
-            break
-        execute(a, 'rollback')
-        check(retry_code in ('40P01', '40001'), 'retry_nonretryable_state')
-    check(retry_code == '00000', 'retry_exhausted')
-    if variant in ('participant', 'consent', 'cross_command'):
-        check(scalar(a, f"select count(*)=1 from public.validation_evidence_source_restrictions where scope_id='{uid('9', n)}' and reason_code='participant_withdrawn'"), 'retry_exactly_once')
-    execute(a, 'rollback')
-    check(digest(o) == before, 'retry_rollback_changed_rows')
-    execute(b, 'begin isolation level ' + iso)
-    check(attempt(b, bsql, 'whole_B_transaction_retry') == '00000', 'B_retry_failed')
-    execute(b, 'rollback')
-    check(digest(o) == before, 'B_retry_rollback_changed_rows')
+    # Do not recycle pre/asql/bsql as retry preparation. These inversion
+    # interleavings are historical evidence, not supported fenced transactions.
+    emit('check', label='historical_retry_replaced_by_f4_attempt_factory', passed=True)
 
 
 def race(o, pool, a, b, iso, n, variant):
@@ -332,21 +325,9 @@ def race(o, pool, a, b, iso, n, variant):
     if code != '00000':
         execute(b, 'rollback')
         check(code in ('40001', '23514'), 'race_unexpected_sqlstate')
-        if code == '40001':
-            # Whole transaction retry: begin, coordinate, recompute fresh RPC args.
-            for _ in range(3):
-                execute(b, 'begin isolation level ' + iso)
-                code = attempt(b, second, 'race_whole_transaction_retry')
-                if code == '00000':
-                    code = attempt(b, 'commit', 'race_retry_commit')
-                    if code == '00000':
-                        break
-                    execute(b, 'rollback')
-                execute(b, 'rollback')
-                if code == '23514':
-                    break
-                check(code == '40001', 'race_retry_state')
-            check(code != '40001' or variant == 'classify_promote', 'race_retry_exhausted')
+        # No replay of the previously prepared `second` command. The F4
+        # attempt factory owns current retry/qualification acceptance.
+        emit('check', label='historical_retry_not_executed', passed=True)
     if variant == 'rpc_restore':
         check(code == '00000', 'restore_failed')
         check(scalar(o, f"select status='active' from public.validation_participants where id='{uid('9', n)}'"), 'restore_state')
@@ -364,7 +345,7 @@ def race(o, pool, a, b, iso, n, variant):
         check(count == (1 if variant == 'promote_classify' else 0), 'promotion_ledger_count')
         check(scalar(o, f"select count(*) from public.validation_evidence_consumption_authority a join public.validation_evidence_promotions p on p.id=a.promotion_id where p.observation_id='{uid('b', n)}' and a.authority_state='withheld'") == count, 'promotion_authority_count')
         if variant == 'promote_classify':
-            check(scalar(o, f"select count(*)=1 from public.validation_evidence_source_restrictions where contribution_observation_id='{uid('b', n)}' and reason_code='classification_superseded'"), 'classification_capture')
+            check(scalar(o, f"select count(*)=1 from public.validation_evidence_source_restrictions where purpose_id='qualified_validation_shared_evidence' and reason_code='classification_superseded' and scope_kind='classification' and scope_id='{uid('c', n)}' and owner_id='{OWNER}' and contribution_observation_id is null"), 'classification_capture')
         if variant == 'promote_classify':
             check(attempt(o, f"select public.validation_b43_read_current_evidence('{CANONICAL}')", 'reader_after_supersession') == 'P0001', 'reader_supersession_not_fail_closed')
         else:
@@ -372,11 +353,17 @@ def race(o, pool, a, b, iso, n, variant):
     emit('check', label='race_postconditions', passed=True)
 
 
+def require_legacy_schema(c):
+    check(scalar(c, "select to_regclass('saasscout_private.b43_coordination') is null") is True,
+          'historical_f3_not_supported_on_fenced_schema')
+
+
 def main():
     global CASE, CANONICAL, TITLE, NORMALIZED, SHA
     CASE = 'setup'
     SHA = ''
     with setup_stage('runtime_authorization'):
+        check('F4_AUTHORIZED' not in os.environ, 'historical_f3_requires_separate_binding')
         SHA = require_runtime()
     with setup_stage('artifact_validation'):
         artifact_path()
@@ -385,6 +372,7 @@ def main():
     with setup_stage('observer_connection_identity'):
         o = connect('observer')
     with setup_stage('migration_chain'):
+        require_legacy_schema(o)
         versions = sorted(p.name[:14] for p in Path('supabase/migrations').glob('*.sql'))
         check([r[0] for r in execute(o, 'select version::text from supabase_migrations.schema_migrations order by version')] == versions, 'migration_chain')
     with setup_stage('fixture_database_empty'):

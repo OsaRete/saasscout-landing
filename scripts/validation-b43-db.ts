@@ -415,11 +415,17 @@ function verifyApplicationRoleEscalationDenied(): void {
       alter table public.validation_evidence_source_restrictions disable trigger all;`,
     "42501", `${role} trigger tampering`, role);
   }
-  expectSqlState(`insert into public.validation_evidence_consumption_authority(
+  // Trusted disposable negative fixture, not an application direct-DML path.
+  // On F4 the statement guard must admit entry before the authority CHECK can
+  // reject this deliberately invalid row. Preserve the historical probe too.
+  const authorityProbeEntry = sql("select to_regprocedure('saasscout_private.b43_enter()') is not null") === "t"
+    ? "begin; select saasscout_private.b43_enter();" : "begin;";
+  expectSqlState(`${authorityProbeEntry}
+    insert into public.validation_evidence_consumption_authority(
       purpose_id,promotion_id,owner_id,problem_observation_id,canonical_problem_id,promotion_fingerprint,projection_version,authority_state)
     values('qualified_validation_shared_evidence','00000000-0000-0000-0000-000000000001',
       '00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',
-      '00000000-0000-0000-0000-000000000004',repeat('0',64),'v8-b3.1-projection.1','active')`,
+      '00000000-0000-0000-0000-000000000004',repeat('0',64),'v8-b3.1-projection.1','active'); rollback;`,
     "23514", "positive authority forgery");
 }
 

@@ -1,4 +1,4 @@
-"""Read-only authorization for F3 through the existing B4.3 workflow."""
+"""Read-only, separately bound F3/F4 disposable workflow authorization."""
 import json
 import os
 from pathlib import Path
@@ -10,6 +10,7 @@ import urllib.request
 REPO = 'OsaRete/saasscout-landing'
 BRANCH = 'codex/b43-c1-source-transition-integrity'
 WORKFLOW = '.github/workflows/validation-b31-database.yml'
+F4_WORKFLOW = '.github/workflows/validation-b43-f4-disposable.yml'
 
 
 def require(ok):
@@ -23,7 +24,13 @@ def context(env, f3_required=True):
     require(env.get('GITHUB_REPOSITORY') == REPO)
     require(env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch')
     require(env.get('GITHUB_REF') == 'refs/heads/' + BRANCH)
-    require(env.get('GITHUB_WORKFLOW_REF') == REPO + '/' + WORKFLOW + '@refs/heads/' + BRANCH)
+    f4 = env.get('F4_AUTHORIZED') == 'true'
+    workflow = F4_WORKFLOW if f4 else WORKFLOW
+    require(env.get('GITHUB_WORKFLOW_REF') == REPO + '/' + workflow + '@refs/heads/' + BRANCH)
+    if f4:
+        require(env.get('F4_EXPECTED_SHA') == expected and env.get('F3_AUTHORIZED') == 'true')
+    else:
+        require('F4_AUTHORIZED' not in env and 'F4_EXPECTED_SHA' not in env)
     require(expected == env.get('GITHUB_SHA') == env.get('GITHUB_WORKFLOW_SHA'))
     require(env.get('F3_RESET_AUTHORIZED') == 'true')
     require(env.get('F3_AUTHORIZED') in ('true', 'false'))
@@ -49,6 +56,45 @@ def local_revision(expected):
     result = subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True, timeout=10)
     require(result.stdout.strip() == expected)
     subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], check=True, capture_output=True, text=True, timeout=10)
+    # Tracked-tree cleanliness alone would accept an unreviewed migration or
+    # imported harness module placed in an untracked file.
+    status = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=all'],
+                            check=True, capture_output=True, text=True, timeout=10)
+    require(status.stdout == '')
+
+
+def verify_f4_inventory():
+    """Inventory is part of the exact clean Git revision, never caller-selected."""
+    inventory = json.loads(Path('docs/V8_B43_F4_C1_EXECUTION_INVENTORY.json').read_text())
+    paths = inventory['required_files']
+    require(paths == sorted(set(paths)))
+    require(all(re.fullmatch(r'[A-Za-z0-9_./-]+', p) and '..' not in p.split('/') for p in paths))
+    migrations = sorted(str(p) for p in Path('supabase/migrations').glob('*.sql'))
+    require(migrations and migrations[-1] == inventory['terminal_migration'])
+    require(inventory['migration_files'] == migrations)
+    paths = sorted(set(paths + migrations))
+    tracked = subprocess.run(['git', 'ls-files', '--stage', '--', *paths], check=True,
+                             capture_output=True, text=True, timeout=10).stdout.splitlines()
+    entries = {}
+    for line in tracked:
+        metadata, name = line.split('\t')
+        mode, oid, stage = metadata.split()
+        require(mode in ('100644', '100755') and stage == '0')
+        entries[name] = oid
+    require(sorted(entries) == paths)
+    import hashlib
+    for name in paths:
+        path = Path(name)
+        require(not path.is_symlink() and path.is_file())
+        data = path.read_bytes()
+        # SHA-1 Git blobs, not a plain file digest; no subprocess interprets paths.
+        require(hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest() == entries[name])
+    # A clean status can hide ignored executable input. Fresh npm dependencies
+    # are outside these source roots and are pinned separately by package-lock.
+    ignored = subprocess.run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
+                              'scripts', 'lib', 'tests', 'supabase', '.github', 'docs'], check=True,
+                             capture_output=True, text=True, timeout=10).stdout.splitlines()
+    require(not any(Path(p).suffix in ('.py', '.ts', '.mjs', '.js', '.sql', '.json', '.toml', '.yml', '.yaml') for p in ignored))
 
 
 def boolean_input(value):
@@ -62,7 +108,11 @@ def main(dispatch_check=False):
     with Path(os.environ['GITHUB_EVENT_PATH']).open() as handle:
         event = json.load(handle)
     require(boolean_input(event.get('inputs', {}).get('authorize_disposable_reset')))
-    f3_input = event.get('inputs', {}).get('authorize_f3', 'false')
+    f4 = os.environ.get('F4_AUTHORIZED') == 'true'
+    if f4:
+        require('authorize_f3' not in event.get('inputs', {}))
+        verify_f4_inventory()
+    f3_input = event.get('inputs', {}).get('authorize_f4' if f4 else 'authorize_f3', 'false')
     f3_requested = boolean_input(f3_input)
     require(('true' if f3_requested else 'false') == os.environ['F3_AUTHORIZED'])
     if not dispatch_check:

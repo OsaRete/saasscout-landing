@@ -98,9 +98,9 @@ class SecurityTests(unittest.TestCase):
         with patch.dict(os.environ,{**env(), 'VALIDATION_B43_DISPOSABLE':'1',
             'VALIDATION_B43_DATABASE_URL':'postgresql://prod.invalid/postgres',
             'F3_SOURCE_SHA':SHA,'F3_CLUSTER_ID':'123'}), patch('subprocess.run') as run:
-            run.return_value.stdout=SHA+'\n'
+            run.side_effect=[SimpleNamespace(stdout=SHA+'\n'),SimpleNamespace(stdout=''),SimpleNamespace(stdout='')]
             with self.assertRaises(f3.DiagnosticFailure): f3.require_runtime()
-            self.assertEqual(run.call_count,2)  # Read-only HEAD and tracked-tree checks only.
+            self.assertEqual(run.call_count,3)  # Read-only HEAD, tracked and untracked checks.
             self.assertEqual(run.call_args_list[0].args[0],['git','rev-parse','HEAD'])
             self.assertEqual(run.call_args_list[1].args[0],['git','diff','--quiet','HEAD','--'])
 
@@ -414,6 +414,7 @@ class SecurityTests(unittest.TestCase):
                  patch.object(f3, 'artifact_path', wraps=f3.artifact_path) as artifact, \
                  patch.object(f3, 'security_preflight') as security, \
                  patch.object(f3, 'connect') as connect, \
+                 patch.object(f3, 'require_legacy_schema'), \
                  patch.object(f3, 'execute', return_value=[(v,) for v in versions]) as execute, \
                  patch.object(f3, 'scalar', return_value=0) as scalar, \
                  patch.object(f3.subprocess, 'run', return_value=SimpleNamespace(stdout=b'')) as child, \

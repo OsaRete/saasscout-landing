@@ -6,11 +6,8 @@ import {
 } from "./problem-observations.ts";
 
 export type ProblemObservationPersistenceClient = {
-  from(table: "problem_observations"): {
-    upsert(rows: ProblemObservationRow[], options: { onConflict: string; ignoreDuplicates: boolean }): {
-      select(columns: string): PromiseLike<{ data?: Array<{ observation_fingerprint?: string | null }> | null; error?: unknown; count?: number | null }>;
-    };
-  };
+  rpc(name: "knowledge_insert_problem_observations", args: { p_rows: ProblemObservationRow[] }):
+    PromiseLike<{ data?: Array<{ observation_fingerprint?: string | null }> | null; error?: unknown; count?: number | null }>;
 };
 
 export type ProblemObservationRow = {
@@ -165,10 +162,7 @@ export async function persistProblemObservations(
   }
 
   try {
-    const result = await client
-      .from("problem_observations")
-      .upsert(rows, { onConflict: "observation_fingerprint", ignoreDuplicates: true })
-      .select("observation_fingerprint");
+    const result = await client.rpc("knowledge_insert_problem_observations", { p_rows: rows });
 
     if (result.error) {
       persistenceErrors.push(messageFor(result.error));
