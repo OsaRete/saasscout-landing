@@ -42,22 +42,13 @@ const input = (overrides: Partial<ProblemObservationInput> = {}): ProblemObserva
 });
 
 function clientMock({ inserted = 1, error = null }: { inserted?: number; error?: unknown } = {}) {
-  const calls: Array<{ table: string; rows: ProblemObservationRow[]; options: { onConflict: string; ignoreDuplicates: boolean }; columns: string }> = [];
+  const calls: Array<{ name: string; rows: ProblemObservationRow[] }> = [];
   const client: ProblemObservationPersistenceClient = {
-    from(table) {
-      assert.equal(table, "problem_observations");
+    async rpc(name, { p_rows: rows }) {
+      calls.push({ name, rows });
       return {
-        upsert(rows, options) {
-          return {
-            async select(columns) {
-              calls.push({ table, rows, options, columns });
-              return {
-                data: error ? null : rows.slice(0, inserted).map((row) => ({ observation_fingerprint: row.observation_fingerprint })),
-                error,
-              };
-            },
-          };
-        },
+        data: error ? null : rows.slice(0, inserted).map((row) => ({ observation_fingerprint: row.observation_fingerprint })),
+        error,
       };
     },
   };
@@ -83,9 +74,8 @@ describe("problem observation store", () => {
     const result = await persistProblemObservations(client, [input()]);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].table, "problem_observations");
-    assert.deepEqual(calls[0].options, { onConflict: "observation_fingerprint", ignoreDuplicates: true });
-    assert.equal(calls[0].columns, "observation_fingerprint");
+    assert.equal(calls[0].name, "knowledge_insert_problem_observations");
+    assert.deepEqual(calls[0].rows, result.rows);
     assert.equal(result.diagnostics.attempted_observation_count, 1);
     assert.equal(result.diagnostics.inserted_count, 1);
     assert.equal(result.diagnostics.failed_count, 0);

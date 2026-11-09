@@ -3,12 +3,38 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import { readCurrentQualifiedValidationEvidence } from "../lib/validation/promotion/current-qualified-evidence-reader.ts";
+import { classifyPostgrestDenial } from "../scripts/validation-b43-isolation.ts";
 
 const canonical = "11111111-1111-4111-8111-111111111111";
 const privateMarker = "PRIVATE_B43_MARKER";
 const migrationPath = "supabase/migrations/20261030000000_b43_current_evidence_authority.sql";
 const migration = readFileSync(migrationPath, "utf8");
 const databaseRunner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+
+test("denial classifier handles real SDK error envelopes without accepting success or broken responses", async () => {
+  const cases = [
+    { status: 403, body: { code: "42501", message: privateMarker, details: null, hint: null }, expected: "expected_denial" },
+    { status: 401, body: { code: "42501", message: privateMarker }, expected: "expected_denial" },
+    { status: 200, body: { complete: true, observations: [] }, expected: "unexpected_success" },
+    { status: 500, body: { code: "XX000", message: privateMarker }, expected: "unexpected_sqlstate:XX000" },
+    { status: 403, body: { code: "42501" }, expected: "malformed_response" },
+  ];
+  for (const fixture of cases) {
+    const client = createClient("http://127.0.0.1:55431", "synthetic-test-key", {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async () => new Response(JSON.stringify(fixture.body), { status: fixture.status }) },
+    });
+    const response = await client.rpc("validation_b43_read_current_evidence", { p_canonical_problem_id: canonical });
+    const diagnostic = classifyPostgrestDenial(response);
+    assert.equal(diagnostic, fixture.expected);
+    assert.ok(!diagnostic.includes(privateMarker));
+  }
+  const client = createClient("http://127.0.0.1:55431", "synthetic-test-key", {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async () => { throw new Error(privateMarker); } },
+  });
+  assert.equal(classifyPostgrestDenial(await client.rpc("validation_b43_read_current_evidence")), "transport_error");
+});
 
 function mockRpc(data: unknown, fail = false) {
   const requests: Array<{ url: URL; method: string; body: unknown }> = [];
@@ -103,7 +129,7 @@ test("migration uses only the postgres principal and provisions no roles or memb
   assert.equal((migration.match(/revoke all on function public\.validation_b43_/gi) ?? []).length, 11);
   assert.match(databaseRunner, /session_user\|\|'\|'\|\|current_user/i);
   assert.match(databaseRunner, /rolbypassrls/i);
-  assert.match(databaseRunner, /not pg_has_role\(r\.rolname,'postgres','SET'\)/i);
+  assert.match(databaseRunner, /sql\(buildRoleBoundaryQuery\(roles, owners\)\) === "t"/);
   assert.match(databaseRunner, /p\.proowner='postgres'::regrole/i);
   assert.match(databaseRunner, /not has_function_privilege\('service_role',p\.oid/i);
   assert.match(databaseRunner, /not has_function_privilege\('anon',p\.oid/i);
