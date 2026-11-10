@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
-import { readTrustedQualifiedValidationEvidence } from "../lib/validation/promotion/trusted-qualified-evidence-reader.ts";
+import { deferredAlgorithmModule } from "./support/validation-module.ts";
+import { createValidationDatabaseFixtures } from "./support/validation-database-fixtures.ts";
+const { readTrustedQualifiedValidationEvidence } = deferredAlgorithmModule("lib/validation/promotion/trusted-qualified-evidence-reader.ts") as typeof import("../lib/validation/promotion/trusted-qualified-evidence-reader.ts");
 
 type Row = Record<string, unknown>;
 const canonicalId = "11111111-1111-4111-8111-111111111111";
@@ -69,9 +71,9 @@ function fixture(value: "supporting" | "contradicting" | "mixed" = "supporting")
   } };
 }
 
-function databaseResponse(data: unknown, options: { status?: number; throws?: boolean; count?: number; omitCount?: boolean } = {}) {
+function databaseResponse(data: unknown, options: { status?: number; throws?: boolean; count?: number; omitCount?: boolean } = {}, url = "https://mock-database.invalid") {
   const requests: { url: URL; method: string; body: unknown; prefer: string | null }[] = [];
-  const db = createClient("https://mock-database.invalid", "mock-service-role", {
+  const db = createClient(url, "mock-service-role", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: {
       fetch: async (input, init) => {
@@ -89,6 +91,28 @@ function databaseResponse(data: unknown, options: { status?: number; throws?: bo
   });
   return { db, requests };
 }
+
+test("both acceptance profiles preserve the production algorithm's nonempty proof contract", async () => {
+  for (const profile of ["B42", "B43"] as const) {
+    const url = profile === "B42" ? "http://127.0.0.1:54321" : "http://127.0.0.1:55431";
+    for (const polarity of ["supporting", "contradicting", "mixed"] as const) {
+      const row = fixture(polarity);
+      const { db } = databaseResponse([row], {}, url); // Mock fetch only; no network.
+      const adapter = createValidationDatabaseFixtures(profile, [db]);
+      const actual = await adapter.readTrustedQualifiedValidationEvidence(canonicalId, db);
+      assert.deepEqual(actual, await readTrustedQualifiedValidationEvidence(canonicalId, db));
+      assert.equal(actual.observations.length, 1);
+      assert.equal(actual.observations[0].evidence_polarity, polarity);
+      const corrupted = fixture(polarity);
+      corrupted.snapshot.source_evidence = "different attested statement";
+      const broken = databaseResponse([corrupted], {}, url);
+      const rejectingAdapter = createValidationDatabaseFixtures(profile, [broken.db]);
+      await assert.rejects(rejectingAdapter.readTrustedQualifiedValidationEvidence(canonicalId, broken.db), {
+        message: "trusted_qualified_evidence_read_failed",
+      });
+    }
+  }
+});
 
 test("valid persisted B3.1 linkage returns only the sanitized allowlist", async () => {
   const row = fixture();

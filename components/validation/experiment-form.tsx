@@ -1,5 +1,6 @@
 "use client";
 
+import { useValidationCapabilities } from "./release-capabilities";
 import { useRef, useState } from "react";
 import {
   Button,
@@ -27,8 +28,9 @@ export function ExperimentForm({
   onDone: (handoff: PlanDraftHandoff | null) => void;
   onCancel: () => void;
 }) {
+  const capabilities = useValidationCapabilities();
   const [family, setFamily] = useState<"customer_interview" | "survey">(
-    "customer_interview",
+    capabilities.privateInterviews ? "customer_interview" : "survey",
   );
   const [audience, setAudience] = useState("");
   const [method, setMethod] = useState("");
@@ -155,13 +157,15 @@ export function ExperimentForm({
     <form onSubmit={submit} className={`${card} grid gap-5`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-xl font-semibold">Create experiment shell</h3>
-        <Button
-          variant="secondary"
-          onClick={generateDraft}
-          disabled={aiBusy || busy}
-        >
-          {aiBusy ? "Generating one draft…" : "Design experiment with AI"}
-        </Button>
+        {capabilities.privateAiDesign && (
+          <Button
+            variant="secondary"
+            onClick={generateDraft}
+            disabled={aiBusy || busy}
+          >
+            {aiBusy ? "Generating one draft…" : "Design experiment with AI"}
+          </Button>
+        )}
       </div>
       <p className="text-xs text-slate-500">
         Optional. Each click requests one draft. Applying it never creates or
@@ -175,8 +179,12 @@ export function ExperimentForm({
           value={family}
           onChange={(event) => setFamily(event.target.value as typeof family)}
         >
-          <option value="customer_interview">Customer Interview</option>
-          <option value="survey">Survey</option>
+          {capabilities.privateInterviews && (
+            <option value="customer_interview">Customer Interview</option>
+          )}
+          {capabilities.privateSurveys && (
+            <option value="survey">Survey</option>
+          )}
         </SelectInput>
       </Field>
       <div className="rounded-xl bg-white/[.035] p-4 text-sm text-slate-400">

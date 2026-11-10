@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 import OpenAI from "openai";
 import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
@@ -38,6 +39,7 @@ export class ValidationIntelligenceService {
     private completion?: (snapshot: EvidenceSnapshot) => Promise<unknown>,
   ) {}
   async snapshot(ownerId: string, subjectId: string) {
+    assertValidationOperation("ai.status","GET");
     const subjectResult = await this.db
       .from("validation_subjects")
       .select("id,label")
@@ -144,6 +146,7 @@ export class ValidationIntelligenceService {
     return { snapshot, hash };
   }
   async status(ownerId: string, subjectId: string) {
+    assertValidationOperation("ai.status","GET");
     const current = await this.snapshot(ownerId, subjectId);
     const runs = await this.db
       .from("validation_intelligence_runs")
@@ -174,6 +177,7 @@ export class ValidationIntelligenceService {
     };
   }
   async analyze(ownerId: string, subjectId: string) {
+    assertValidationOperation("ai.analyze","POST");
     event("validation_intelligence_requested", { ownerId, subjectId });
     const current = await this.snapshot(ownerId, subjectId);
     if (!current)

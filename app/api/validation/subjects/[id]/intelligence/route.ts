@@ -1,3 +1,4 @@
+import { validationAdmission } from "@/lib/validation/server/release-policy";
 import { AuthError, requireUser } from "@/app/api/_utils/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server-admin";
 import { ValidationIntelligenceService } from "@/lib/validation/intelligence/service";
@@ -54,11 +55,20 @@ export async function GET(
   request: Request,
   context: RouteContext<"/api/validation/subjects/[id]/intelligence">,
 ) {
+  const denied = validationAdmission("ai.status", request.method);
+  if (denied) return denied;
+
   return handle(request, (await context.params).id, false);
 }
 export async function POST(
   request: Request,
   context: RouteContext<"/api/validation/subjects/[id]/intelligence">,
 ) {
+  const denied = validationAdmission("ai.analyze", request.method);
+  if (denied) return denied;
+
   return handle(request, (await context.params).id, true);
 }
+
+// Explicitly deny alternate methods; do not rely on framework defaults.
+export { validationDisabledResponse as HEAD, validationDisabledResponse as PUT, validationDisabledResponse as PATCH, validationDisabledResponse as DELETE, validationDisabledResponse as OPTIONS } from "@/lib/validation/server/release-policy";

@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 
 import {
@@ -112,8 +113,10 @@ async function readAll(
  * It intentionally exposes no mutation method.
  */
 export async function readValidationPromotionRows(
-  db: SupabaseAdminClient = createSupabaseAdminClient(),
+  db?: SupabaseAdminClient,
 ): Promise<PersistedPromotionRows> {
+  assertValidationOperation("shared.prepare", "POST");
+  db ??= createSupabaseAdminClient();
   const entries = await Promise.all(
     Object.entries(projections).map(
       async ([key, [table, columns]]) =>
@@ -150,8 +153,10 @@ export async function readValidationPromotionRows(
 export async function readValidationPromotionRowsForOwner(
   ownerId: string,
   observationId: string,
-  db: SupabaseAdminClient = createSupabaseAdminClient(),
+  db?: SupabaseAdminClient,
 ): Promise<PersistedPromotionRows | null> {
+  assertValidationOperation("shared.prepare", "POST");
+  db ??= createSupabaseAdminClient();
   const target = await db
     .from("validation_evidence_observations")
     .select("id")

@@ -10,6 +10,7 @@ import {
   assertDedicatedNetworkIdentity,
   assertDisposableConfig,
   assertIsolatedPath,
+  assertMigrationPrincipal,
   assertProjectId,
   assertPublishedContainerIsExpected,
   B43_API_PORT,
@@ -24,6 +25,42 @@ import {
   type DockerNetworkIdentity,
   type DisposableManifest,
 } from "../scripts/validation-b43-isolation.ts";
+
+test("migration principal accepts the exact PostgreSQL boolean::text contract", () => {
+  assert.doesNotThrow(() => assertMigrationPrincipal("postgres|postgres|true|false"));
+});
+for (const [index, raw] of [
+  undefined, null, true, false, {}, [], "", "postgres|postgres|t|f",
+  "postgres|postgres|true|f", "postgres|postgres|false|false",
+  "postgres|postgres|false|true",
+  "postgres|postgres|true|true", "postgres|postgres|TRUE|FALSE",
+  "postgres|postgres|1|0", "postgres|postgres|true|unknown",
+  "postgres|postgres|true|", "postgres|postgres|true",
+  "postgres|postgres|true|false|extra", "postgres|postgres|true|false\nextra-row",
+  "postgres|postgres|true|false\n", " postgres|postgres|true|false",
+  "postgres|postgres|true|false ", "service_role|postgres|true|false",
+  "postgres|service_role|true|false", "private-sentinel|postgres|true|false",
+].entries()) {
+  test(`migration principal rejects malformed/unsafe contract case ${index}`, () => {
+    let advanced = false;
+    assert.throws(() => {
+      assertMigrationPrincipal(raw);
+      advanced = true;
+    }, { message: "B43 migration principal identity or privileges invalid" });
+    assert.equal(advanced, false);
+  });
+}
+test("runner validates explicit text casts before preflight completion", () => {
+  const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  const start = runner.indexOf("function verifyDisposableIdentity()");
+  const end = runner.indexOf("function sqlRaw(", start);
+  const preflight = runner.slice(start, end);
+  assert.match(preflight, /rolbypassrls::text/);
+  assert.match(preflight, /\)\)\)\)::text/);
+  assert.ok(preflight.indexOf("assertMigrationPrincipal(principal)") > preflight.indexOf("const principal = sql("));
+  assert.ok(preflight.indexOf("assertMigrationPrincipal(principal)") < preflight.indexOf("return { projectId"));
+  assert.doesNotMatch(preflight, /applicationCanAssumePrincipal === "f"/);
+});
 
 const projectId = `${B43_PROJECT_PREFIX}a1b2c3d4e5f6`;
 const projectDir = join(tmpdir(), projectId);
@@ -191,7 +228,7 @@ test("database suite contains real privilege, lifecycle, proof, completeness, ro
   const runner = readFileSync("scripts/validation-b43-db.ts", "utf8");
   for (const assertion of [
     "has_table_privilege", "has_function_privilege", "pg_has_role", "relforcerowsecurity",
-    "expectPostgrestPermissionDenied", "session_cancelled", "canonical_merged",
+    "assertPostgrestPermissionDenied", "session_cancelled", "canonical_merged",
     "unsupported schema version", "candidate population overflow", "b43_authority_rejection_hits",
     "pg_stat_activity", "readTrustedQualifiedValidationEvidence",
   ]) assert.ok(runner.includes(assertion), `missing integration assertion: ${assertion}`);

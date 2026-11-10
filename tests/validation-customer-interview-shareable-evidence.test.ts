@@ -93,10 +93,10 @@ test("shareable record is allowlisted and cannot copy private context or caller 
   assert.doesNotMatch([migration,serviceSource,repositorySource,ui].join("\n"),/openrouter|openai|embedding|generateText|generateObject/i);
 });
 
-test("UI distinguishes optional private and reviewed shareable evidence without claiming publication",()=>{
-  for(const text of ["Private observation content","Shareable evidence statement (optional)","reviewed this exact statement","Leaving it empty","not published or promoted"])assert.ok(ui.toLowerCase().includes(text.toLowerCase()));
-  assert.match(ui,/maxLength=\{500\}/);assert.match(ui,/reviewedForSharedEvidenceUse:shareableReviewed/);
-  assert.doesNotMatch(ui,/ownerId|owner_id|participantId|canonicalProblemId/);
+test("Beta UI records private observations without shared-use preparation",()=>{
+  assert.match(ui,/Private observation content/);
+  assert.doesNotMatch(ui,/Shareable evidence statement|shareableEvidence:|reviewedForSharedEvidenceUse|ownerId|owner_id|canonicalProblemId/);
+  assert.match(serviceSource,/assertValidationOperation\("shared.prepare"\)/);
 });
 
 test("persisted camel-case summary and direct quote retain representative semantics",()=>{
@@ -139,9 +139,8 @@ test("observation save gives bounded pending feedback, prevents double submissio
   const catchStart=ui.indexOf("catch (cause)");const finallyStart=ui.indexOf("finally",catchStart);assert.doesNotMatch(ui.slice(catchStart,finallyStart),/setContent|setShareableStatement|pendingCommand\.current = null/);assert.match(ui,/finally[\s\S]+setSaving\(false\)/);
 });
 
-test("success resets every observation-specific field while statement edits revoke approval",()=>{
-  for(const reset of ['setContent("")','setCategory("other")','setKind("summary")','setPolarity("")','setShareableStatement("")','setShareableReviewed(false)'])assert.ok(ui.includes(reset),`missing ${reset}`);
-  assert.match(ui,/setShareableStatement\(event\.target\.value\);\s+setShareableReviewed\(false\)/);
+test("success resets every remaining private observation field",()=>{
+  for(const reset of ['setContent("")','setCategory("other")','setKind("summary")','setPolarity("")'])assert.ok(ui.includes(reset),`missing ${reset}`);
 });
 
 test("idempotency conflict mapping is bounded and non-idempotency database faults are not mislabeled",()=>{

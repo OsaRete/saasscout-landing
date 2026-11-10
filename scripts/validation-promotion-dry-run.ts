@@ -1,8 +1,11 @@
+import { assertValidationOperation } from "../lib/validation/server/release-policy.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { readValidationPromotionRows } from "../lib/validation/promotion/read-repository.ts";
 import { buildValidationPromotionDryRunReport } from "../lib/validation/promotion/report.ts";
+
+assertValidationOperation("shared.prepare");
 
 const outputPath = resolve(process.cwd(), "artifacts/validation-promotion-dry-run.json");
 const report = buildValidationPromotionDryRunReport(await readValidationPromotionRows());

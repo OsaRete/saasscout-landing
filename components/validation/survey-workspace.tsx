@@ -1,4 +1,5 @@
 "use client";
+import { useValidationCapabilities } from "./release-capabilities";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
@@ -69,6 +70,7 @@ export function SurveyWorkspace({
   suggestedQuestions?: SuggestedQuestion[];
   onSuggestionsDone: () => void;
 }) {
+  const capabilities = useValidationCapabilities();
   const current = [...plans].sort(
       (a, b) => b.version_number - a.version_number,
     )[0],
@@ -234,6 +236,11 @@ export function SurveyWorkspace({
                 <p role="alert" className="mt-2 text-xs text-amber-200">
                   This will replace your edited question draft. Select replace
                   to confirm.
+                </p>
+              )}
+              {!capabilities.publicSurveyParticipation && (
+                <p className="mt-2 text-sm text-slate-400">
+                  Public participation is unavailable in this release.
                 </p>
               )}
               <div className="mt-3 flex gap-2">
@@ -458,9 +465,11 @@ export function SurveyWorkspace({
           {publication ? "Published" : "Unpublished or closed"}
         </p>
         <div className="mt-3 flex gap-2">
-          {current && !publication && (
-            <Button onClick={publish}>Publish public link</Button>
-          )}
+          {capabilities.publicSurveyParticipation &&
+            current &&
+            !publication && (
+              <Button onClick={publish}>Publish public link</Button>
+            )}
           {publication && (
             <Button variant="destructive" onClick={revoke}>
               Revoke link

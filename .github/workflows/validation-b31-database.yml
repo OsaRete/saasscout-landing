@@ -10,13 +10,24 @@ on:
       - "scripts/validation-b42-db.ts"
       - "scripts/validation-b43-db.ts"
       - "scripts/validation-b43-isolation.ts"
+      - "scripts/validation-acceptance-contracts.ts"
       - "scripts/prepare-validation-b43-disposable.ts"
       - "tests/qualified-evidence-integrity.test.ts"
       - "tests/current-qualified-evidence-reader.test.ts"
       - "tests/validation-b43-isolation.test.ts"
+      - "tests/validation-acceptance-contracts.test.ts"
       - "lib/validation/promotion/**"
+      - "lib/knowledge/deduplication/helpers.ts"
       - "lib/supabase/server-admin.ts"
       - "tests/trusted-qualified-evidence-reader.test.ts"
+      - "tests/support/validation-database-fixtures.ts"
+      - "tests/support/validation-database-fixtures.manifest.json"
+      - "tests/support/validation-module.ts"
+      - "tests/validation-database-fixtures.test.ts"
+      - "tests/validation-body-limit.test.ts"
+      - "tests/validation-release-boundary.test.ts"
+      - "tests/validation-capability-resources.test.ts"
+      - "lib/validation/server/**"
       - "docs/V8_B43_A_CURRENT_EVIDENCE_AUTHORITY_CONTRACT.md"
       - "docs/V8_B43_B_CURRENT_EVIDENCE_SAFETY_FOUNDATION.md"
       - "docs/V8_B43_B_DISPOSABLE_DATABASE_VALIDATION.md"
@@ -44,7 +55,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Execute TypeScript regression and isolation tests without a database
-        run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts
+        run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts tests/validation-database-fixtures.test.ts tests/validation-body-limit.test.ts tests/validation-release-boundary.test.ts tests/validation-capability-resources.test.ts tests/validation-acceptance-contracts.test.ts
       - name: Lint B4.3 TypeScript boundary and tests
         run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
       - name: Type-check B4.3 test infrastructure without emitting files
@@ -64,22 +75,27 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: 2.118.0
+      - name: Select and verify the exact acceptance CLI
+        run: |
+          VALIDATION_SUPABASE_CLI="$(command -v supabase)"
+          export VALIDATION_SUPABASE_CLI
+          node --experimental-strip-types --input-type=module -e 'import { acceptanceSupabaseCli } from "./scripts/validation-acceptance-contracts.ts"; console.log("VALIDATION_SUPABASE_CLI=" + acceptanceSupabaseCli(process.env.VALIDATION_SUPABASE_CLI));' >> "$GITHUB_ENV"
       - name: Verify disposable tooling
         run: |
-          supabase --version
+          "$VALIDATION_SUPABASE_CLI" --version
           docker --version
           psql --version
       - name: Start disposable Supabase
-        run: supabase start
+        run: '"$VALIDATION_SUPABASE_CLI" start'
       - name: Apply complete migration chain
-        run: supabase db reset --local --no-seed
+        run: '"$VALIDATION_SUPABASE_CLI" db reset --local --no-seed'
       - name: Execute mandatory B3.1 PostgreSQL suite
         env:
           VALIDATION_B31_DB_REQUIRED: "1"
           VALIDATION_B31_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npm run test:validation-b31-db
       - name: Reset disposable database for independent B4.2-B1 suite
-        run: supabase db reset --local --no-seed
+        run: '"$VALIDATION_SUPABASE_CLI" db reset --local --no-seed'
       - name: Execute mandatory B4.2-B1 PostgreSQL and PostgREST suite
         env:
           VALIDATION_B42_DISPOSABLE: "1"
@@ -100,9 +116,14 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: 2.118.0
+      - name: Select and verify the exact acceptance CLI
+        run: |
+          VALIDATION_SUPABASE_CLI="$(command -v supabase)"
+          export VALIDATION_SUPABASE_CLI
+          node --experimental-strip-types --input-type=module -e 'import { acceptanceSupabaseCli } from "./scripts/validation-acceptance-contracts.ts"; console.log("VALIDATION_SUPABASE_CLI=" + acceptanceSupabaseCli(process.env.VALIDATION_SUPABASE_CLI));' >> "$GITHUB_ENV"
       - name: Verify disposable tooling
         run: |
-          supabase --version
+          "$VALIDATION_SUPABASE_CLI" --version
           docker --version
           psql --version
       - name: Prepare isolated disposable project outside the repository
@@ -141,7 +162,7 @@ jobs:
         env:
           PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
           NETWORK_ID: ${{ steps.network.outputs.networkId }}
-        run: supabase --workdir "$PROJECT_DIR" start --network-id "$NETWORK_ID"
+        run: '"$VALIDATION_SUPABASE_CLI" --workdir "$PROJECT_DIR" start --network-id "$NETWORK_ID"'
       - name: Verify container and PostgreSQL identity before reset
         env:
           VALIDATION_B43_DISPOSABLE: "1"
@@ -154,7 +175,7 @@ jobs:
       - name: Reset only the newly generated disposable project
         env:
           PROJECT_DIR: ${{ steps.disposable.outputs.projectDir }}
-        run: supabase --workdir "$PROJECT_DIR" db reset --local --no-seed
+        run: '"$VALIDATION_SUPABASE_CLI" --workdir "$PROJECT_DIR" db reset --local --no-seed'
       - name: Execute B4.3-B PostgreSQL and PostgREST suite
         env:
           VALIDATION_B43_DISPOSABLE: "1"

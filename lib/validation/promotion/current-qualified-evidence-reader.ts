@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 
 import {
@@ -60,6 +61,7 @@ export async function readCurrentQualifiedValidationEvidence(
   canonicalProblemId: string,
   db?: SupabaseAdminClient,
 ): Promise<CurrentQualifiedValidationEvidenceResult> {
+  assertValidationOperation("shared.consume", "GET");
   if (!UUID.test(canonicalProblemId)) {
     throw new Error("current_qualified_evidence_invalid_canonical_id");
   }

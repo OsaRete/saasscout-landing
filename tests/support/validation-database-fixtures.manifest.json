@@ -1,0 +1,14 @@
+{
+  "lib/knowledge/deduplication/helpers.ts": "cf7f0cc07a64512be397e2aba9888aed66bef069e57fd0b4c606238ae05550dd",
+  "lib/validation/promotion/canonical-resolution.ts": "1b2f5306904cb23a7ae1fc954267889dd9b845e5b82b919329bd0806f83e9e39",
+  "lib/validation/promotion/eligibility.ts": "2098dc5050399ca15298a7f5aee0d47f742ab14c974f8a7f99a6ff71728081aa",
+  "lib/validation/promotion/preparation.ts": "5140a7b28f6f9a07fc5e97f023797eba42935b9a9bc27ee1f4157b6d55f9c527",
+  "lib/validation/promotion/promotion-service.ts": "743acb24051f81da8c453eac2dcb6813cbb1baca0b2980786a9e0984bbdc9773",
+  "lib/validation/promotion/read-repository.ts": "f7e582220984617d93f436b525b3af342abebf974269b1f2c5ea9ffcc3d52d29",
+  "lib/validation/promotion/representative-selection.ts": "9440ce25fdcc16de73959c26dc0945e84b47bd9154c240eb54d05afbc0c28aee",
+  "lib/validation/promotion/trusted-qualified-evidence-reader.ts": "dbce9bca0e0faa1b95f565f80632ce00a4eb52ac2da6c88ac8dcf6229cd311ed",
+  "lib/validation/promotion/types.ts": "efc6745719579222f836af6a11196fddf15868da50c0e8244478cacf2a932e0b",
+  "lib/validation/server/contracts.ts": "b2faa0cb1d6fee283ce2b05bf6ebfa9ce05e512b3fbe5790c41344103b9694be",
+  "tests/support/validation-database-fixtures.ts": "59b5294b957d3f09d876be042bfb5d60706e0da5c3ee21b543c0e2c0385c1d60",
+  "tests/support/validation-module.ts": "48326e782bd6d9b36543198ef37928c68f2295d01be533fd30d9c468501c79f1"
+}

@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -174,6 +175,7 @@ export async function readTrustedQualifiedValidationEvidence(
   canonicalProblemId: string,
   db?: SupabaseAdminClient,
 ): Promise<TrustedQualifiedValidationEvidenceResult> {
+  assertValidationOperation("shared.consume", "GET");
   if (!uuid(canonicalProblemId)) {
     throw new Error("trusted_qualified_evidence_invalid_canonical_id");
   }

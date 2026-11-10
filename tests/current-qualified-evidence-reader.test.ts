@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
-import { readCurrentQualifiedValidationEvidence } from "../lib/validation/promotion/current-qualified-evidence-reader.ts";
+import { deferredAlgorithmModule } from "./support/validation-module.ts";
+const { readCurrentQualifiedValidationEvidence } = deferredAlgorithmModule("lib/validation/promotion/current-qualified-evidence-reader.ts") as typeof import("../lib/validation/promotion/current-qualified-evidence-reader.ts");
 
 const canonical = "11111111-1111-4111-8111-111111111111";
 const privateMarker = "PRIVATE_B43_MARKER";

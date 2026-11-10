@@ -11,6 +11,19 @@ export const B43_DATABASE_PORT = 55432;
 export const B43_SHADOW_PORT = 55430;
 export const B43_MANIFEST_NAME = ".b43-disposable-identity.json";
 
+/** Exact output of the runner's psql -A -t concatenation with boolean::text.
+ * Native psql boolean columns may use t/f; explicit casts here use true/false.
+ * Do not trim, coerce truthiness, accept extra rows, or expose the raw result.
+ */
+export function assertMigrationPrincipal(raw: unknown): void {
+  if (typeof raw !== "string") throw new Error("B43 migration principal identity or privileges invalid");
+  const fields = raw.split("|");
+  if (fields.length !== 4 || fields[0] !== "postgres" || fields[1] !== "postgres" ||
+      fields[2] !== "true" || fields[3] !== "false") {
+    throw new Error("B43 migration principal identity or privileges invalid");
+  }
+}
+
 export type DisposableManifest = Readonly<{
   schemaVersion: 2;
   projectId: string;

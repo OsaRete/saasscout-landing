@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 import OpenAI from "openai";
 import type { SupabaseAdminClient } from "@/lib/supabase/server-admin";
@@ -127,6 +128,7 @@ class OpenRouterValidationDesignProvider implements Provider {
     context: ValidationDesignContext;
     founderInput: ValidationDesignIntent["draftInput"];
   }): Promise<string> {
+    assertValidationOperation("ai.design","POST");
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey)
       throw new ValidationDesignError("provider_configuration_missing", 503);
@@ -190,6 +192,7 @@ export class ValidationDesignService {
     ownerId: string,
     intent: ValidationDesignIntent,
   ): Promise<ValidationDesignDraft> {
+    assertValidationOperation("ai.design", "POST");
     const subjectResult = await this.db
       .from("validation_subjects")
       .select("id,label,context_snapshot")
