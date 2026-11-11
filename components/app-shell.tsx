@@ -68,7 +68,8 @@ export default function AppShell({ children, active }: { children: ReactNode; ac
   const modeControlRef = useRef<HTMLDivElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
-  const inWorkspace = workspaceRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  const publicLanding = pathname.startsWith("/validation/landing/");
+  const inWorkspace = !publicLanding && workspaceRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSidebarMode(readStoredMode()), 0);

@@ -49,7 +49,7 @@ export async function ownedValidationVersion(
   db: SupabaseAdminClient,
   ownerId: string,
   id: string,
-  family?: "customer_interview" | "survey",
+  family?: "customer_interview" | "survey" | "landing_waitlist",
 ): Promise<Row> {
   const row = await ownedValidationResource(
     db,
@@ -80,7 +80,7 @@ export async function ownedValidationExperiment(
   db: SupabaseAdminClient,
   ownerId: string,
   id: string,
-  family?: "customer_interview" | "survey",
+  family?: "customer_interview" | "survey" | "landing_waitlist",
 ): Promise<void> {
   await ownedValidationResource(
     db,

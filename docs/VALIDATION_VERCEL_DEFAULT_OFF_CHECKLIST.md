@@ -137,3 +137,19 @@ Record the operator, timestamp, artifact ID, approved action and sanitized outco
 None of these operational checks or configuration actions has been performed by
 this local amendment. The remaining gate is the completed owner record, not a new
 application implementation or a request for unrelated infrastructure.
+
+## Beta PR 3 additions — still default-off
+
+Include `VALIDATION_PRIVATE_LANDING_PAGES` and
+`VALIDATION_PUBLIC_LANDING_PAGES` in the same per-scope/override/artifact checks;
+require DISABLED until separate owner approval. Missing values deny admission.
+Public landing admission additionally requires an admitted existing private mode,
+private landing authoring and a stable server-only
+`VALIDATION_LANDING_COOKIE_SECRET` (at least 32 characters). Record presence only,
+never its value. Public surveys retain their independent existing switch.
+Include `/validation/landing/<synthetic-token>`,
+`/api/public/validation/landing/**`, and `/api/validation/landing-pages/**` in
+route/recovery verification. Exact migration, isolated acceptance, retention,
+trusted proxy and later activation steps are in
+[Validation Landing Pages](VALIDATION_LANDING_PAGES.md). This appendix performs
+no hosting/configuration action and does not satisfy the owner-only record.

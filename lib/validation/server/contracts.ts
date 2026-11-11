@@ -9,7 +9,7 @@ export class ValidationServerError extends Error {
 }
 
 export type HypothesisVersionInput = { targetSegment: string; problemClaim: string; expectedObservableBehavior: string; commercialAssumption?: string; supportCriteria: string[]; contradictionCriteria: string[]; inconclusiveCriteria: string[]; scope: { included: string[]; excluded: string[] }; supersedesVersionId?: string };
-export type ExperimentVersionInput = { hypothesisVersionId: string; family: "customer_interview" | "survey"; targetAudience: string[]; collectionMethod: string; designSnapshot: Record<string, unknown>; screeningCriteria: string[]; consentPrivacyMode: "anonymous_notes" | "pseudonymous_notes" | "identified_with_explicit_consent"; supersedesVersionId?: string };
+export type ExperimentVersionInput = { hypothesisVersionId: string; family: "customer_interview" | "survey" | "landing_waitlist"; targetAudience: string[]; collectionMethod: string; designSnapshot: Record<string, unknown>; screeningCriteria: string[]; consentPrivacyMode: "anonymous_notes" | "pseudonymous_notes" | "identified_with_explicit_consent"; supersedesVersionId?: string };
 
 export type ValidationSubjectSummary = { id: string; creationOrigin: string; label: string; contextSnapshot: Record<string, unknown>; status: string; createdAt: string };
 export type ValidationSubjectListItem = ValidationSubjectSummary & { latestHypothesis: { versionNumber: number; problemClaim: string } | null; experimentCount: number; experimentLifecycles: string[]; observationCount: number };

@@ -1,4 +1,5 @@
 "use client";
+import { LandingWorkspace } from "@/components/validation/landing-workspace";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Button, LoadingState } from "@/components/ui";
@@ -32,7 +33,7 @@ type ExperimentVersion = {
   experiment_id: string;
   hypothesis_version_id: string;
   version_number: number;
-  family: "customer_interview" | "survey";
+  family: "customer_interview" | "survey" | "landing_waitlist";
   target_audience: string[];
   collection_method: string;
   consent_privacy_mode: string;
@@ -597,6 +598,13 @@ export default function WorkspacePage({
                           onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
                       )}
+                      {v.family === "landing_waitlist" &&
+                        capabilities.privateLandingPages && (
+                          <LandingWorkspace
+                            versionId={v.id}
+                            lifecycle={v.lifecycle}
+                          />
+                        )}
                       {v.family === "survey" && (
                         <SurveyWorkspace
                           versionId={v.id}

@@ -18,7 +18,7 @@ type CreatedExperiment = {
   version: {
     id: string;
     hypothesis_version_id: string;
-    family: PlanDraftHandoff["family"];
+    family: PlanDraftHandoff["family"] | "landing_waitlist";
   };
 };
 
@@ -109,7 +109,7 @@ export function matchesPlanDraftHandoff(
     hypothesisVersionId: string;
     experimentId: string;
     experimentVersionId: string;
-    family: PlanDraftHandoff["family"];
+    family: PlanDraftHandoff["family"] | "landing_waitlist";
   },
 ): handoff is PlanDraftHandoff {
   return Boolean(
