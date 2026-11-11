@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { SupabaseAdminClient } from "../../lib/supabase/server-admin.ts";
 
 /** Administrator-only positive fixture transport, called AFTER the existing
@@ -9,13 +9,25 @@ export function postgresFixtureClient(profile: "B42" | "B43", runtime: SupabaseA
     (runtime as unknown as { supabaseUrl?: unknown }).supabaseUrl !== (profile === "B42" ? "http://127.0.0.1:54321" : "http://127.0.0.1:55431"))
     throw new Error("invalid_fixture_endpoint");
   const port = profile === "B42" ? 54322 : 55432;
-  function query(statement: string) {
-    const result = spawnSync("psql", [`postgresql://postgres:postgres@127.0.0.1:${port}/postgres`, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=sqlstate"], {
-      input: `set statement_timeout='10s';\n${statement}`, encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
+  function query(statement: string): Promise<{ data: unknown; error: { code: string } | null }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn("psql", [`postgresql://postgres:postgres@127.0.0.1:${port}/postgres`, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=sqlstate"], {
+        stdio: ["pipe", "pipe", "pipe"], timeout: 15000,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code !== 0) return resolve({ data: null, error: { code: stderr.match(/ERROR:\s+([A-Z0-9]{5})/)?.[1] ?? "fixture_sql_failed" } });
+        try {
+          const output = stdout.split(/\r?\n/).filter((line) => line && line !== "SET").join("\n");
+          resolve({ data: output ? JSON.parse(output) : null, error: null });
+        } catch { reject(new Error("invalid_fixture_sql_response")); }
+      });
+      child.stdin.end(`set statement_timeout='10s';\n${statement}`);
     });
-    if (result.status !== 0) return { data: null, error: { code: result.stderr.match(/ERROR:\s+([A-Z0-9]{5})/)?.[1] ?? "fixture_sql_failed" } };
-    const output = result.stdout.split(/\r?\n/).filter((line) => line && line !== "SET").join("\n");
-    return { data: output ? JSON.parse(output) : null, error: null };
   }
   const literal = (value: unknown): string => value === null ? "null" : typeof value === "object"
     ? `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb` : `'${String(value).replaceAll("'", "''")}'`;
@@ -28,7 +40,7 @@ export function postgresFixtureClient(profile: "B42" | "B43", runtime: SupabaseA
           if (!/^p_[a-z_]+$/.test(key)) throw new Error("invalid_fixture_argument");
           return `${key}=>${literal(value)}`;
         }).join(",");
-        return Promise.resolve(query(`select to_jsonb(public.${name}(${args}));`));
+        return query(`select to_jsonb(public.${name}(${args}));`);
       };
       if (property === "from") return (table: string) => {
         if (table !== "validation_evidence_promotions") return target.from(table);
@@ -61,7 +73,7 @@ export function postgresFixtureClient(profile: "B42" | "B43", runtime: SupabaseA
               [...expected].some(([key, value]) => filters.get(key) !== value)) throw new Error("invalid_fixture_scope");
             // Same left composite joins, computed proof and bounded exact count as
             // the PostgREST reader; qualification still runs in the pinned source.
-            const result = query(`with candidates as (
+            return query(`with candidates as (
  select p.* from public.validation_evidence_promotions p where canonical_problem_id=${literal(canonical)}::uuid
  and eligible=true and representative_selected=true and resolution_status='resolved'
  and policy_version='v8-b1.2' and resolver_version='v8-b3.0.2-exact.1' and projection_version='v8-b3.1-projection.1'
@@ -72,9 +84,10 @@ export function postgresFixtureClient(profile: "B42" | "B43", runtime: SupabaseA
  left join public.problem_observations s on (s.id,s.canonical_problem_id)=(p.problem_observation_id,p.canonical_problem_id)
  left join public.validation_qualified_evidence_snapshots a on a.promotion_id=p.id
  where p.id in (select id from candidates) order by p.problem_observation_id limit 100)
- select jsonb_build_object('rows',coalesce((select jsonb_agg(row) from rows),'[]'::jsonb),'count',(select count(*) from candidates));`);
+ select jsonb_build_object('rows',coalesce((select jsonb_agg(row) from rows),'[]'::jsonb),'count',(select count(*) from candidates));`).then((result) => {
             const payload = result.data as { rows: unknown[]; count: number } | null;
-            return Promise.resolve({ data: payload?.rows ?? null, count: payload?.count ?? null, error: result.error }).then(resolve, reject);
+            return { data: payload?.rows ?? null, count: payload?.count ?? null, error: result.error };
+            }).then(resolve, reject);
           },
         };
         return builder;

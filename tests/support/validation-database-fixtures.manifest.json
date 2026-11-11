@@ -11,5 +11,5 @@
   "lib/validation/server/contracts.ts": "b2faa0cb1d6fee283ce2b05bf6ebfa9ce05e512b3fbe5790c41344103b9694be",
   "tests/support/validation-database-fixtures.ts": "7e863dd2b20d5cb96a42ad5e45d7f42371e18088d7e585577d2122ca6b5d82d5",
   "tests/support/validation-module.ts": "48326e782bd6d9b36543198ef37928c68f2295d01be533fd30d9c468501c79f1",
-  "tests/support/validation-postgres-fixtures.ts": "2ae56073d16dd2e7fbad62020e47be5d612bb6d4b7e7584cb61f5330891a2bf6"
+  "tests/support/validation-postgres-fixtures.ts": "4deb792b1765ed1efe40f2930790f8ee75027ef015ad96b39c814bd804ab449c"
 }

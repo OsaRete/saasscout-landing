@@ -140,7 +140,7 @@ async function run() {
     baselineMigration.indexOf("-- ---------------------------------------------------------------------\n-- Membership-changing coordinators"))
     .replace("create function", "create or replace function");
   const migrated = readFileSync(new URL("../supabase/migrations/20261008010000_qualified_evidence_snapshot_v2.sql", import.meta.url), "utf8");
-  const newRpc = migrated.slice(migrated.indexOf("create or replace function public.validation_promote_customer_interview_evidence("));
+  const newRpc = migrated.slice(migrated.indexOf("create or replace function public.validation_promote_customer_interview_evidence("), migrated.indexOf("alter function public.validation_promote_customer_interview_evidence("));
   async function historicalPromotion() {
     sql(oldRpc, phase);
     try { return await promoteCustomerInterviewEvidence(owner, source(19), admin); }
@@ -225,7 +225,7 @@ async function run() {
   phase = "real privileges, RLS and RPC exposure";
   check(sql(`select bool_and(relrowsecurity) from pg_class where oid in
     ('public.problem_observations'::regclass,'public.validation_evidence_promotions'::regclass,'public.validation_qualified_evidence_snapshots'::regclass);`, phase) === "t", "RLS absent");
-  check(sql(`select has_table_privilege('service_role','public.validation_evidence_promotions','SELECT')
+  check(sql(`select not has_table_privilege('service_role','public.validation_evidence_promotions','SELECT')
     and has_table_privilege('service_role','public.problem_observations','SELECT')
     and not has_table_privilege('anon','public.validation_evidence_promotions','SELECT')
     and not has_table_privilege('authenticated','public.validation_evidence_promotions','SELECT')
@@ -253,13 +253,13 @@ async function run() {
     catch (error) { denied = error instanceof Error && error.message === "trusted_qualified_evidence_read_failed" && !("cause" in error); }
     check(denied, "browser role obtained privileged join");
   }
-  check(sql(`select has_table_privilege('service_role','public.validation_qualified_evidence_snapshots','SELECT')
+  check(sql(`select not has_table_privilege('service_role','public.validation_qualified_evidence_snapshots','SELECT')
     and not has_table_privilege('service_role','public.validation_evidence_promotions','INSERT')
     and not has_table_privilege('service_role','public.validation_qualified_evidence_snapshots','INSERT')
     and not has_function_privilege('service_role','public.validation_b42_guard_attested_observation()','EXECUTE')
     and not has_function_privilege('anon','public.validation_b42_guard_attested_observation()','EXECUTE')
     and not has_function_privilege('authenticated','public.validation_b42_guard_attested_observation()','EXECUTE');`, phase) === "t", "unexpected B4.2 runtime grants");
-  console.log("PASS service SELECT, RLS, role restrictions and RPC catalog privileges");
+  console.log("PASS shared proof SELECT denied, RLS, role restrictions and RPC catalog privileges");
 
   // Synthetic negatives are constrained INSERTs, not genuine promotions. They
   // explicitly distinguish impossible SQL states from possible reader rejects.
@@ -527,7 +527,7 @@ async function run() {
     and not exists(select 1 from public.validation_qualified_evidence_snapshots where promotion_fingerprint='${fingerprint(17)}');`, phase) === "t", "snapshot failure left partial state");
   console.log("PASS injected snapshot failure rolls back shared, ledger and snapshot atomically");
 
-  phase = "independent HTTP concurrent promotion and retries";
+  phase = "independent SQL concurrent positive fixtures and retries";
   const raced = await Promise.all(Array.from({ length: 6 }, () => promoteCustomerInterviewEvidence(owner, source(18), admin)));
   check(raced.filter((row) => row.duplicate === false).length === 1 && raced.filter((row) => row.duplicate === true).length === 5, "concurrent retry outcomes incorrect");
   check(new Set(raced.map((row) => row.problemObservationId)).size === 1, "concurrent promotion duplicated shared state");
@@ -632,7 +632,7 @@ async function run() {
   check(sql(`select count(*) from public.validation_evidence_promotions where observation_id in
     ('${source(1)}','${source(2)}','${source(3)}') and problem_observation_id is not null;`, phase) === "3", "genuine evidence missing after cap test");
   check(sql("select md5(string_agg(oid::text, ',' order by oid)) from pg_proc where pronamespace='public'::regnamespace;", phase) === rpcCatalog, "test or reader added public RPCs");
-  console.log("PASS real PostgREST exact count exposes omitted valid evidence as generic failure");
+  console.log("PASS administrator SQL exact count exposes omitted valid evidence as generic failure");
   console.log("PASS B4.2-B1 disposable PostgreSQL/PostgREST suite; security review still required");
 }
 
