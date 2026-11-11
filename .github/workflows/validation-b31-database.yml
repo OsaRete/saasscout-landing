@@ -9,6 +9,9 @@ on:
       - "scripts/validation-b41-db.ts"
       - "scripts/validation-b42-db.ts"
       - "scripts/validation-b43-db.ts"
+      - "scripts/validation-private-db.ts"
+      - "tests/sql/private-validation-repair.sql"
+      - "tests/support/validation-postgres-fixtures.ts"
       - "scripts/validation-b43-isolation.ts"
       - "scripts/validation-acceptance-contracts.ts"
       - "scripts/prepare-validation-b43-disposable.ts"
@@ -65,10 +68,10 @@ jobs:
       - run: npm ci
       - name: Execute TypeScript regression and isolation tests without a database
         run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts tests/validation-database-fixtures.test.ts tests/validation-body-limit.test.ts tests/validation-release-boundary.test.ts tests/validation-capability-resources.test.ts tests/validation-acceptance-contracts.test.ts
-      - name: Lint B4.3 TypeScript boundary and tests
-        run: npx eslint scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
+      - name: Lint database boundaries and focused tests
+        run: npx eslint scripts/validation-private-db.ts tests/support/validation-postgres-fixtures.ts scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
       - name: Type-check B4.3 test infrastructure without emitting files
-        run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts
+        run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-private-db.ts scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts
 
   database:
     if: github.event_name != 'workflow_dispatch' || inputs.b43_scope != 'pr1-boundary-only'
@@ -95,8 +98,16 @@ jobs:
           "$VALIDATION_SUPABASE_CLI" --version
           docker --version
           psql --version
+      - name: Stage the pre-repair migration chain for the populated upgrade test
+        run: mv supabase/migrations/20261111000000_private_validation_database_repair.sql "$RUNNER_TEMP/private-validation-repair.sql"
       - name: Start disposable Supabase
         run: '"$VALIDATION_SUPABASE_CLI" start'
+      - name: Restore repair and verify populated upgrade without runtime grant restoration
+        env:
+          VALIDATION_PRIVATE_DB_DISPOSABLE: "1"
+        run: |
+          mv "$RUNNER_TEMP/private-validation-repair.sql" supabase/migrations/20261111000000_private_validation_database_repair.sql
+          node scripts/validation-private-db.ts --upgrade
       - name: Apply complete migration chain
         run: '"$VALIDATION_SUPABASE_CLI" db reset --local --no-seed'
       - name: Execute mandatory B3.1 PostgreSQL suite
@@ -110,6 +121,12 @@ jobs:
         env:
           VALIDATION_B42_DISPOSABLE: "1"
         run: npm run test:validation-b42-db
+      - name: Reset disposable database for independent private repair acceptance
+        run: '"$VALIDATION_SUPABASE_CLI" db reset --local --no-seed'
+      - name: Verify private repair on a fresh complete installation
+        env:
+          VALIDATION_PRIVATE_DB_DISPOSABLE: "1"
+        run: node scripts/validation-private-db.ts
   b43-disposable-database:
     name: isolated B4.3-B database
     if: github.event_name == 'workflow_dispatch' && inputs.authorize_disposable_reset == true

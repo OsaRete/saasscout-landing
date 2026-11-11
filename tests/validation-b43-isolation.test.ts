@@ -267,6 +267,7 @@ async function offlineB43Run(args: string[], fault = "") {
     verifyEffectiveApplicationPrivileges: () => hit("effective roles"),
     clients: () => ({ admin: { rpc: () => { hit("source transition"); throw new Error("deferred phase reached"); } }, anonymous: {}, authenticated: {} }),
     readFileSync: () => "x".repeat(1100) + "create function public.b31_test_promote(",
+    postgresFixtureClient: (_profile: string, db: unknown) => db,
     createValidationDatabaseFixtures: () => ({
       promoteCustomerInterviewEvidence: async (_owner: string, observation: string) => {
         hit("promotion");

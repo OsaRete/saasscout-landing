@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { postgresFixtureClient } from "../tests/support/validation-postgres-fixtures.ts";
 import { createValidationDatabaseFixtures } from "../tests/support/validation-database-fixtures.ts";
 import { acceptanceSupabaseCli, applicationRolePrivilegeProbe, assertSqlStateFailure, assertPostgrestPermissionDenied } from "./validation-acceptance-contracts.ts";
 import {
@@ -539,11 +540,14 @@ async function run(): Promise<void> {
   const setup = fixture.split("create function public.b31_test_promote(")[0]
     .replaceAll("generate_series(1,14)", "generate_series(1,120)")
     .replaceAll("generate_series(1,15)", "generate_series(1,120)")
-    .replaceAll("least(i,14)", "i");
+    .replaceAll("least(i,14)", "i")
+    // B3.1 intentionally leaves source 4 unapproved for its negative test;
+    // B4.3 requires four approved positive proof fixtures instead.
+    .replace("where i <> 4;", ";");
   check(setup.length > 1000, "B3.1 fixture setup is incomplete");
   sql(`begin;${setup}\ncommit;`);
   const { promoteCustomerInterviewEvidence, readTrustedQualifiedValidationEvidence } =
-    createValidationDatabaseFixtures("B43", [admin, anonymous, authenticated]);
+    createValidationDatabaseFixtures("B43", [admin, anonymous, authenticated], postgresFixtureClient("B43", admin));
 
   // The canonical fixture must exist before the positive trusted SQL read.
   // Application-role RPC denials still run against the real unchanged clients.
