@@ -401,14 +401,14 @@ begin
     raise exception 'browser promotion grant';
   end if;
 
-  if not has_function_privilege(
+  if has_function_privilege(
     'service_role',
     'public.validation_promote_customer_interview_evidence(uuid,uuid,uuid,uuid,text,text,text,jsonb,jsonb,text,text,text,text,text)',
     'execute'
   )
   then
     raise exception
-      'service role missing promotion grant';
+      'service role unexpectedly has promotion grant';
   end if;
 
   if has_function_privilege(
@@ -426,14 +426,14 @@ begin
       'browser representative-state grant';
   end if;
 
-  if not has_function_privilege(
+  if has_function_privilege(
     'service_role',
     'public.validation_b31_representative_state(uuid,uuid)',
     'execute'
   )
   then
     raise exception
-      'service role missing representative-state grant';
+      'service role unexpectedly has representative-state grant';
   end if;
 end
 $$;

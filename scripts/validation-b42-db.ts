@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { persistProblemObservations } from "../lib/knowledge/observation-store.ts";
+import { postgresFixtureClient } from "../tests/support/validation-postgres-fixtures.ts";
 import { createValidationDatabaseFixtures } from "../tests/support/validation-database-fixtures.ts";
 import { acceptanceSupabaseCli } from "./validation-acceptance-contracts.ts";
 
@@ -88,7 +89,7 @@ async function run() {
   const rpcCatalog = sql("select md5(string_agg(oid::text, ',' order by oid)) from pg_proc where pronamespace='public'::regnamespace;", phase);
   sql(`begin;${setup}\ncommit;`, phase);
   const { promoteCustomerInterviewEvidence, readTrustedQualifiedValidationEvidence } =
-    createValidationDatabaseFixtures("B42", [admin, anonymous, authenticated]);
+    createValidationDatabaseFixtures("B42", [admin, anonymous, authenticated], postgresFixtureClient("B42", admin));
 
   async function expectReadFailure() {
     let rejected = false;
@@ -440,11 +441,12 @@ async function run() {
   );
 
   await unchanged();
-  phase = "service-role preparation trust boundary";
-  const state = await admin.rpc("validation_b31_representative_state", {
+  phase = "shared-track runtime denial and administrator-only fixtures";
+  const positiveSqlClient = postgresFixtureClient("B42", admin);
+  const state = await positiveSqlClient.rpc("validation_b31_representative_state", {
     p_owner_id: owner, p_participant_id: participant(16),
   });
-  const authority = await admin.rpc("validation_b31_authority_snapshot", {
+  const authority = await positiveSqlClient.rpc("validation_b31_authority_snapshot", {
     p_subject_id: uuid("3", 1), p_hypothesis_version_id: uuid("5", 1),
   });
   check(!state.error && !authority.error, "trusted preparation state unavailable");
@@ -461,15 +463,15 @@ async function run() {
     p_authority_snapshot: authority.data, p_canonical_title: "Other fixture", p_normalized_title: "other fixture",
     p_policy_version: "v8-b1.2", p_resolver_version: "v8-b3.0.2-exact.1", p_projection_version: "v8-b3.1-projection.1",
   };
-  for (const client of [anonymous, authenticated]) {
+  for (const client of [anonymous, authenticated, admin]) {
     const denied = await client.rpc("validation_promote_customer_interview_evidence", directParameters);
     check(denied.error?.code === "42501", "SECURITY BLOCKER: browser bypassed trusted promotion preparation");
   }
-  const direct = await admin.rpc("validation_promote_customer_interview_evidence", directParameters);
-  check(!direct.error && direct.data, "service-role direct invocation contract changed");
+  const direct = await positiveSqlClient.rpc("validation_promote_customer_interview_evidence", directParameters);
+  check(!direct.error && direct.data, "administrator positive fixture failed");
   check((await readTrustedQualifiedValidationEvidence(otherCanonical, admin)).observations.length === 1,
-    "service-role selected canonical not persisted");
-  console.log("PASS browser RPC rejection; service-role can independently supply canonical selection: trusted application boundary required");
+    "administrator fixture canonical not persisted");
+  console.log("PASS all runtime roles denied promotion; positive fixture uses postgres SQL only");
 
   phase = "runtime integrity and immutable snapshots";
   const original = positive.observations[0];
@@ -484,8 +486,9 @@ async function run() {
   }
   check((await admin.from("problem_observations").delete().eq("id", original.id)).error?.code === "55000", "attested DELETE permitted");
   check((await admin.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "runtime ledger fabrication permitted");
-  const snap = await admin.from("validation_qualified_evidence_snapshots").select("*").eq("problem_observation_id", original.id).single();
-  check(!snap.error && snap.data, "private snapshot unavailable to trusted reader");
+  const runtimeSnapshot = await admin.from("validation_qualified_evidence_snapshots").select("*").eq("problem_observation_id", original.id).single();
+  check(runtimeSnapshot.error?.code === "42501", "runtime snapshot read permitted");
+  const snap = { data: JSON.parse(sql(`select to_jsonb(s) from public.validation_qualified_evidence_snapshots s where problem_observation_id='${original.id}';`, phase)) };
   check((await admin.from("validation_qualified_evidence_snapshots").insert(snap.data)).error?.code === "42501", "runtime snapshot fabrication permitted");
   for (const client of [anonymous, authenticated]) {
     check((await client.from("validation_evidence_promotions").insert(ledger(16))).error?.code === "42501", "browser ledger fabrication permitted");

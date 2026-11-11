@@ -38,6 +38,7 @@ export function assertDatabaseFixtureSource(
 export function createValidationDatabaseFixtures(
   profile: "B42" | "B43",
   clients: readonly SupabaseAdminClient[],
+  positiveFixtureClient?: SupabaseAdminClient,
 ) {
   const endpoint =
     profile === "B42"
@@ -56,9 +57,15 @@ export function createValidationDatabaseFixtures(
   }
   if (clients.length === 0) throw new Error("database_fixture_client_rejected");
   clients.forEach(checkClient);
+  // The SQL fixture transport is explicit and may only replace the first
+  // registered server client. Browser/role-denial clients are never replaced.
+  if (positiveFixtureClient && (positiveFixtureClient as unknown as { supabaseUrl?: unknown }).supabaseUrl !== endpoint)
+    throw new Error("database_fixture_client_rejected");
+  const fixtureClient = (db: SupabaseAdminClient) => db === clients[0] && positiveFixtureClient ? positiveFixtureClient : db;
   for (const url of [
     import.meta.url,
     new URL("./validation-module.ts", import.meta.url),
+    new URL("./validation-postgres-fixtures.ts", import.meta.url),
   ]) {
     const path = fileURLToPath(url);
     assertDatabaseFixtureSource(path, readFileSync(path, "utf8"));
@@ -115,7 +122,7 @@ export function createValidationDatabaseFixtures(
       return promotion.promoteCustomerInterviewEvidence(
         ownerId,
         observationId,
-        db,
+        fixtureClient(db),
       );
     },
     async readTrustedQualifiedValidationEvidence(
@@ -123,7 +130,7 @@ export function createValidationDatabaseFixtures(
       db: SupabaseAdminClient,
     ) {
       checkClient(db);
-      return historical.readTrustedQualifiedValidationEvidence(canonicalId, db);
+      return historical.readTrustedQualifiedValidationEvidence(canonicalId, fixtureClient(db));
     },
   });
 }
