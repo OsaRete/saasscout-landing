@@ -233,3 +233,130 @@ test("database suite contains real privilege, lifecycle, proof, completeness, ro
     "pg_stat_activity", "readTrustedQualifiedValidationEvidence",
   ]) assert.ok(runner.includes(assertion), `missing integration assertion: ${assertion}`);
 });
+
+// Exercise the actual runner orchestration and immutable-fact helper in memory.
+// Every transport is a mock; no runner import, process, database or Docker call.
+async function offlineB43Run(args: string[], fault = "") {
+  const ts = await import("typescript");
+  const { runInNewContext } = await import("node:vm");
+  const source = readFileSync("scripts/validation-b43-db.ts", "utf8");
+  const ast = ts.createSourceFile("runner.ts", source, ts.ScriptTarget.Latest, true);
+  const functions = ["check", "assertImmutableFacts", "run"].map((name) => {
+    const node = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert.ok(node, `missing runner function ${name}`);
+    return node.getText(ast).replaceAll("import.meta.url", '"file:///offline/scripts/validation-b43-db.ts"');
+  });
+  const calls: string[] = [];
+  const messages: string[] = [];
+  const hit = (name: string) => {
+    calls.push(name);
+    if (fault === name) throw new Error(`mock failure: ${name}`);
+  };
+  const context = {
+    process: { argv: ["node", "runner.ts", ...args] }, URL, Error,
+    console: { log: (message: string) => messages.push(message) },
+    canonical: "20000000-0000-0000-0000-000000000001",
+    owner: "10000000-0000-0000-0000-000000000001",
+    observation: (n: number) => `observation-${n}`,
+    participant: (n: number) => `participant-${n}`,
+    sharedId: (n: number) => `shared-${n}`,
+    verifyDisposableIdentity: () => { hit("identity"); return { status: {} }; },
+    assertCompleteMigrationChain: () => hit("migrations"),
+    assertFreshApplicationDatabase: () => hit("fresh database"),
+    assertDatabaseSecurityCatalog: () => hit("catalog"),
+    verifyEffectiveApplicationPrivileges: () => hit("effective roles"),
+    clients: () => ({ admin: { rpc: () => { hit("source transition"); throw new Error("deferred phase reached"); } }, anonymous: {}, authenticated: {} }),
+    readFileSync: () => "x".repeat(1100) + "create function public.b31_test_promote(",
+    createValidationDatabaseFixtures: () => ({
+      promoteCustomerInterviewEvidence: async (_owner: string, observation: string) => {
+        hit("promotion");
+        if (observation === "observation-17") throw Object.assign(new Error("synthetic constraint"), { code: "constraint_conflict" });
+        return { duplicate: true };
+      },
+      readTrustedQualifiedValidationEvidence: async () => ({ complete: true, observations: ["supporting", "contradicting", "mixed", "supporting"].map((evidence_polarity) => ({ evidence_polarity })) }),
+    }),
+    verifyPostgrestExecutionBoundary: async () => hit("PostgREST denial"),
+    readCurrentEvidence: () => { hit("WITHHELD reader"); return { complete: true, observations: fault === "positive authority" ? [{}] : [] }; },
+    expectNoRuntimeFactAccess: async () => hit("fact access denial"),
+    expectCurrentReadUnavailable: async () => hit("fail-closed reader"),
+    restoreSnapshot: () => hit("restore proof"),
+    expectSqlState: (sql: string, state: string) => {
+      hit("immutable denial");
+      assert.equal(state, "55000");
+      assert.match(sql, /^(update|delete from) public.validation_evidence_(consumption_authority|source_restrictions)/);
+    },
+    sql: (sql: string) => {
+      if (sql.startsWith("insert into public.validation_evidence_source_restrictions(")) {
+        hit("synthetic restriction");
+        assert.match(sql, /'canonical_merged','canonical_problem'/);
+        return fault === "missing restriction" ? "" : "70000000-0000-0000-0000-000000000001";
+      }
+      if (sql.startsWith("select count(*) from public.validation_evidence_consumption_authority")) return fault === "wrong authority count" ? "0" : "4";
+      if (sql.startsWith("select count(*) from public.validation_qualified_evidence_snapshots")) return "4";
+      if (sql.startsWith("select count(*) from public.problem_observations")) return "4";
+      if (sql.startsWith("select id from public.validation_evidence_consumption_authority")) return "80000000-0000-0000-0000-000000000001";
+      if (sql.startsWith("select last_value")) return "1|t";
+      if (sql.startsWith("select not exists") || sql.startsWith("select public.validation_b42_snapshot_verified")) return "t";
+      if (/^(begin;|create sequence|drop trigger|drop sequence|alter table|insert into public.validation_evidence_consumption_authority)/.test(sql)) return "";
+      throw new Error("Unexpected SQL in offline runner test: " + sql);
+    },
+  };
+  const compiled = ts.transpileModule(`let phase = ""; let failure = "";\n${functions.join("\n")}\nrun();`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  let error: unknown;
+  try { await runInNewContext(compiled, context); } catch (caught) { error = caught; }
+  return { calls, messages, error };
+}
+
+test("boundary-only executes every shared boundary phase and independent immutable facts before scoped PASS", async () => {
+  const result = await offlineB43Run(["--pr1-boundary-only"]);
+  assert.equal(result.error, undefined);
+  for (const phase of ["identity", "migrations", "fresh database", "catalog", "effective roles", "PostgREST denial", "WITHHELD reader", "fact access denial", "fail-closed reader", "synthetic restriction"])
+    assert.ok(result.calls.includes(phase), `phase missing: ${phase}`);
+  assert.equal(result.calls.filter((call) => call === "immutable denial").length, 4);
+  assert.equal(result.calls.filter((call) => call === "fail-closed reader").length, 4);
+  assert.equal(result.calls.includes("source transition"), false);
+  assert.equal(result.messages.length, 1);
+  assert.match(result.messages[0], /PASS B4.3 PR1 boundary-only.*source transitions NOT tested/);
+});
+for (const fault of ["identity", "migrations", "fresh database", "catalog", "effective roles", "PostgREST denial", "promotion", "WITHHELD reader", "positive authority", "wrong authority count", "fact access denial", "fail-closed reader", "restore proof", "synthetic restriction", "missing restriction", "immutable denial"]) {
+  test(`boundary-only never reports success after ${fault} failure`, async () => {
+    const result = await offlineB43Run(["--pr1-boundary-only"], fault);
+    assert.ok(result.error);
+    assert.deepEqual(result.messages, []);
+    assert.equal(result.calls.includes("source transition"), false);
+  });
+}
+test("default full mode still reaches deferred source-transition acceptance without synthetic fixture or scoped PASS", async () => {
+  const result = await offlineB43Run([]);
+  assert.match(String(result.error), /deferred phase reached/);
+  assert.equal(result.calls.includes("source transition"), true);
+  assert.equal(result.calls.includes("synthetic restriction"), false);
+  assert.deepEqual(result.messages, []);
+});
+test("preflight-only remains identity-only and does not claim boundary acceptance", async () => {
+  const result = await offlineB43Run(["--preflight-only"]);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.calls, ["identity"]);
+  assert.deepEqual(result.messages, ["PASS B4.3 disposable identity verified before reset"]);
+});
+for (const args of [["--unknown"], ["--preflight-only", "--pr1-boundary-only"], ["--pr1-boundary-only", "--pr1-boundary-only"]]) {
+  test(`invalid acceptance mode ${args.join(" ")} fails before identity access`, async () => {
+    const result = await offlineB43Run(args);
+    assert.ok(result.error);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.messages, []);
+  });
+}
+test("boundary dispatch isolates the existing database job without changing PR/full acceptance scope", () => {
+  const workflow = readFileSync(".github/workflows/validation-b31-database.yml", "utf8");
+  assert.match(workflow, /b43_scope:[\s\S]*?default: full/);
+  for (const job of ["b43-static", "database"]) {
+    assert.ok(workflow.includes(`  ${job}:\n    if: github.event_name != 'workflow_dispatch' || inputs.b43_scope != 'pr1-boundary-only'`));
+  }
+  assert.match(workflow, /pr1-boundary-only\) npm run test:validation-b43-db -- --pr1-boundary-only ;;/);
+  assert.match(workflow, /full\) npm run test:validation-b43-db ;;/);
+  assert.match(workflow, /\*\) echo "Invalid B4.3 acceptance scope" >&2; exit 1 ;;/);
+  assert.doesNotMatch(workflow, /secrets\./);
+});

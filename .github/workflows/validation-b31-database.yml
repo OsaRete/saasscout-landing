@@ -41,9 +41,18 @@ on:
         type: boolean
         required: true
         default: false
+      b43_scope:
+        description: "Full acceptance or PR1 boundary assertions only (no source transitions)"
+        type: choice
+        required: true
+        default: full
+        options:
+          - full
+          - pr1-boundary-only
 
 jobs:
   b43-static:
+    if: github.event_name != 'workflow_dispatch' || inputs.b43_scope != 'pr1-boundary-only'
     name: B4.3-B static regression and isolation checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -62,6 +71,7 @@ jobs:
         run: npx tsc --noEmit --pretty false --target ES2022 --module ESNext --moduleResolution Bundler --allowImportingTsExtensions --skipLibCheck --types node scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts
 
   database:
+    if: github.event_name != 'workflow_dispatch' || inputs.b43_scope != 'pr1-boundary-only'
     name: database
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -184,4 +194,10 @@ jobs:
           VALIDATION_B43_API_URL: ${{ steps.disposable.outputs.apiUrl }}
           VALIDATION_B43_DATABASE_URL: ${{ steps.disposable.outputs.databaseUrl }}
           VALIDATION_B43_DOCKER_NETWORK_ID: ${{ steps.network.outputs.networkId }}
-        run: npm run test:validation-b43-db
+          B43_SCOPE: ${{ inputs.b43_scope }}
+        run: |
+          case "$B43_SCOPE" in
+            pr1-boundary-only) npm run test:validation-b43-db -- --pr1-boundary-only ;;
+            full) npm run test:validation-b43-db ;;
+            *) echo "Invalid B4.3 acceptance scope" >&2; exit 1 ;;
+          esac

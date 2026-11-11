@@ -514,6 +514,11 @@ async function controlledParticipantConcurrency(admin: SupabaseClient): Promise<
 }
 
 async function run(): Promise<void> {
+  const args = process.argv.slice(2);
+  check(args.length <= 1 && args.every((arg) =>
+    arg === "--preflight-only" || arg === "--pr1-boundary-only"),
+  "choose full (no flag), --preflight-only, or --pr1-boundary-only; modes cannot be combined");
+  const boundaryOnly = args.includes("--pr1-boundary-only");
   const identity = verifyDisposableIdentity();
   if (process.argv.includes("--preflight-only")) {
     console.log("PASS B4.3 disposable identity verified before reset");
@@ -605,6 +610,21 @@ async function run(): Promise<void> {
     restoreSnapshot(sharedId(2));
     check(sql(`select public.validation_b42_snapshot_verified(p) from public.validation_evidence_promotions p where p.observation_id='${observation(2)}'`) === "t",
       `${label}: B4.2 proof was not restored after fault injection`);
+  }
+
+  if (boundaryOnly) {
+    phase = "PR1 synthetic restriction immutability (no source transition)";
+    // Trusted disposable SQL fixture only. The production restriction RPC remains
+    // trigger-only; no source transition, privilege change or trigger bypass here.
+    const restrictionId = sql(`insert into public.validation_evidence_source_restrictions(
+        purpose_id,reason_code,scope_kind,scope_id)
+      values('qualified_validation_shared_evidence','canonical_merged','canonical_problem','${canonical}')
+      returning id`);
+    check(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(restrictionId),
+      "synthetic immutable restriction was not persisted");
+    assertImmutableFacts(authorityId, restrictionId);
+    console.log("PASS B4.3 PR1 boundary-only: identity, catalog/effective roles, PostgREST denial, WITHHELD, immutable facts, rollback and fail-closed proofs; source transitions NOT tested");
+    return;
   }
 
   phase = "authority/restriction immutability and participant restoration";

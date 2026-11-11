@@ -573,3 +573,51 @@ tests/validation-intelligence.test.ts
 tests/validation-release-boundary.test.ts
 tests/validation-workspace-ui.test.ts
 ```
+
+## PR 1 final closure amendment — locally prepared, not executed in a database
+
+This amendment only adds a test-runner boundary selector, its focused regressions,
+the existing CI input/routing and closure checklists. Production policy, Data Moat
+algorithms, migration bytes, privileges and F4 remain unchanged. Full/default B4.3
+acceptance retains its source-transition/restoration/concurrency assertions.
+See [boundary-only scope and proposed execution](./V8_B43_B_DISPOSABLE_DATABASE_VALIDATION.md#pr-1-boundary-only-closure-amendment)
+and [owner containment/recovery record](./VALIDATION_VERCEL_DEFAULT_OFF_CHECKLIST.md#minimal-pr-1-closure-record--owner-execution-only).
+
+Evidence reconciliation: the historical reports above predate published PR #237.
+At HEAD a42e21d7b5ae4c9568bf82ccdf1a925d1bb830ac, GitHub run 42907964611
+completed real B3.1/B4.2 disposable PostgreSQL/PostgREST acceptance successfully;
+its B4.3 isolated job was skipped. The passing B4.3 static job and successful
+Preview do not establish B4.3 runtime boundary acceptance. The prepared PR body
+also predates that real database run; its statement that no real acceptance ran
+is now historical, not the current B3.1/B4.2 result. No remote description is
+changed by this local amendment.
+
+The owner accepts the **175 unchanged test-only TypeScript diagnostics** as tracked
+pre-existing debt for this default-off PR: zero added/removed and no production-
+source diagnostics in the saved comparison. Keep those exact logs/comparison;
+full tsc remains failing, with no exclusions or suppressions. Narrow infrastructure
+checks for this amendment do not replace that baseline or rerun the full project.
+
+Product-scope reconciliation: older domain/workspace documents describe only
+interviews/surveys as Beta execution families; the current product decision targets
+six private Validation methods and a separately contracted professional-development
+request flow, with direct user-entered ideas. The four additional methods and that
+workflow are outside this closure amendment and are not claimed implemented or
+activated. Shared promotion/current-consumption authority/F4 remain deferred;
+historical tables and Discovery/Scan functionality are retained.
+
+Both merge gates remain open until the exact amended revision passes real
+boundary-only acceptance and the owner completes containment/recovery evidence.
+Neither this local preparation nor a scoped database pass approves private/public
+activation. No broad test rerun, database startup/reset, workflow dispatch, commit,
+push, merge, Vercel change or deployment is part of this amendment task.
+
+Local closure verification: 58/58 tests pass in
+`tests/validation-b43-isolation.test.ts` (23 new scoped orchestration/failure cases,
+35 existing isolation checks), zero failures/skips. Focused TypeScript no-emit and
+ESLint for the changed runner/test pass; workflow YAML parsing, scope/default/input
+gates and `git diff --check` pass. Removing only the two added selector blocks
+reproduces the approved runner bytes exactly; full acceptance was not executed.
+All runner-orchestration transports in these offline tests are mocks. The accepted
+175-diagnostic full-project baseline was not rerun or suppressed. No actual B4.3
+SQL/PostgREST acceptance is claimed.

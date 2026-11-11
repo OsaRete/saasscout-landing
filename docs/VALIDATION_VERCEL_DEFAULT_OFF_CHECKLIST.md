@@ -83,3 +83,57 @@ readers remain unconditionally denied for every configuration.
 Until these operational facts and required checks have evidence, merge with
 automatic Vercel deployment is **NO-GO**. Private/public activation is a separate
 NO-GO pending the database and workflow gates in the release-boundary report.
+
+## Minimal PR 1 closure record — owner execution only
+
+Owner-provided evidence establishes `saasscout-landing` linked to
+`OsaRete/saasscout-landing`, Production tracking `main`, other unassigned branches
+using Preview, Standard Vercel Authentication, no known enabling variables or
+protection exceptions, and no Preview custom domains. PR #237's Preview succeeded.
+This is configuration evidence supplied by the owner, not an independently audited
+inventory. Preview shares Production Supabase service-role credentials: **it is not
+a disposable/data-isolated test environment**. Observe deployment metadata only;
+do not run browser/API/database acceptance against that Preview, even behind login.
+
+Complete and retain this short record before merge (no secret values):
+
+- [ ] Record project/team IDs, exact source SHA and Production/Preview deployment
+  IDs. For each scope, inspect `VALIDATION_PRIVATE_MODE` and
+  `VALIDATION_PUBLIC_SURVEYS`, branch/custom/shared overrides and build/install
+  commands. Missing values fail closed; explicit `DISABLED` is preferable for an
+  auditable release. Never substitute `VALIDATION_PRIVATE_SURVEYS` for the actual
+  `VALIDATION_PRIVATE_MODE` contract. Environment changes require separate approval
+  and do not retrofit existing artifacts.
+- [ ] Inventory previous Production, Preview/branch and immutable deployment URLs,
+  custom aliases/domains and other linked projects. Record source/boundary presence
+  and effective protection for every pre-boundary artifact. In a signed-out session
+  with no bypass link, check authentication/edge protection without submitting forms
+  or invoking application/API actions. If an old address remains public or otherwise
+  usable without the boundary, record the exact URL and required containment;
+  **obtain approval before** protection, alias, route or deployment changes.
+  Standard Preview protection alone does not prove old Production URLs are covered.
+- [ ] Record a boundary-containing, disabled recovery artifact and the supported
+  production-target recovery action. The successful a42e21d Preview is a candidate,
+  not automatically a verified Production rollback: verify source, environment
+  parity and permitted recovery/promotion mechanics first. Pre-PR1 main lacks the
+  guards and must not be selected as a boundary-preserving rollback.
+- [ ] If no artifact qualifies, document the exact available edge/ingress control,
+  affected hosts and both `/validation` and `/api/validation` paths plus public
+  survey APIs, operator and restoration steps. Obtain explicit owner approval to
+  restrict those paths while recovering a reviewed boundary-containing build with
+  both flags disabled. Verify the project's plan supports that control; do not
+  invent an available Vercel feature. Any restriction, deployment, promotion or
+  alias change needs separate authorization. If neither recovery option can be
+  established, merge remains blocked.
+- [ ] Record owner acceptance of the existing shared-credential Preview exposure
+  for protected, observation-only review, or request separate approval for isolated
+  Preview credentials. Do not rotate shared Production credentials, change
+  Production access or claim protection removes the risk. Keep the old-deployment
+  containment requirement even if the owner accepts credential sharing.
+
+Code rollback does not revert database state. This PR changes no migration bytes
+or grants, and recovery must not reset Supabase or delete historical evidence.
+Record the operator, timestamp, artifact ID, approved action and sanitized outcome.
+None of these operational checks or configuration actions has been performed by
+this local amendment. The remaining gate is the completed owner record, not a new
+application implementation or a request for unrelated infrastructure.
