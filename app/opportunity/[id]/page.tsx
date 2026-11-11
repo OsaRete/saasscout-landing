@@ -346,7 +346,8 @@ export default function OpportunityPage() {
             />
           </Link>
 
-          <div className="flex gap-3 print:hidden">
+          <div className="flex flex-wrap gap-3 print:hidden">
+  <Link href={`/validation/new?${new URLSearchParams({sourceType:"opportunity",sourceId:opportunity.id,label:opportunity.title})}`} className="rounded-xl border border-cyan-400/30 px-4 py-2 text-sm text-cyan-200 hover:bg-cyan-400/10">Validate this opportunity</Link>
   <Link
     href="/results"
     className="rounded-xl border border-white/10 px-4 py-2 text-sm text-gray-300 hover:bg-white/5"

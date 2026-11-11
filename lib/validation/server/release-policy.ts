@@ -3,9 +3,18 @@ import "server-only";
 export type ValidationPrivateMode =
   "DISABLED" | "INTERVIEWS" | "SURVEYS" | "INTERVIEWS_AND_SURVEYS";
 export function getValidationReleasePolicy(
-  config: { privateMode?: unknown; publicSurveys?: unknown } = {
+  config: {
+    privateMode?: unknown;
+    publicSurveys?: unknown;
+    privateLandingPages?: unknown;
+    publicLandingPages?: unknown;
+    landingCookieSecret?: unknown;
+  } = {
     privateMode: process.env.VALIDATION_PRIVATE_MODE,
     publicSurveys: process.env.VALIDATION_PUBLIC_SURVEYS,
+    privateLandingPages: process.env.VALIDATION_PRIVATE_LANDING_PAGES,
+    publicLandingPages: process.env.VALIDATION_PUBLIC_LANDING_PAGES,
+    landingCookieSecret: process.env.VALIDATION_LANDING_COOKIE_SECRET,
   },
 ) {
   const mode: ValidationPrivateMode =
@@ -20,6 +29,14 @@ export function getValidationReleasePolicy(
     mode === "SURVEYS" || mode === "INTERVIEWS_AND_SURVEYS";
   return Object.freeze({
     mode,
+    privateLandingPages:
+      mode !== "DISABLED" && config.privateLandingPages === "ENABLED",
+    publicLandingParticipation:
+      mode !== "DISABLED" &&
+      config.privateLandingPages === "ENABLED" &&
+      config.publicLandingPages === "ENABLED" &&
+      typeof config.landingCookieSecret === "string" &&
+      config.landingCookieSecret.length >= 32,
     privateInterviews,
     privateSurveys,
     publicSurveyParticipation:
@@ -52,6 +69,14 @@ const operations = {
   "interview.create": ["POST", "privateInterviews"],
   "interview.update": ["POST", "privateInterviews"],
   "interview.observation": ["POST", "privateInterviews"],
+  "landing.read": ["GET", "privateLandingPages"],
+  "landing.remove": ["POST", "privateLandingPages"],
+  "landing.save": ["POST", "privateLandingPages"],
+  "landing.publish": ["POST", "publicLandingParticipation"],
+  "landing.unpublish": ["POST", "privateLandingPages"],
+  "landing.resolve": ["GET", "publicLandingParticipation"],
+  "landing.view": ["POST", "publicLandingParticipation"],
+  "landing.submit": ["POST", "publicLandingParticipation"],
   "survey.plan": ["POST", "privateSurveys"],
   "survey.publish": ["POST", "publicSurveyParticipation"],
   "survey.revoke": ["POST", "privateSurveys"],
@@ -93,6 +118,7 @@ export function admittedValidationFamilies(
   return [
     ...(policy.privateInterviews ? ["customer_interview"] : []),
     ...(policy.privateSurveys ? ["survey"] : []),
+    ...(policy.privateLandingPages ? ["landing_waitlist"] : []),
   ];
 }
 export class ValidationReleaseDeniedError extends Error {
@@ -110,7 +136,7 @@ export function assertValidationOperation(
 }
 export function assertValidationFamily(
   family: unknown,
-  expectedFamily?: "customer_interview" | "survey",
+  expectedFamily?: "customer_interview" | "survey" | "landing_waitlist",
 ): void {
   if (
     typeof family !== "string" ||

@@ -29,9 +29,9 @@ export function ExperimentForm({
   onCancel: () => void;
 }) {
   const capabilities = useValidationCapabilities();
-  const [family, setFamily] = useState<"customer_interview" | "survey">(
-    capabilities.privateInterviews ? "customer_interview" : "survey",
-  );
+  const [family, setFamily] = useState<
+    "customer_interview" | "survey" | "landing_waitlist"
+  >(capabilities.privateInterviews ? "customer_interview" : "survey");
   const [audience, setAudience] = useState("");
   const [method, setMethod] = useState("");
   const [screening, setScreening] = useState("");
@@ -120,19 +120,23 @@ export function ExperimentForm({
             purpose:
               family === "customer_interview"
                 ? "Focused conversations"
-                : "Structured responses",
+                : family === "landing_waitlist"
+                  ? "Consented interest in a published offer"
+                  : "Structured responses",
           },
           screeningCriteria: words(screening),
           consentPrivacyMode: privacy,
         }),
       });
       onDone(
-        createPlanDraftHandoff(
-          subjectId,
-          hypothesisVersionId,
-          appliedDraft,
-          created,
-        ),
+        family === "landing_waitlist"
+          ? null
+          : createPlanDraftHandoff(
+              subjectId,
+              hypothesisVersionId,
+              appliedDraft,
+              created,
+            ),
       );
     } catch (caught) {
       setError(
@@ -177,7 +181,12 @@ export function ExperimentForm({
       <Field label="Experiment family">
         <SelectInput
           value={family}
-          onChange={(event) => setFamily(event.target.value as typeof family)}
+          onChange={(event) => {
+            const next = event.target.value as typeof family;
+            setFamily(next);
+            if (next === "landing_waitlist")
+              setPrivacy("identified_with_explicit_consent");
+          }}
         >
           {capabilities.privateInterviews && (
             <option value="customer_interview">Customer Interview</option>
@@ -185,12 +194,17 @@ export function ExperimentForm({
           {capabilities.privateSurveys && (
             <option value="survey">Survey</option>
           )}
+          {capabilities.privateLandingPages && (
+            <option value="landing_waitlist">Landing Page / Waitlist</option>
+          )}
         </SelectInput>
       </Field>
       <div className="rounded-xl bg-white/[.035] p-4 text-sm text-slate-400">
         {family === "customer_interview"
           ? "Have focused conversations to understand pain, behavior, workarounds, and context."
-          : "Collect structured responses at greater breadth to test specific assumptions."}
+          : family === "landing_waitlist"
+            ? "Publish a focused offer and measure consented interest from your target audience."
+            : "Collect structured responses at greater breadth to test specific assumptions."}
       </div>
       <Field label="Target audience" helper="One audience criterion per line.">
         <TextArea
@@ -208,7 +222,9 @@ export function ExperimentForm({
           placeholder={
             family === "customer_interview"
               ? "Scheduled one-to-one conversations"
-              : "Manually distributed survey"
+              : family === "landing_waitlist"
+                ? "Public validation landing page"
+                : "Manually distributed survey"
           }
         />
       </Field>
@@ -221,7 +237,12 @@ export function ExperimentForm({
       </Field>
       <Field label="Consent / privacy mode">
         <SelectInput
-          value={privacy}
+          value={
+            family === "landing_waitlist"
+              ? "identified_with_explicit_consent"
+              : privacy
+          }
+          disabled={family === "landing_waitlist"}
           onChange={(event) => setPrivacy(event.target.value)}
         >
           <option value="anonymous_notes">Anonymous notes</option>

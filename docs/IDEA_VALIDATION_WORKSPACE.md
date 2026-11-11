@@ -29,3 +29,13 @@ Evidence Alignment answers what SaaSScout already knows that aligns or conflicts
 ## Deferred work
 
 V5 owns Customer Interview execution, participants, questions, notes, and consent workflows. V6 owns Survey building, distribution, response collection/import, and public ingress. V7 owns multidimensional interpretation; it must not equate volume or lifecycle with evidence quality. Later reviewed work owns promotion into the Data Moat and Knowledge Evolution.
+
+## Beta Landing Pages increment
+
+The owner-authorized Beta PR 3 extends the historical interviews/surveys-only
+scope with capability-gated `landing_waitlist` execution. Opportunity reports
+link into the existing verified-source subject flow. Guided page authoring,
+preview, opaque publication, consented email collection, private metrics and
+owner-mediated removal are documented in [Validation Landing Pages](VALIDATION_LANDING_PAGES.md).
+Existing hypotheses, lifecycle controls and private/shared evidence boundaries
+remain authoritative. Public participation remains default-off.
