@@ -30,7 +30,10 @@ export function ExperimentForm({
 }) {
   const capabilities = useValidationCapabilities();
   const [family, setFamily] = useState<
-    "customer_interview" | "survey" | "landing_waitlist"
+    | "customer_interview"
+    | "survey"
+    | "landing_waitlist"
+    | "interactive_prototype"
   >(capabilities.privateInterviews ? "customer_interview" : "survey");
   const [audience, setAudience] = useState("");
   const [method, setMethod] = useState("");
@@ -122,14 +125,16 @@ export function ExperimentForm({
                 ? "Focused conversations"
                 : family === "landing_waitlist"
                   ? "Consented interest in a published offer"
-                  : "Structured responses",
+                  : family === "interactive_prototype"
+                    ? "Navigation task and explicit participant feedback"
+                    : "Structured responses",
           },
           screeningCriteria: words(screening),
           consentPrivacyMode: privacy,
         }),
       });
       onDone(
-        family === "landing_waitlist"
+        family === "landing_waitlist" || family === "interactive_prototype"
           ? null
           : createPlanDraftHandoff(
               subjectId,
@@ -184,6 +189,10 @@ export function ExperimentForm({
           onChange={(event) => {
             const next = event.target.value as typeof family;
             setFamily(next);
+            if (next === "interactive_prototype") {
+              setMethod("Privately shared navigable concept test");
+              setPrivacy("anonymous_notes");
+            }
             if (next === "landing_waitlist")
               setPrivacy("identified_with_explicit_consent");
           }}
@@ -194,6 +203,9 @@ export function ExperimentForm({
           {capabilities.privateSurveys && (
             <option value="survey">Survey</option>
           )}
+          {capabilities.privatePrototypes && (
+            <option value="interactive_prototype">Interactive Prototype</option>
+          )}
           {capabilities.privateLandingPages && (
             <option value="landing_waitlist">Landing Page / Waitlist</option>
           )}
@@ -202,9 +214,11 @@ export function ExperimentForm({
       <div className="rounded-xl bg-white/[.035] p-4 text-sm text-slate-400">
         {family === "customer_interview"
           ? "Have focused conversations to understand pain, behavior, workarounds, and context."
-          : family === "landing_waitlist"
-            ? "Publish a focused offer and measure consented interest from your target audience."
-            : "Collect structured responses at greater breadth to test specific assumptions."}
+          : family === "interactive_prototype"
+            ? "Test a navigable visual concept and collect explicit participant feedback. No programming needed."
+            : family === "landing_waitlist"
+              ? "Publish a focused offer and measure consented interest from your target audience."
+              : "Collect structured responses at greater breadth to test specific assumptions."}
       </div>
       <Field label="Target audience" helper="One audience criterion per line.">
         <TextArea

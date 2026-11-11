@@ -18,7 +18,8 @@ type CreatedExperiment = {
   version: {
     id: string;
     hypothesis_version_id: string;
-    family: PlanDraftHandoff["family"] | "landing_waitlist";
+    family:
+      PlanDraftHandoff["family"] | "landing_waitlist" | "interactive_prototype";
   };
 };
 
@@ -109,7 +110,8 @@ export function matchesPlanDraftHandoff(
     hypothesisVersionId: string;
     experimentId: string;
     experimentVersionId: string;
-    family: PlanDraftHandoff["family"] | "landing_waitlist";
+    family:
+      PlanDraftHandoff["family"] | "landing_waitlist" | "interactive_prototype";
   },
 ): handoff is PlanDraftHandoff {
   return Boolean(

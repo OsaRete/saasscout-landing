@@ -13,6 +13,8 @@ export default function ValidationReleaseLayout(props: {
       value={{
         privateInterviews: policy.privateInterviews,
         privateSurveys: policy.privateSurveys,
+        privatePrototypes: policy.privatePrototypes,
+        publicPrototypeParticipation: policy.publicPrototypeParticipation,
         privateLandingPages: policy.privateLandingPages,
         publicLandingParticipation: policy.publicLandingParticipation,
         publicSurveyParticipation: policy.publicSurveyParticipation,

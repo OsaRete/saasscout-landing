@@ -3,6 +3,8 @@ import { createContext, useContext } from "react";
 export type ValidationUiCapabilities = Readonly<{
   privateInterviews: boolean;
   privateSurveys: boolean;
+  privatePrototypes?: boolean;
+  publicPrototypeParticipation?: boolean;
   privateLandingPages?: boolean;
   publicLandingParticipation?: boolean;
   publicSurveyParticipation: boolean;
