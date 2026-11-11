@@ -78,6 +78,23 @@ select pg_temp.check_true((select count(*)=2 from public.validation_evidence_sou
  where scope_id='a0000000-0000-0000-0000-000000000002' and reason_code in ('session_cancelled','session_relevance_lost')),'session restrictions persisted');
 select pg_temp.check_true(not exists(select 1 from public.validation_evidence_source_restrictions where reason_code='experiment_cancelled'),'completion alone creates no restriction');
 
+-- Private Survey DML and experiment cancellation use the same persisted guard.
+set local role service_role;
+insert into public.validation_experiments(id,owner_id,subject_id) values
+ ('60000000-0000-0000-0000-000000000002','10000000-0000-0000-0000-000000000001','30000000-0000-0000-0000-000000000001');
+insert into public.validation_experiment_versions(id,owner_id,subject_id,experiment_id,hypothesis_id,hypothesis_version_id,
+ version_number,family,target_audience,collection_method,design_snapshot,consent_privacy_mode,lifecycle,started_at)
+ select '70000000-0000-0000-0000-000000000002',owner_id,subject_id,'60000000-0000-0000-0000-000000000002',hypothesis_id,hypothesis_version_id,
+ 1,'survey',target_audience,'survey',design_snapshot,consent_privacy_mode,'running',started_at
+ from public.validation_experiment_versions where id='70000000-0000-0000-0000-000000000001';
+select public.validation_transition_experiment_version(
+ '10000000-0000-0000-0000-000000000001','70000000-0000-0000-0000-000000000002','running','cancelled');
+select pg_temp.check_true((select lifecycle='cancelled' and cancelled_at is not null from public.validation_experiment_versions
+ where id='70000000-0000-0000-0000-000000000002'),'private survey cancellation persisted');
+reset role;
+select pg_temp.check_true((select count(*)=1 from public.validation_evidence_source_restrictions where reason_code='experiment_cancelled'
+ and scope_id='70000000-0000-0000-0000-000000000002'),'cancellation restriction persisted');
+
 -- Failure to persist a restriction must roll back its initiating source update.
 create function pg_temp.fail_restriction() returns trigger language plpgsql as $$ begin raise exception 'injected' using errcode='23514'; end $$;
 create trigger pr2_fault before insert on public.validation_evidence_source_restrictions for each row execute function pg_temp.fail_restriction();

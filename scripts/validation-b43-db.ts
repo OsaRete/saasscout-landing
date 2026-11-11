@@ -540,7 +540,10 @@ async function run(): Promise<void> {
   const setup = fixture.split("create function public.b31_test_promote(")[0]
     .replaceAll("generate_series(1,14)", "generate_series(1,120)")
     .replaceAll("generate_series(1,15)", "generate_series(1,120)")
-    .replaceAll("least(i,14)", "i");
+    .replaceAll("least(i,14)", "i")
+    // B3.1 intentionally leaves source 4 unapproved for its negative test;
+    // B4.3 requires four approved positive proof fixtures instead.
+    .replace("where i <> 4;", ";");
   check(setup.length > 1000, "B3.1 fixture setup is incomplete");
   sql(`begin;${setup}\ncommit;`);
   const { promoteCustomerInterviewEvidence, readTrustedQualifiedValidationEvidence } =

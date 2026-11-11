@@ -108,3 +108,22 @@ Private/public activation remains blocked by Beta integration acceptance, stable
 survey retry identity, publication/revocation/submission races, abuse protection,
 and completeness decisions documented in PR 1. Neither private/public activation
 nor shared/AI authority follows from this database repair. PR #235 is untouched.
+
+## Local execution record
+
+- PostgreSQL 17: complete 37-migration baseline and 38-migration fresh chain,
+  populated upgrade, historical row preservation, source/restriction atomicity,
+  private interview retries and private survey cancellation pass.
+- Observed source-lock waiting and committed restrictions pass in both paths.
+- Existing B3.1 static SQL and all eight independent-connection scenarios pass.
+- Focused offline run: 1,514/1,516 initially; two missing transport-mock failures
+  corrected. B4.3/fixture rerun: 67/67 pass; remaining 1,449 passed unchanged.
+  Final B4.3 orchestration rerun after fixture correction: 58/58 pass. No skips.
+- Native SQL fixture transport: concurrent RPCs, three polarities, composite joins,
+  native proof and exact count pass. The positive B4.3 fixture now includes its
+  fourth reviewed statement; B3.1's intentionally unapproved negative stays intact.
+- Full lint passes (four existing warnings); focused TypeScript no-emit passes;
+  production build passes. Full repository tsc was not rerun; the accepted PR #237
+  175-diagnostic baseline is not claimed fixed.
+- Full Supabase/PostgREST CI is tracked on PR #238. Isolated B4.3 remains manual;
+  it is not a local pass or an activation approval.
