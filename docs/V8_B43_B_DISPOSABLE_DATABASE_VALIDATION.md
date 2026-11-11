@@ -95,3 +95,62 @@ The integration suite is not a substitute for review of PostgreSQL runtime behav
 ## Docker Desktop incident note
 
 On 2026-10-30, read-only inspection found the older protected `supabase_db_saasscout-survey-integrity-disposable` container exited with code 134. Docker reported `chown ...: read-only file system`; the event stream recorded the matching container `die` event. This is evidence of the reported filesystem error, not proof of a deeper cause, and there is no evidence tying it to B4.3. Do not restart or repair that container as part of B4.3 validation. The runner also fails closed on Docker Desktop bindings whose `HostIp` is empty or wildcard.
+
+## PR 1 boundary-only closure amendment
+
+The default invocation still runs the entire B4.3 suite, including source-transition,
+restoration and concurrency assertions. Nothing in this amendment repairs or waives
+those contracts. `--preflight-only` remains an identity check, not acceptance.
+
+After separately authorized startup/reset and the existing target-identity checks:
+
+```bash
+node scripts/validation-b43-db.ts --pr1-boundary-only
+```
+
+This explicit test-only mode executes the existing migration/freshness, catalog,
+effective-role, PostgREST RPC/table denial, positive WITHHELD creation/exclusion,
+historical compatibility, authority-write rollback and corrupted/missing-proof
+current-reader checks. It then inserts one synthetic canonical restriction through
+trusted SQL in the verified disposable target and reuses the existing four
+UPDATE/DELETE immutability assertions for authority and restriction facts. The
+fixture does not call the trigger-only restriction RPC, alter privileges, disable
+immutability triggers or require a participant/session/experiment transition.
+Success is labeled **PR1 boundary-only**, explicitly excluding source transitions.
+Every assertion failure remains nonzero; combined/unknown modes fail before target
+inspection. A boundary pass is not a full B4.3 pass or an activation approval.
+
+The existing workflow now accepts `b43_scope=pr1-boundary-only`, while `full` remains
+the default. Only that explicitly scoped manual dispatch skips the previously
+completed B3.1/B4.2 and broad static jobs; normal PR events and full dispatch retain
+their existing jobs. `authorize_disposable_reset=true`, the protected environment,
+unique project/network, loopback binding and identity preflights remain required.
+No production environment variable or application entry point admits this mode.
+
+Proposed execution, **NOT AUTHORIZED OR EXECUTED HERE**: after review and separate
+permission to commit/push this local amendment, dispatch the existing workflow on
+that exact amended branch with `authorize_disposable_reset=true` and
+`b43_scope=pr1-boundary-only`. Verify the resolved run SHA before approving its
+protected environment. Authorize generated project startup (which can apply copied
+migrations), its later reset, privileged *disposable-only* fixture/fault-injection
+writes, and ephemeral-runner teardown. Confirm the GitHub environment supplies no
+production credentials; the workflow itself references no GitHub secrets. Local
+keys are obtained only from the generated Supabase stack. Do not copy `.env` files.
+
+Proposed command after those separate authorizations and publishing the reviewed
+amendment, **NOT EXECUTED**:
+
+```bash
+gh workflow run validation-b31-database.yml \
+  --repo OsaRete/saasscout-landing \
+  --ref codex/validation-private-capability-foundation \
+  -f authorize_disposable_reset=true \
+  -f b43_scope=pr1-boundary-only
+```
+
+Expected execution: one existing Ubuntu-hosted job, typically 10–20 minutes,
+30-minute timeout. Included public-repository/plan quota may cover it; otherwise
+cost is consumed Linux runner minutes at the owner's current account rate. Billing
+and environment settings have not been independently verified. No paid Supabase
+project or VM is required. Do not rerun the 1,696 offline tests or dispatch full
+source-transition acceptance to close this scoped gate.

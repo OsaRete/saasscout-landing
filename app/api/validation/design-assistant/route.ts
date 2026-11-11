@@ -1,3 +1,4 @@
+import { validationAdmission } from "@/lib/validation/server/release-policy";
 import { AuthError, requireUser } from "@/app/api/_utils/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server-admin";
 import {
@@ -23,6 +24,9 @@ const messages = {
 } as const;
 
 export async function POST(request: Request) {
+  const denied = validationAdmission("ai.design", request.method);
+  if (denied) return denied;
+
   try {
     const user = await requireUser(request);
     const length = Number(request.headers.get("content-length") || 0);
@@ -62,3 +66,6 @@ export async function POST(request: Request) {
     );
   }
 }
+
+// Explicitly deny alternate methods; do not rely on framework defaults.
+export { validationDisabledResponse as GET, validationDisabledResponse as HEAD, validationDisabledResponse as PUT, validationDisabledResponse as PATCH, validationDisabledResponse as DELETE, validationDisabledResponse as OPTIONS } from "@/lib/validation/server/release-policy";

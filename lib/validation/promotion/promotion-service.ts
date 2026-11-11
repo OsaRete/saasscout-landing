@@ -1,3 +1,4 @@
+import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -124,8 +125,10 @@ function buildRepresentativeState(
 export async function promoteCustomerInterviewEvidence(
   ownerId: string,
   observationId: string,
-  db: SupabaseAdminClient = createSupabaseAdminClient(),
+  db?: SupabaseAdminClient,
 ) {
+  assertValidationOperation("shared.promote", "POST");
+  db ??= createSupabaseAdminClient();
   /*
    * Interactive B3.1 preparation is owner-scoped.
    *

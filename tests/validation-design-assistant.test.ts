@@ -6,11 +6,8 @@ import {
   parseValidationDesignOutput,
   ValidationDesignOutputError,
 } from "../lib/validation/design-assistant/parser.ts";
-import {
-  parseValidationDesignIntent,
-  ValidationDesignError,
-  ValidationDesignService,
-} from "../lib/validation/design-assistant/service.ts";
+import { deferredAlgorithmModule } from "./support/validation-module.ts";
+const {parseValidationDesignIntent,ValidationDesignError,ValidationDesignService}=deferredAlgorithmModule("lib/validation/design-assistant/service.ts") as typeof import("../lib/validation/design-assistant/service.ts");
 import { validationDesignResponseFormat } from "../lib/validation/design-assistant/schema.ts";
 import {
   VALIDATION_DESIGN_MAX_OUTPUT_TOKENS,

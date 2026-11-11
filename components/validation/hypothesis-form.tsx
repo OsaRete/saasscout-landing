@@ -1,5 +1,6 @@
 "use client";
 
+import { useValidationCapabilities } from "./release-capabilities";
 import { useRef, useState } from "react";
 import { Button, Field, TextArea, TextInput } from "@/components/ui";
 import type { HypothesisDesignDraft } from "@/lib/validation/design-assistant/contracts";
@@ -35,6 +36,7 @@ export function HypothesisForm({
   onDone: () => void;
   onCancel?: () => void;
 }) {
+  const capabilities = useValidationCapabilities();
   const [form, setForm] = useState({
     targetSegment: current?.target_segment || "",
     problemClaim: current?.problem_claim || "",
@@ -117,7 +119,8 @@ export function HypothesisForm({
     event.preventDefault();
     setBusy(true);
     setError("");
-    const body={targetSegment: form.targetSegment,
+    const body = {
+      targetSegment: form.targetSegment,
       problemClaim: form.problemClaim,
       expectedObservableBehavior: form.expectedObservableBehavior,
       ...(form.commercialAssumption
@@ -159,13 +162,15 @@ export function HypothesisForm({
             ? `Revise hypothesis — creates V${current.version_number + 1}`
             : "Define hypothesis"}
         </h3>
-        <Button
-          variant="secondary"
-          onClick={generateDraft}
-          disabled={!hasSeed || aiBusy || busy}
-        >
-          {aiBusy ? "Generating one draft…" : "Improve with AI"}
-        </Button>
+        {capabilities.privateAiDesign && (
+          <Button
+            variant="secondary"
+            onClick={generateDraft}
+            disabled={!hasSeed || aiBusy || busy}
+          >
+            {aiBusy ? "Generating one draft…" : "Improve with AI"}
+          </Button>
+        )}
       </div>
       <p className="text-xs text-slate-500">
         Optional. Add a target customer and problem first. Each click requests

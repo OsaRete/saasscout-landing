@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { persistProblemObservations } from "../lib/knowledge/observation-store.ts";
-import { promoteCustomerInterviewEvidence } from "../lib/validation/promotion/promotion-service.ts";
-import { readTrustedQualifiedValidationEvidence } from "../lib/validation/promotion/trusted-qualified-evidence-reader.ts";
+import { createValidationDatabaseFixtures } from "../tests/support/validation-database-fixtures.ts";
+import { acceptanceSupabaseCli } from "./validation-acceptance-contracts.ts";
 
 // This runner refuses arbitrary URLs/credentials. It only discovers credentials
 // from the disposable Supabase CLI instance created by the dedicated CI job.
@@ -53,7 +53,8 @@ function fingerprint(i: number, polarity = "supporting", policy = "v8-b1.2", res
 
 async function run() {
   check(process.env.VALIDATION_B42_DISPOSABLE === "1", "explicit disposable test opt-in required; no skip");
-  const statusResult = spawnSync("supabase", ["status", "-o", "json"], {
+  const cli = acceptanceSupabaseCli(process.env.VALIDATION_SUPABASE_CLI);
+  const statusResult = spawnSync(cli, ["status", "-o", "json"], {
     encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
   });
   check(statusResult.status === 0, "disposable Supabase status unavailable");
@@ -86,6 +87,8 @@ async function run() {
     .replaceAll("least(i,14)", "i");
   const rpcCatalog = sql("select md5(string_agg(oid::text, ',' order by oid)) from pg_proc where pronamespace='public'::regnamespace;", phase);
   sql(`begin;${setup}\ncommit;`, phase);
+  const { promoteCustomerInterviewEvidence, readTrustedQualifiedValidationEvidence } =
+    createValidationDatabaseFixtures("B42", [admin, anonymous, authenticated]);
 
   async function expectReadFailure() {
     let rejected = false;

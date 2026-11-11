@@ -1,0 +1,24 @@
+import { getValidationReleasePolicy } from "@/lib/validation/server/release-policy";
+import { ValidationCapabilityProvider } from "@/components/validation/release-capabilities";
+import { ValidationUnavailable } from "@/components/validation/unavailable";
+export const dynamic = "force-dynamic";
+export default function ValidationReleaseLayout(props: {
+  children: React.ReactNode;
+}) {
+  const policy = getValidationReleasePolicy();
+  if (!policy.privateInterviews && !policy.privateSurveys)
+    return <ValidationUnavailable />;
+  return (
+    <ValidationCapabilityProvider
+      value={{
+        privateInterviews: policy.privateInterviews,
+        privateSurveys: policy.privateSurveys,
+        publicSurveyParticipation: policy.publicSurveyParticipation,
+        privateAiDesign: policy.privateAiDesign,
+        privateAiInterpretation: policy.privateAiInterpretation,
+      }}
+    >
+      {props.children}
+    </ValidationCapabilityProvider>
+  );
+}

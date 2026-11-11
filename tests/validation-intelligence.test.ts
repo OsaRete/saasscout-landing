@@ -801,7 +801,7 @@ test("GET is read-only, POST is explicit intent, provider has one attempt and sa
   );
   assert.match(service, /eq\("owner_id", ownerId\)/);
   assert.doesNotMatch(service, /interview_sessions","[^\n]*notes/);
-  assert.doesNotMatch(route, /lease|expires|owner_id|snapshot_hash/);
+  assert.doesNotMatch(route, /\blease\b|expires|owner_id|snapshot_hash/);
 });
 test("UI exposes manual states, six dimensions, contradiction, uncertainty, recommendation and boundary", () => {
   for (const text of [
