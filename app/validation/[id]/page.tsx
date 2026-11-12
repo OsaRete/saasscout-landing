@@ -1,4 +1,5 @@
 "use client";
+import { PrototypeWorkspace } from "@/components/validation/prototype-workspace";
 import { LandingWorkspace } from "@/components/validation/landing-workspace";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -33,7 +34,11 @@ type ExperimentVersion = {
   experiment_id: string;
   hypothesis_version_id: string;
   version_number: number;
-  family: "customer_interview" | "survey" | "landing_waitlist";
+  family:
+    | "customer_interview"
+    | "survey"
+    | "landing_waitlist"
+    | "interactive_prototype";
   target_audience: string[];
   collection_method: string;
   consent_privacy_mode: string;
@@ -485,8 +490,7 @@ export default function WorkspacePage({
               />
             ) : data.experiments.length === 0 ? (
               <div className={`${card} text-sm text-slate-400`}>
-                No experiments yet. Create a Customer Interview or Survey shell
-                when you are ready.
+                No experiments yet. Create a research experiment when you are ready.
               </div>
             ) : (
               <div className="space-y-4">
@@ -598,6 +602,13 @@ export default function WorkspacePage({
                           onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
                       )}
+                      {v.family === "interactive_prototype" &&
+                        capabilities.privatePrototypes && (
+                          <PrototypeWorkspace
+                            versionId={v.id}
+                            lifecycle={v.lifecycle}
+                          />
+                        )}
                       {v.family === "landing_waitlist" &&
                         capabilities.privateLandingPages && (
                           <LandingWorkspace

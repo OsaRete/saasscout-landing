@@ -6,11 +6,17 @@ export function getValidationReleasePolicy(
   config: {
     privateMode?: unknown;
     publicSurveys?: unknown;
+    privatePrototypes?: unknown;
+    publicPrototypes?: unknown;
+    prototypeCookieSecret?: unknown;
     privateLandingPages?: unknown;
     publicLandingPages?: unknown;
     landingCookieSecret?: unknown;
   } = {
     privateMode: process.env.VALIDATION_PRIVATE_MODE,
+    privatePrototypes: process.env.VALIDATION_PRIVATE_PROTOTYPES,
+    publicPrototypes: process.env.VALIDATION_PUBLIC_PROTOTYPES,
+    prototypeCookieSecret: process.env.VALIDATION_PROTOTYPE_COOKIE_SECRET,
     publicSurveys: process.env.VALIDATION_PUBLIC_SURVEYS,
     privateLandingPages: process.env.VALIDATION_PRIVATE_LANDING_PAGES,
     publicLandingPages: process.env.VALIDATION_PUBLIC_LANDING_PAGES,
@@ -29,6 +35,14 @@ export function getValidationReleasePolicy(
     mode === "SURVEYS" || mode === "INTERVIEWS_AND_SURVEYS";
   return Object.freeze({
     mode,
+    privatePrototypes:
+      mode !== "DISABLED" && config.privatePrototypes === "ENABLED",
+    publicPrototypeParticipation:
+      mode !== "DISABLED" &&
+      config.privatePrototypes === "ENABLED" &&
+      config.publicPrototypes === "ENABLED" &&
+      typeof config.prototypeCookieSecret === "string" &&
+      config.prototypeCookieSecret.length >= 32,
     privateLandingPages:
       mode !== "DISABLED" && config.privateLandingPages === "ENABLED",
     publicLandingParticipation:
@@ -69,6 +83,14 @@ const operations = {
   "interview.create": ["POST", "privateInterviews"],
   "interview.update": ["POST", "privateInterviews"],
   "interview.observation": ["POST", "privateInterviews"],
+  "prototype.read": ["GET", "privatePrototypes"],
+  "prototype.save": ["POST", "privatePrototypes"],
+  "prototype.remove": ["POST", "privatePrototypes"],
+  "prototype.publish": ["POST", "publicPrototypeParticipation"],
+  "prototype.unpublish": ["POST", "privatePrototypes"],
+  "prototype.resolve": ["GET", "publicPrototypeParticipation"],
+  "prototype.event": ["POST", "publicPrototypeParticipation"],
+  "prototype.submit": ["POST", "publicPrototypeParticipation"],
   "landing.read": ["GET", "privateLandingPages"],
   "landing.remove": ["POST", "privateLandingPages"],
   "landing.save": ["POST", "privateLandingPages"],
@@ -118,6 +140,7 @@ export function admittedValidationFamilies(
   return [
     ...(policy.privateInterviews ? ["customer_interview"] : []),
     ...(policy.privateSurveys ? ["survey"] : []),
+    ...(policy.privatePrototypes ? ["interactive_prototype"] : []),
     ...(policy.privateLandingPages ? ["landing_waitlist"] : []),
   ];
 }
@@ -136,7 +159,11 @@ export function assertValidationOperation(
 }
 export function assertValidationFamily(
   family: unknown,
-  expectedFamily?: "customer_interview" | "survey" | "landing_waitlist",
+  expectedFamily?:
+    | "customer_interview"
+    | "survey"
+    | "landing_waitlist"
+    | "interactive_prototype",
 ): void {
   if (
     typeof family !== "string" ||

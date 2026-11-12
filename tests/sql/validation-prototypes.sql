@@ -1,0 +1,65 @@
+-- Synthetic owner fixture; this suite is rolled back by its disposable runner.
+insert into auth.users(id) values('21000000-0000-0000-0000-000000000001'),('21000000-0000-0000-0000-000000000002');
+select set_config('prototype.owner','21000000-0000-0000-0000-000000000001',false);
+select set_config('prototype.subject',(public.validation_create_subject(current_setting('prototype.owner')::uuid,'user_entered','Prototype acceptance','{}')->>'id'),false);
+select set_config('prototype.hypothesis',(public.validation_create_hypothesis(current_setting('prototype.owner')::uuid,current_setting('prototype.subject')::uuid,'operators','Research is too slow','Join a waitlist',null,'["10% signup"]','["Below 10%"]','["Too few visitors"]','[]','[]')->'version'->>'id'),false);
+select set_config('prototype.version',(public.validation_create_experiment(current_setting('prototype.owner')::uuid,current_setting('prototype.subject')::uuid,current_setting('prototype.hypothesis')::uuid,'interactive_prototype','["operators"]','Landing page','{}','[]','identified_with_explicit_consent')->'version'->>'id'),false);
+create function pg_temp.prototype_assert(ok boolean,label text) returns void language plpgsql as $$ begin if ok is distinct from true then raise exception 'FAIL %',label; end if; end $$;
+create function pg_temp.prototype_reject(command text,label text) returns void language plpgsql as $$ begin
+ begin execute command; exception when others then return; end;
+ raise exception 'FAIL expected rejection: %',label;
+end $$;
+select pg_temp.prototype_assert(not has_table_privilege(r,t,'SELECT') and not has_table_privilege(r,t,'INSERT') and not has_table_privilege(r,t,'UPDATE') and not has_table_privilege(r,t,'DELETE'),'browser ACL '||r||t)
+from unnest(array['anon','authenticated']) r cross join unnest(array['validation_prototype_pages','validation_prototype_publications','validation_prototype_views','validation_prototype_submissions','validation_prototype_rate_buckets']) t;
+select pg_temp.prototype_assert(not has_function_privilege(r,'public.validation_prototype_owner(uuid,uuid,text,jsonb,integer,text)','EXECUTE') and not has_function_privilege(r,'public.validation_prototype_public(text,text,text,uuid,jsonb,boolean,text)','EXECUTE'),'browser RPC ACL '||r) from unnest(array['anon','authenticated']) r;
+select pg_temp.prototype_assert((select bool_and(relrowsecurity) from pg_class where relname like 'validation_prototype_%' and relkind='r'),'RLS enabled');
+set role service_role;
+do $$
+declare owner_id uuid:=current_setting('prototype.owner')::uuid; version_id uuid:=current_setting('prototype.version')::uuid;
+ c jsonb:='{"title": "Test concept", "purpose": "Try the task", "consent": "I agree to share my anonymous navigation activity and feedback with the prototype creator for idea validation. I will not include personal or sensitive information.", "screens": [{"id": "one", "layout": "dashboard", "title": "Start", "description": "Start here", "labels": ["Overview"], "actions": [{"label": "Next", "target": "two"}]}, {"id": "two", "layout": "confirmation", "title": "Done", "description": "Complete", "labels": [], "actions": [{"label": "Back", "target": "one"}]}]}'; d jsonb; x jsonb; i integer; saved_pub uuid; feedback jsonb:='{"outcome": "no", "comment": "Could not complete task", "consent": "I agree to share my anonymous navigation activity and feedback with the prototype creator for idea validation. I will not include personal or sensitive information."}';
+begin
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_owner(%L,%L,''read'')','21000000-0000-0000-0000-000000000002',version_id),'cross owner read');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_owner(%L,%L,''save'',%L,0)',owner_id,version_id,jsonb_set(c,'{screens,0,actions,0,target}','"missing"')),'invalid navigation authoring');
+ d:=public.validation_prototype_owner(owner_id,version_id,'save',c,0);
+ perform pg_temp.prototype_assert((d->'page'->>'revision')::integer=1,'create');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_owner(%L,%L,''save'',%L,0)',owner_id,version_id,c),'stale edit');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_owner(%L,%L,''publish'',null,1,%L)',owner_id,version_id,repeat('a',64)),'draft publication');
+ perform public.validation_transition_experiment_version(owner_id,version_id,'draft','ready');
+ perform public.validation_transition_experiment_version(owner_id,version_id,'ready','running');
+ d:=public.validation_prototype_owner(owner_id,version_id,'publish',null,1,repeat('a',64));
+ saved_pub:=(d->'publication'->>'id')::uuid;
+ x:=public.validation_prototype_public(repeat('a',64),'resolve');
+ perform pg_temp.prototype_assert(x->>'title'='Test concept' and not x?'owner_id' and not x?'revision','safe projection');
+ d:=public.validation_prototype_owner(owner_id,version_id,'save',jsonb_set(c,'{title}','"Updated concept"'),1);
+ perform pg_temp.prototype_assert((public.validation_prototype_public(repeat('a',64),'resolve')->>'title')='Test concept','published snapshot');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''event'',%L,gen_random_uuid(),%L,false,%L)',repeat('a',64),repeat('b',64),'{"screen":"one"}',repeat('c',64)),'consent required');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''event'',%L,gen_random_uuid(),%L,true,%L)',repeat('a',64),repeat('b',64),'{"screen":"two"}',repeat('c',64)),'cannot bypass navigation');
+ perform public.validation_prototype_public(repeat('a',64),'event',repeat('b',64),'22000000-0000-4000-8000-000000000001','{"screen":"one"}',true,repeat('c',64));
+ perform public.validation_prototype_public(repeat('a',64),'event',repeat('b',64),'22000000-0000-4000-8000-000000000001','{"screen":"one"}',true,repeat('c',64));
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''event'',%L,gen_random_uuid(),%L,true,%L)',repeat('a',64),repeat('b',64),'{"screen":"one","target":"unknown"}',repeat('c',64)),'unknown destination');
+ perform public.validation_prototype_public(repeat('a',64),'event',repeat('b',64),gen_random_uuid(),'{"screen":"one","target":"two"}',true,repeat('c',64));
+ perform public.validation_prototype_public(repeat('a',64),'event',repeat('b',64),gen_random_uuid(),'{"screen":"two"}',true,repeat('c',64));
+ perform public.validation_prototype_public(repeat('a',64),'submit',repeat('b',64),'22000000-0000-4000-8000-000000000002',feedback,true,repeat('c',64));
+ perform public.validation_prototype_public(repeat('a',64),'submit',repeat('b',64),'22000000-0000-4000-8000-000000000002',feedback,true,repeat('c',64));
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''submit'',%L,gen_random_uuid(),%L,true,%L)',repeat('a',64),repeat('b',64),jsonb_set(feedback,'{comment}','"Changed"'),repeat('c',64)),'changed retry rejected');
+ d:=public.validation_prototype_owner(owner_id,version_id,'read');
+ perform pg_temp.prototype_assert(d->'metrics'->>'events'='3' and d->'metrics'->>'browsers'='1' and d->'metrics'->>'submissions'='1','transparent deduped metrics');
+ perform pg_temp.prototype_assert(d->'submissions'->0->>'revision'='1','feedback attribution');
+ perform pg_temp.prototype_reject(format('update public.validation_prototype_publications set content=%L where id=%L',c,saved_pub),'immutable published content');
+ for i in 1..61 loop x:=public.validation_prototype_public(repeat('a',64),'event',repeat('b',64),gen_random_uuid(),'{"screen":"one"}',true,repeat('d',64)); end loop;
+ perform pg_temp.prototype_assert(x->>'limited'='true','durable rate limit');
+ d:=public.validation_prototype_owner(owner_id,version_id,'publish',null,2,repeat('e',64));
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''resolve'')',repeat('a',64)),'replacement revokes old token');
+ perform public.validation_transition_experiment_version(owner_id,version_id,'running','paused');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''resolve'')',repeat('e',64)),'paused ingress closed');
+ perform public.validation_transition_experiment_version(owner_id,version_id,'paused','running');
+ d:=public.validation_prototype_owner(owner_id,version_id,'unpublish',null,2);
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''resolve'')',repeat('e',64)),'unpublish closed');
+ d:=public.validation_prototype_owner(owner_id,version_id,'publish',null,2,repeat('f',64));
+ d:=public.validation_prototype_owner(owner_id,version_id,'remove',null,2);
+ perform pg_temp.prototype_assert(d->'page'->>'removed'='true' and d->'metrics'->>'submissions'='1','remove preserves feedback');
+ perform pg_temp.prototype_reject(format('select public.validation_prototype_public(%L,''resolve'')',repeat('f',64)),'removal closes ingress');
+ perform pg_temp.prototype_reject(format('delete from public.validation_prototype_submissions'),'evidence deletion denied');
+end $$;
+reset role;
+select 'PASS prototype ACL, RLS, ownership, content validation, revision conflicts, snapshots, navigation, consent, retries, metrics, rate limit, pause, replacement, unpublish and removal';

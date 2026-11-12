@@ -11,6 +11,9 @@ on:
       - "scripts/validation-b43-db.ts"
       - "scripts/validation-private-db.ts"
       - "scripts/validation-landing-db.ts"
+      - "scripts/validation-prototypes-db.ts"
+      - "tests/sql/validation-prototypes.sql"
+      - "tests/validation-prototypes.test.ts"
       - "tests/sql/validation-landing-pages.sql"
       - "tests/validation-landing-pages.test.ts"
       - "tests/sql/private-validation-repair.sql"
@@ -73,6 +76,8 @@ jobs:
         run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts tests/validation-database-fixtures.test.ts tests/validation-body-limit.test.ts tests/validation-release-boundary.test.ts tests/validation-capability-resources.test.ts tests/validation-acceptance-contracts.test.ts
       - name: Landing Pages pure and server boundary checks
         run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-landing-pages.test.ts
+      - name: Interactive Prototypes pure and server boundaries
+        run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-prototypes.test.ts
       - name: Lint database boundaries and focused tests
         run: npx eslint scripts/validation-private-db.ts tests/support/validation-postgres-fixtures.ts scripts/validation-b43-db.ts scripts/validation-b43-isolation.ts scripts/prepare-validation-b43-disposable.ts tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts lib/validation/promotion/current-qualified-evidence-reader.ts
       - name: Type-check B4.3 test infrastructure without emitting files
@@ -136,6 +141,10 @@ jobs:
         env:
           VALIDATION_LANDING_DB_DISPOSABLE: "1"
         run: node scripts/validation-landing-db.ts
+      - name: Interactive Prototypes SQL integrity
+        env:
+          VALIDATION_PROTOTYPE_DB_DISPOSABLE: "1"
+        run: node scripts/validation-prototypes-db.ts
   b43-disposable-database:
     name: isolated B4.3-B database
     if: github.event_name == 'workflow_dispatch' && inputs.authorize_disposable_reset == true
