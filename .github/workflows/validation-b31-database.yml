@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - "supabase/migrations/**"
+      - "app/validation/**"
+      - "components/validation/**"
+      - "components/app-shell.tsx"
+      - "tests/validation-hub.test.ts"
+      - "tests/validation-workspace-ui.test.ts"
+      - "tests/validation-surveys.test.ts"
+      - "e2e/validation-hub.spec.ts"
       - "tests/sql/validation-b31.sql"
       - "scripts/validation-b31-db.ts"
       - "scripts/validation-b41-db.ts"
@@ -88,6 +95,8 @@ jobs:
         run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts tests/validation-database-fixtures.test.ts tests/validation-body-limit.test.ts tests/validation-release-boundary.test.ts tests/validation-capability-resources.test.ts tests/validation-acceptance-contracts.test.ts
       - name: Landing Pages pure and server boundary checks
         run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-landing-pages.test.ts
+      - name: Validation Hub guidance and workspace compatibility
+        run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-hub.test.ts tests/validation-workspace-ui.test.ts tests/validation-workspace-refresh.test.ts tests/validation-surveys.test.ts
       - name: Commercial Intent pure and server boundaries
         run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-commercial-intent.test.ts
       - name: External MVP pure and server boundaries
@@ -171,7 +180,7 @@ jobs:
         run: node scripts/validation-commercial-intent-db.ts
 
   commercial-intent-ui:
-    name: Commercial Intent build and browser fixtures
+    name: Validation Hub and Commercial Intent browser fixtures
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -200,6 +209,23 @@ jobs:
             sleep 1
           done
           VALIDATION_COMMERCIAL_INTENT_UI_BASE=http://127.0.0.1:3001 npx playwright test e2e/validation-commercial-intent.spec.ts --project=chromium --reporter=line
+      - name: Local synthetic Hub capability and navigation workflows
+        run: |
+          VALIDATION_PRIVATE_MODE=INTERVIEWS_AND_SURVEYS VALIDATION_PRIVATE_LANDING_PAGES=ENABLED VALIDATION_PRIVATE_PROTOTYPES=ENABLED VALIDATION_PRIVATE_EXTERNAL_MVP=ENABLED npm run start -- --port 3011 > /tmp/hub-app.log 2>&1 &
+          hub_pid=$!
+          VALIDATION_PRIVATE_COMMERCIAL_INTENT=DISABLED VALIDATION_PUBLIC_COMMERCIAL_INTENT=DISABLED npm run start -- --port 3012 > /tmp/hub-restricted.log 2>&1 &
+          restricted_pid=$!
+          VALIDATION_PRIVATE_MODE=DISABLED npm run start -- --port 3013 > /tmp/hub-off.log 2>&1 &
+          off_pid=$!
+          trap 'kill "$hub_pid" "$restricted_pid" "$off_pid"' EXIT
+          for port in 3011 3012 3013; do
+            for attempt in $(seq 1 60); do
+              if curl -fsS "http://127.0.0.1:$port/" > /dev/null; then break; fi
+              sleep 1
+            done
+            curl -fsS "http://127.0.0.1:$port/" > /dev/null
+          done
+          VALIDATION_HUB_UI_BASE=http://127.0.0.1:3011 VALIDATION_HUB_RESTRICTED_BASE=http://127.0.0.1:3012 VALIDATION_HUB_OFF_BASE=http://127.0.0.1:3013 npx playwright test e2e/validation-hub.spec.ts --project=chromium --reporter=line
 
   b43-disposable-database:
     name: isolated B4.3-B database
