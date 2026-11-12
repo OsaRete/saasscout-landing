@@ -81,7 +81,7 @@ export function ExternalMvpWorkspace({
         },
       );
       setData(x);
-      if (action !== "remove") {
+      if (action === "save" || action === "publish") {
         setDraft(x.page?.content || draft);
         setDirty(false);
       }

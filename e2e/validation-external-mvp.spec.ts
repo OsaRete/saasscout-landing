@@ -248,9 +248,17 @@ test("owner: template, edit, preview, save, publish, results and evidence-preser
   await expect(
     panel.getByText("Unverified contact:", { exact: false }),
   ).toHaveCount(0);
+  await panel.getByRole("button", { name: "Edit", exact: true }).click();
+  await panel.getByLabel("Test title").fill("Unsaved research revision");
   await panel.getByRole("button", { name: "Unpublish", exact: true }).click();
   await expect(
     panel.getByText("No active participant link", { exact: true }),
   ).toBeVisible();
+  await expect(panel.getByLabel("Test title")).toHaveValue(
+    "Unsaved research revision",
+  );
+  await expect(
+    panel.getByRole("button", { name: "Save revision" }),
+  ).toBeEnabled();
   expect(dashboard.metrics.submissions).toBe(1);
 });
