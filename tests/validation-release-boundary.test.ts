@@ -14,6 +14,11 @@ import { validationTestModule } from "./support/validation-module.ts";
 const read = (path: string) => readFileSync(path, "utf8");
 const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 const operations: Record<string, Record<string, string>> = {
+  "commercial-intent/[versionId]": { GET: "commercial-intent.read" },
+  "commercial-intent/[versionId]/save": { POST: "commercial-intent.save" },
+  "commercial-intent/[versionId]/publish": { POST: "commercial-intent.publish" },
+  "commercial-intent/[versionId]/unpublish": { POST: "commercial-intent.unpublish" },
+  "commercial-intent/[versionId]/remove": { POST: "commercial-intent.remove" },
   "external-mvp/[versionId]": { GET: "external-mvp.read" },
   "external-mvp/[versionId]/save": { POST: "external-mvp.save" },
   "external-mvp/[versionId]/publish": { POST: "external-mvp.publish" },
@@ -97,6 +102,7 @@ const routes = [
   ...files("app/api/public/validation/landing"),
   ...files("app/api/public/validation/prototype"),
   ...files("app/api/public/validation/external-mvp"),
+  ...files("app/api/public/validation/commercial-intent"),
 ];
 function mode(value: string | undefined, pub = "DISABLED") {
   if (value === undefined) delete process.env.VALIDATION_PRIVATE_MODE;
@@ -176,7 +182,7 @@ for (const current of [
         const publicOperations: Record<string, string> =
           path.includes("/validation/landing/") ||
           path.includes("/validation/prototype/") ||
-          path.includes("/validation/external-mvp/")
+          path.includes("/validation/commercial-intent/") || path.includes("/validation/external-mvp/")
             ? {}
             : path.includes("/responses/")
               ? { POST: "survey.submit" }
@@ -249,8 +255,8 @@ for (const current of [
       }
   }
 test("route inventory is explicit and complete", () => {
-  assert.equal(routes.length, 45);
-  assert.equal(Object.keys(operations).length, 35);
+  assert.equal(routes.length, 53);
+  assert.equal(Object.keys(operations).length, 40);
 });
 test("persisted unknown families and cross-capability families deny", () => {
   for (const current of [

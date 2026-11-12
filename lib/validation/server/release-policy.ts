@@ -6,6 +6,8 @@ export function getValidationReleasePolicy(
   config: {
     privateMode?: unknown;
     publicSurveys?: unknown;
+    privateCommercialIntent?: unknown;
+    publicCommercialIntent?: unknown;
     privateExternalMvp?: unknown;
     publicExternalMvp?: unknown;
     privatePrototypes?: unknown;
@@ -16,6 +18,8 @@ export function getValidationReleasePolicy(
     landingCookieSecret?: unknown;
   } = {
     privateMode: process.env.VALIDATION_PRIVATE_MODE,
+    privateCommercialIntent: process.env.VALIDATION_PRIVATE_COMMERCIAL_INTENT,
+    publicCommercialIntent: process.env.VALIDATION_PUBLIC_COMMERCIAL_INTENT,
     privateExternalMvp: process.env.VALIDATION_PRIVATE_EXTERNAL_MVP,
     publicExternalMvp: process.env.VALIDATION_PUBLIC_EXTERNAL_MVP,
     privatePrototypes: process.env.VALIDATION_PRIVATE_PROTOTYPES,
@@ -39,6 +43,12 @@ export function getValidationReleasePolicy(
     mode === "SURVEYS" || mode === "INTERVIEWS_AND_SURVEYS";
   return Object.freeze({
     mode,
+    privateCommercialIntent:
+      mode !== "DISABLED" && config.privateCommercialIntent === "ENABLED",
+    publicCommercialIntentParticipation:
+      mode !== "DISABLED" &&
+      config.privateCommercialIntent === "ENABLED" &&
+      config.publicCommercialIntent === "ENABLED",
     privateExternalMvp:
       mode !== "DISABLED" && config.privateExternalMvp === "ENABLED",
     publicExternalMvpParticipation:
@@ -93,6 +103,14 @@ const operations = {
   "interview.create": ["POST", "privateInterviews"],
   "interview.update": ["POST", "privateInterviews"],
   "interview.observation": ["POST", "privateInterviews"],
+  "commercial-intent.read": ["GET", "privateCommercialIntent"],
+  "commercial-intent.save": ["POST", "privateCommercialIntent"],
+  "commercial-intent.remove": ["POST", "privateCommercialIntent"],
+  "commercial-intent.publish": ["POST", "publicCommercialIntentParticipation"],
+  "commercial-intent.unpublish": ["POST", "privateCommercialIntent"],
+  "commercial-intent.resolve": ["GET", "publicCommercialIntentParticipation"],
+  "commercial-intent.submit": ["POST", "publicCommercialIntentParticipation"],
+  "commercial-intent.view": ["POST", "publicCommercialIntentParticipation"],
   "external-mvp.read": ["GET", "privateExternalMvp"],
   "external-mvp.save": ["POST", "privateExternalMvp"],
   "external-mvp.remove": ["POST", "privateExternalMvp"],
@@ -157,6 +175,7 @@ export function admittedValidationFamilies(
   return [
     ...(policy.privateInterviews ? ["customer_interview"] : []),
     ...(policy.privateSurveys ? ["survey"] : []),
+    ...(policy.privateCommercialIntent ? ["commercial_intent"] : []),
     ...(policy.privateExternalMvp ? ["external_mvp"] : []),
     ...(policy.privatePrototypes ? ["interactive_prototype"] : []),
     ...(policy.privateLandingPages ? ["landing_waitlist"] : []),
@@ -182,7 +201,8 @@ export function assertValidationFamily(
     | "survey"
     | "landing_waitlist"
     | "interactive_prototype"
-    | "external_mvp",
+    | "external_mvp"
+    | "commercial_intent",
 ): void {
   if (
     typeof family !== "string" ||

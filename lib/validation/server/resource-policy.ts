@@ -53,6 +53,7 @@ export async function ownedValidationVersion(
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
+    | "commercial_intent"
     | "external_mvp"
     | "interactive_prototype",
 ): Promise<Row> {
@@ -89,6 +90,7 @@ export async function ownedValidationExperiment(
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
+    | "commercial_intent"
     | "external_mvp"
     | "interactive_prototype",
 ): Promise<void> {

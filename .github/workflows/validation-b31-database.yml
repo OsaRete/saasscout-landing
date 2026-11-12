@@ -14,6 +14,14 @@ on:
       - "scripts/validation-prototypes-db.ts"
       - "tests/sql/validation-prototypes.sql"
       - "tests/validation-prototypes.test.ts"
+      - "tests/validation-commercial-intent.test.ts"
+      - "tests/sql/validation-commercial-intent.sql"
+      - "scripts/validation-commercial-intent-db.ts"
+      - "lib/validation/commercial-intent.ts"
+      - "components/validation/commercial-intent*.tsx"
+      - "app/api/**/commercial-intent/**"
+      - "app/validation/commercial-intent/**"
+      - "e2e/validation-commercial-intent.spec.ts"
       - "tests/validation-external-mvp.test.ts"
       - "tests/sql/validation-external-mvp.sql"
       - "scripts/validation-external-mvp-db.ts"
@@ -80,6 +88,8 @@ jobs:
         run: node --experimental-strip-types --test --experimental-test-isolation=none --loader ./tests/support/server-only-loader.mjs tests/validation-b43-isolation.test.ts tests/current-qualified-evidence-reader.test.ts tests/qualified-evidence-integrity.test.ts tests/trusted-qualified-evidence-reader.test.ts tests/validation-database-fixtures.test.ts tests/validation-body-limit.test.ts tests/validation-release-boundary.test.ts tests/validation-capability-resources.test.ts tests/validation-acceptance-contracts.test.ts
       - name: Landing Pages pure and server boundary checks
         run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-landing-pages.test.ts
+      - name: Commercial Intent pure and server boundaries
+        run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-commercial-intent.test.ts
       - name: External MVP pure and server boundaries
         run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-external-mvp.test.ts
       - name: Interactive Prototypes pure and server boundaries
@@ -155,6 +165,42 @@ jobs:
         env:
           VALIDATION_EXTERNAL_MVP_DB_DISPOSABLE: "1"
         run: node scripts/validation-external-mvp-db.ts
+      - name: Commercial Intent disposable acceptance
+        env:
+          VALIDATION_COMMERCIAL_INTENT_DB_DISPOSABLE: "1"
+        run: node scripts/validation-commercial-intent-db.ts
+
+  commercial-intent-ui:
+    name: Commercial Intent build and browser fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: synthetic-local-only
+      VALIDATION_PRIVATE_MODE: INTERVIEWS
+      VALIDATION_PRIVATE_COMMERCIAL_INTENT: ENABLED
+      VALIDATION_PUBLIC_COMMERCIAL_INTENT: ENABLED
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Local synthetic owner and mobile participant workflow
+        run: |
+          npm run start -- --port 3001 > /tmp/commercial-intent-app.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid"' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3001/ > /dev/null; then break; fi
+            sleep 1
+          done
+          VALIDATION_COMMERCIAL_INTENT_UI_BASE=http://127.0.0.1:3001 npx playwright test e2e/validation-commercial-intent.spec.ts --project=chromium --reporter=line
+
   b43-disposable-database:
     name: isolated B4.3-B database
     if: github.event_name == 'workflow_dispatch' && inputs.authorize_disposable_reset == true
