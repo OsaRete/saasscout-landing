@@ -53,6 +53,7 @@ export async function ownedValidationVersion(
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
+    | "external_mvp"
     | "interactive_prototype",
 ): Promise<Row> {
   const row = await ownedValidationResource(
@@ -88,6 +89,7 @@ export async function ownedValidationExperiment(
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
+    | "external_mvp"
     | "interactive_prototype",
 ): Promise<void> {
   await ownedValidationResource(

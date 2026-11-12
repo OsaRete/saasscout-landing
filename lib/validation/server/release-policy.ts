@@ -6,6 +6,8 @@ export function getValidationReleasePolicy(
   config: {
     privateMode?: unknown;
     publicSurveys?: unknown;
+    privateExternalMvp?: unknown;
+    publicExternalMvp?: unknown;
     privatePrototypes?: unknown;
     publicPrototypes?: unknown;
     prototypeCookieSecret?: unknown;
@@ -14,6 +16,8 @@ export function getValidationReleasePolicy(
     landingCookieSecret?: unknown;
   } = {
     privateMode: process.env.VALIDATION_PRIVATE_MODE,
+    privateExternalMvp: process.env.VALIDATION_PRIVATE_EXTERNAL_MVP,
+    publicExternalMvp: process.env.VALIDATION_PUBLIC_EXTERNAL_MVP,
     privatePrototypes: process.env.VALIDATION_PRIVATE_PROTOTYPES,
     publicPrototypes: process.env.VALIDATION_PUBLIC_PROTOTYPES,
     prototypeCookieSecret: process.env.VALIDATION_PROTOTYPE_COOKIE_SECRET,
@@ -35,6 +39,12 @@ export function getValidationReleasePolicy(
     mode === "SURVEYS" || mode === "INTERVIEWS_AND_SURVEYS";
   return Object.freeze({
     mode,
+    privateExternalMvp:
+      mode !== "DISABLED" && config.privateExternalMvp === "ENABLED",
+    publicExternalMvpParticipation:
+      mode !== "DISABLED" &&
+      config.privateExternalMvp === "ENABLED" &&
+      config.publicExternalMvp === "ENABLED",
     privatePrototypes:
       mode !== "DISABLED" && config.privatePrototypes === "ENABLED",
     publicPrototypeParticipation:
@@ -83,6 +93,13 @@ const operations = {
   "interview.create": ["POST", "privateInterviews"],
   "interview.update": ["POST", "privateInterviews"],
   "interview.observation": ["POST", "privateInterviews"],
+  "external-mvp.read": ["GET", "privateExternalMvp"],
+  "external-mvp.save": ["POST", "privateExternalMvp"],
+  "external-mvp.remove": ["POST", "privateExternalMvp"],
+  "external-mvp.publish": ["POST", "publicExternalMvpParticipation"],
+  "external-mvp.unpublish": ["POST", "privateExternalMvp"],
+  "external-mvp.resolve": ["GET", "publicExternalMvpParticipation"],
+  "external-mvp.submit": ["POST", "publicExternalMvpParticipation"],
   "prototype.read": ["GET", "privatePrototypes"],
   "prototype.save": ["POST", "privatePrototypes"],
   "prototype.remove": ["POST", "privatePrototypes"],
@@ -140,6 +157,7 @@ export function admittedValidationFamilies(
   return [
     ...(policy.privateInterviews ? ["customer_interview"] : []),
     ...(policy.privateSurveys ? ["survey"] : []),
+    ...(policy.privateExternalMvp ? ["external_mvp"] : []),
     ...(policy.privatePrototypes ? ["interactive_prototype"] : []),
     ...(policy.privateLandingPages ? ["landing_waitlist"] : []),
   ];
@@ -163,7 +181,8 @@ export function assertValidationFamily(
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
-    | "interactive_prototype",
+    | "interactive_prototype"
+    | "external_mvp",
 ): void {
   if (
     typeof family !== "string" ||

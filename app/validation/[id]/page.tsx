@@ -1,4 +1,5 @@
 "use client";
+import { ExternalMvpWorkspace } from "@/components/validation/external-mvp-workspace";
 import { PrototypeWorkspace } from "@/components/validation/prototype-workspace";
 import { LandingWorkspace } from "@/components/validation/landing-workspace";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
@@ -38,7 +39,7 @@ type ExperimentVersion = {
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
-    | "interactive_prototype";
+    | "external_mvp" | "interactive_prototype";
   target_audience: string[];
   collection_method: string;
   consent_privacy_mode: string;
@@ -601,6 +602,9 @@ export default function WorkspacePage({
                           }
                           onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
+                      )}
+                      {v.family === "external_mvp" && capabilities.privateExternalMvp && (
+                        <ExternalMvpWorkspace versionId={v.id} lifecycle={v.lifecycle} />
                       )}
                       {v.family === "interactive_prototype" &&
                         capabilities.privatePrototypes && (

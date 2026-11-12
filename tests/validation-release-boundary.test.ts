@@ -14,6 +14,11 @@ import { validationTestModule } from "./support/validation-module.ts";
 const read = (path: string) => readFileSync(path, "utf8");
 const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 const operations: Record<string, Record<string, string>> = {
+  "external-mvp/[versionId]": { GET: "external-mvp.read" },
+  "external-mvp/[versionId]/save": { POST: "external-mvp.save" },
+  "external-mvp/[versionId]/publish": { POST: "external-mvp.publish" },
+  "external-mvp/[versionId]/unpublish": { POST: "external-mvp.unpublish" },
+  "external-mvp/[versionId]/remove": { POST: "external-mvp.remove" },
   "prototypes/[versionId]": { GET: "prototype.read" },
   "prototypes/[versionId]/save": { POST: "prototype.save" },
   "prototypes/[versionId]/publish": { POST: "prototype.publish" },
@@ -91,6 +96,7 @@ const routes = [
   ...files("app/api/public/surveys"),
   ...files("app/api/public/validation/landing"),
   ...files("app/api/public/validation/prototype"),
+  ...files("app/api/public/validation/external-mvp"),
 ];
 function mode(value: string | undefined, pub = "DISABLED") {
   if (value === undefined) delete process.env.VALIDATION_PRIVATE_MODE;
@@ -169,7 +175,8 @@ for (const current of [
         );
         const publicOperations: Record<string, string> =
           path.includes("/validation/landing/") ||
-          path.includes("/validation/prototype/")
+          path.includes("/validation/prototype/") ||
+          path.includes("/validation/external-mvp/")
             ? {}
             : path.includes("/responses/")
               ? { POST: "survey.submit" }
@@ -242,8 +249,8 @@ for (const current of [
       }
   }
 test("route inventory is explicit and complete", () => {
-  assert.equal(routes.length, 38);
-  assert.equal(Object.keys(operations).length, 30);
+  assert.equal(routes.length, 45);
+  assert.equal(Object.keys(operations).length, 35);
 });
 test("persisted unknown families and cross-capability families deny", () => {
   for (const current of [

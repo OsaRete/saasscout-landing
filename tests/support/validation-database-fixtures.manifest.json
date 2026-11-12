@@ -8,7 +8,7 @@
   "lib/validation/promotion/representative-selection.ts": "9440ce25fdcc16de73959c26dc0945e84b47bd9154c240eb54d05afbc0c28aee",
   "lib/validation/promotion/trusted-qualified-evidence-reader.ts": "dbce9bca0e0faa1b95f565f80632ce00a4eb52ac2da6c88ac8dcf6229cd311ed",
   "lib/validation/promotion/types.ts": "efc6745719579222f836af6a11196fddf15868da50c0e8244478cacf2a932e0b",
-  "lib/validation/server/contracts.ts": "63417055ad0750a25f663b6b3d8b6196efd28a17a1252a4472339d40dea7b4b1",
+  "lib/validation/server/contracts.ts": "eb9bb1007a7867d2bd1a7066c3c53260626f31f88b3c6e62f41eba7bd0281cb4",
   "tests/support/validation-database-fixtures.ts": "7e863dd2b20d5cb96a42ad5e45d7f42371e18088d7e585577d2122ca6b5d82d5",
   "tests/support/validation-module.ts": "48326e782bd6d9b36543198ef37928c68f2295d01be533fd30d9c468501c79f1",
   "tests/support/validation-postgres-fixtures.ts": "4deb792b1765ed1efe40f2930790f8ee75027ef015ad96b39c814bd804ab449c"

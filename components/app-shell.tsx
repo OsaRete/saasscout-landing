@@ -68,7 +68,7 @@ export default function AppShell({ children, active }: { children: ReactNode; ac
   const modeControlRef = useRef<HTMLDivElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
-  const publicLanding = (pathname.startsWith("/validation/landing/") || pathname.startsWith("/validation/prototype/"));
+  const publicLanding = (pathname.startsWith("/validation/external-mvp/") || pathname.startsWith("/validation/landing/") || pathname.startsWith("/validation/prototype/"));
   const inWorkspace = !publicLanding && workspaceRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 
   useEffect(() => {
