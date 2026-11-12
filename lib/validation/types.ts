@@ -11,7 +11,7 @@ export type HypothesisDraft = Readonly<{
 }>;
 export type Hypothesis = HypothesisDraft & Readonly<{ hypothesisRef: string; subjectRef: string; version: number; status: HypothesisStatus }>;
 
-export type ExperimentFamily = "customer_interview" | "survey" | "landing_waitlist" | "external_mvp" | "interactive_prototype" | "social_validation_post";
+export type ExperimentFamily = "customer_interview" | "survey" | "landing_waitlist" | "commercial_intent" | "external_mvp" | "interactive_prototype" | "social_validation_post";
 export type ExperimentLifecycle = "draft" | "ready" | "running" | "paused" | "completed" | "cancelled";
 export type ExperimentVisibility = "visible" | "archived";
 export type ExperimentDraft = Readonly<{ family: ExperimentFamily; targetAudience: readonly string[]; questionSet: readonly string[]; screeningCriteria: readonly string[]; collectionMethod: string; cta?: string; pricing?: string }>;

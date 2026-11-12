@@ -21,6 +21,7 @@ type CreatedExperiment = {
     family:
       | PlanDraftHandoff["family"]
       | "landing_waitlist"
+      | "commercial_intent"
       | "external_mvp"
       | "interactive_prototype";
   };
@@ -116,6 +117,7 @@ export function matchesPlanDraftHandoff(
     family:
       | PlanDraftHandoff["family"]
       | "landing_waitlist"
+      | "commercial_intent"
       | "external_mvp"
       | "interactive_prototype";
   },

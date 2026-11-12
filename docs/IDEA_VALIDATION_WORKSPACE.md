@@ -39,3 +39,13 @@ preview, opaque publication, consented email collection, private metrics and
 owner-mediated removal are documented in [Validation Landing Pages](VALIDATION_LANDING_PAGES.md).
 Existing hypotheses, lifecycle controls and private/shared evidence boundaries
 remain authoritative. Public participation remains default-off.
+
+## Sixth Beta method: Commercial Intent Experiments
+
+The separately gated `commercial_intent` family adds nonbinding demo, quote,
+pilot, early-access and willingness-to-pay research using existing opportunity
+provenance, experiment lifecycles and private workspace patterns. Its explicit
+preview, immutable publication, consent, private results and contact-removal
+workflow is described in [Commercial Intent Experiments](VALIDATION_COMMERCIAL_INTENT.md).
+Page loads and intent statements remain separate; no payments, revenue claims,
+AI evidence certification or shared Data Moat promotion are introduced.

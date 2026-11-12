@@ -1,4 +1,5 @@
 "use client";
+import { CommercialIntentWorkspace } from "@/components/validation/commercial-intent-workspace";
 import { ExternalMvpWorkspace } from "@/components/validation/external-mvp-workspace";
 import { PrototypeWorkspace } from "@/components/validation/prototype-workspace";
 import { LandingWorkspace } from "@/components/validation/landing-workspace";
@@ -39,7 +40,7 @@ type ExperimentVersion = {
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
-    | "external_mvp" | "interactive_prototype";
+    | "commercial_intent" | "external_mvp" | "interactive_prototype";
   target_audience: string[];
   collection_method: string;
   consent_privacy_mode: string;
@@ -602,6 +603,9 @@ export default function WorkspacePage({
                           }
                           onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
+                      )}
+                      {v.family === "commercial_intent" && capabilities.privateCommercialIntent && (
+                        <CommercialIntentWorkspace versionId={v.id} lifecycle={v.lifecycle} />
                       )}
                       {v.family === "external_mvp" && capabilities.privateExternalMvp && (
                         <ExternalMvpWorkspace versionId={v.id} lifecycle={v.lifecycle} />

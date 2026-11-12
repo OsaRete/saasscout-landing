@@ -33,6 +33,7 @@ export function ExperimentForm({
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
+    | "commercial_intent"
     | "external_mvp"
     | "interactive_prototype"
   >(capabilities.privateInterviews ? "customer_interview" : "survey");
@@ -135,7 +136,8 @@ export function ExperimentForm({
         }),
       });
       onDone(
-        family === "external_mvp" ||
+        family === "commercial_intent" ||
+          family === "external_mvp" ||
           family === "landing_waitlist" ||
           family === "interactive_prototype"
           ? null
@@ -192,6 +194,10 @@ export function ExperimentForm({
           onChange={(event) => {
             const next = event.target.value as typeof family;
             setFamily(next);
+            if (next === "commercial_intent") {
+              setMethod("Consented nonbinding commercial intent");
+              setPrivacy("identified_with_explicit_consent");
+            }
             if (next === "external_mvp") {
               setMethod(
                 "Privately shared external MVP and structured feedback",
@@ -212,6 +218,11 @@ export function ExperimentForm({
           {capabilities.privateSurveys && (
             <option value="survey">Survey</option>
           )}
+          {capabilities.privateCommercialIntent && (
+            <option value="commercial_intent">
+              Commercial Intent Experiments
+            </option>
+          )}
           {capabilities.privateExternalMvp && (
             <option value="external_mvp">External MVP Testing</option>
           )}
@@ -226,13 +237,15 @@ export function ExperimentForm({
       <div className="rounded-xl bg-white/[.035] p-4 text-sm text-slate-400">
         {family === "customer_interview"
           ? "Have focused conversations to understand pain, behavior, workarounds, and context."
-          : family === "external_mvp"
-            ? "Invite participants to try your externally hosted MVP and share feedback. SaaSScout does not host or run it."
-            : family === "interactive_prototype"
-              ? "Test a navigable visual concept and collect explicit participant feedback. No programming needed."
-              : family === "landing_waitlist"
-                ? "Publish a focused offer and measure consented interest from your target audience."
-                : "Collect structured responses at greater breadth to test specific assumptions."}
+          : family === "commercial_intent"
+            ? "Test demo, quote, pilot, early-access or nonbinding willingness-to-pay interest. No payments or commitments."
+            : family === "external_mvp"
+              ? "Invite participants to try your externally hosted MVP and share feedback. SaaSScout does not host or run it."
+              : family === "interactive_prototype"
+                ? "Test a navigable visual concept and collect explicit participant feedback. No programming needed."
+                : family === "landing_waitlist"
+                  ? "Publish a focused offer and measure consented interest from your target audience."
+                  : "Collect structured responses at greater breadth to test specific assumptions."}
       </div>
       <Field label="Target audience" helper="One audience criterion per line.">
         <TextArea
@@ -266,11 +279,17 @@ export function ExperimentForm({
       <Field label="Consent / privacy mode">
         <SelectInput
           value={
-            family === "landing_waitlist" || family === "external_mvp"
+            family === "landing_waitlist" ||
+            family === "commercial_intent" ||
+            family === "external_mvp"
               ? "identified_with_explicit_consent"
               : privacy
           }
-          disabled={family === "landing_waitlist" || family === "external_mvp"}
+          disabled={
+            family === "landing_waitlist" ||
+            family === "commercial_intent" ||
+            family === "external_mvp"
+          }
           onChange={(event) => setPrivacy(event.target.value)}
         >
           <option value="anonymous_notes">Anonymous notes</option>
