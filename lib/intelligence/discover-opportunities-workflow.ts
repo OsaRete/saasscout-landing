@@ -643,7 +643,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
 
   const [externalSources, moatSources, userProblemHistory] = await Promise.all([
     collectExternalSources(sourcesLimit),
-    collectDataMoatSources(),
+    collectDataMoatSources(userId),
     loadUserDiscoverProblemHistory(userId),
   ]);
 
