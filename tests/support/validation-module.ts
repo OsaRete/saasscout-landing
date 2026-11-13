@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createRequire } from "node:module";
 import ts from "typescript";
@@ -40,7 +40,7 @@ export function validationTestModule(
           base + ".tsx",
           base + ".js",
           base + "/index.ts",
-        ].find((p) => existsSync(p) && statSync(p).isFile());
+        ].find((p) => existsSync(p));
         if (!found) throw new Error(`Unresolved test module: ${specifier}`);
         return load(found);
       }

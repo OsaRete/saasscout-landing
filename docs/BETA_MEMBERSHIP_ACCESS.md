@@ -75,6 +75,11 @@ Minimal UI checks membership before mounting protected workspace children and
 shows a fixed access-denied/retry state. It is presentation only: API/RLS remain
 the security boundaries. Public participant pages and account recovery bypass
 the founder workspace check.
+Rechecking an admitted identity on window focus or token refresh preserves
+unsaved form state. Navigation gets its own presentation check, and a denied
+or revoked result still removes the protected workspace.
+Missing sessions retain the existing redirect to login; non-admitted authenticated
+users instead see the invitation-required state.
 
 ## Rollout and rollback constraints
 
@@ -114,6 +119,7 @@ Verified on the PR 1 source before publication:
 | Real local upgrade acceptance | Passed: real users/tester row created under main, then new migration applied |
 | Real local fresh acceptance | Passed: complete application migration chain including this migration, then real users |
 | Chromium against the built local app | Three passed: recovery/signed-out behavior; denied/admitted/revoked same synthetic session; default-off Validation and public-page separation |
+| Focused Validation integration regressions | 146 Node cases passed, including the admission rerun, capability resources and unchanged fixture source pins/readers; three Hub browser regressions passed |
 | Focused strict TypeScript | Exit 0, including changed runtime entrypoints, new helpers and acceptance/unit harnesses |
 | Repository lint | Exit 0; four inherited Discover/Saved/Scans warnings, no errors |
 | Production build | Exit 0, standard Next.js 16.2.4 build |
@@ -128,6 +134,11 @@ cross-owner reads/writes, ordinary-role quota integrity, same-JWT revocation,
 password update/new login after revoke, independent expiry and public signup
 acquisition. Direct Scan service admission still enforces three ordinary Scans,
 reuses duplicates without extra quota and admits exactly one concurrent claim.
+The browser session check also verifies that focus revalidation does not erase
+unsaved founder input. The security-pinned test module loader and fixture source
+manifest remain byte-identical to main; only new admission tests use workflow
+traps. Existing browser fixtures explicitly model invited founders, and their
+strict catch-all request trap falls through only for the membership lookup.
 The catalog check found only `application_beta_access` among non-trigger
 public-schema SECURITY DEFINER functions executable by authenticated browsers.
 

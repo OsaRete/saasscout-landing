@@ -13,6 +13,13 @@ function harness(t: TestContext, admitted: unknown = false, failure = false) {
   const calls: string[] = [];
   let permission = admitted;
   const load = (path: string) => validationTestModule(path, (specifier) => {
+    if (specifier === "@/lib/intelligence/discover-opportunities-workflow") return {
+      discoverOpportunitiesWorkflow: async () => { throw new Error("Workflow entered before admission"); },
+      DiscoverOpportunitiesWorkflowError: class extends Error {},
+    };
+    if (specifier === "@/lib/knowledge/evolution") return {
+      runKnowledgeEvolutionWeeklyDiagnostics: async () => { throw new Error("Diagnostics entered before admission"); },
+    };
     if (specifier === "@supabase/supabase-js") return {
       createClient: () => ({
         auth: { getUser: async (token: string) => {

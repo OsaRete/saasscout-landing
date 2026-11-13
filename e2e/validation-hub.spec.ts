@@ -22,6 +22,7 @@ async function auth(page: Page) {
     };
     localStorage.setItem("sb-127-auth-token", JSON.stringify(session));
     localStorage.setItem("sb-127.0.0.1-auth-token", JSON.stringify(session));
+    localStorage.setItem("sb-placeholder-auth-token", JSON.stringify(session));
   });
   await page.route("**/auth/v1/user", (route) =>
     route.fulfill({ json: { id: "owner", email: "owner@example.com" } }),
@@ -308,6 +309,7 @@ for (const sourceType of [undefined, "opportunity"]) {
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
+      if (path === "/api/user/capabilities") return route.fallback();
       if (path === "/api/validation/subjects" && request.method() === "POST") {
         submissions.push(request.postDataJSON());
         await route.fulfill({ json: { data: { subject: { id: "subject" } } } });
