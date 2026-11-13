@@ -266,13 +266,14 @@ test("V6.1 native selects keep dark options readable without changing their choi
   assert.match(sharedUi, /\[&>option\]:bg-\[#0b1020\]/);
   assert.match(sharedUi, /\[&>option\]:text-white/);
   for (const value of [
-    "customer_interview",
-    "survey",
     "anonymous_notes",
     "identified_with_explicit_consent",
   ]) {
     assert.match(experimentUi, new RegExp(`value=["']${value}["']`));
   }
+  assert.match(experimentUi, /MethodPicker/);
+  const methods = readFileSync("components/validation/methods.ts", "utf8");
+  for (const family of ["customer_interview", "survey"]) assert.ok(methods.includes(`family: "${family}"`));
   for (const value of [
     "single_choice",
     "multiple_choice",

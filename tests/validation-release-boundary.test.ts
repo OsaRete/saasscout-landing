@@ -388,7 +388,7 @@ test("private workspace has no promotion read, controls or historical authority 
     /api\/validation\/promotions|Shared Data Moat evidence|Promote reviewed evidence|data\.promotions/,
   );
 });
-test("direct-entry Validation is independent of Discovery, Scan and AI", () => {
+test("direct-entry Validation is independent of Discovery, Scan and AI", async () => {
   const service = read("lib/validation/server/service.ts"),
     repo = read("lib/validation/server/repository.ts"),
     ui = read("app/validation/new/page.tsx");
@@ -397,7 +397,60 @@ test("direct-entry Validation is independent of Discovery, Scan and AI", () => {
   assert.match(repo, /if \(link\) await this.verifyUpstream/);
   assert.match(repo, /validation_create_subject/);
   assert.match(ui, /Enter my own idea/);
-  assert.match(ui, /creationOrigin:"user_entered"/);
+  // Exercise the real form handler; formatting must not determine provenance.
+  let submit!: (event: { preventDefault(): void }) => Promise<void>;
+  const requests: Array<{ path: string; init: RequestInit }> = [];
+  const destinations: string[] = [];
+  const jsx = (type: unknown, props: { onSubmit?: typeof submit }) => {
+    if (type === "form" && props.onSubmit) submit = props.onSubmit;
+    return null;
+  };
+  const page = validationTestModule(
+    "app/validation/new/page.tsx",
+    (specifier) => {
+      if (specifier === "react")
+        return { useState: (initial: unknown) => [initial, () => {}] };
+      if (specifier === "react/jsx-runtime") return { jsx, jsxs: jsx };
+      if (specifier === "next/navigation")
+        return {
+          useRouter: () => ({
+            push: (path: string) => destinations.push(path),
+          }),
+          useSearchParams: () =>
+            new URLSearchParams({
+              label: "Independent idea",
+              description: "Own context",
+            }),
+        };
+      if (specifier === "@/components/validation/release-capabilities")
+        return { useValidationCapabilities: () => ({}) };
+      if (specifier === "@/components/validation/api")
+        return {
+          validationRequest: async (path: string, init: RequestInit) => {
+            requests.push({ path, init });
+            return { subject: { id: "subject" } };
+          },
+        };
+      if (
+        specifier === "@/components/ui" ||
+        specifier === "@/components/validation/validation-shell"
+      )
+        return {};
+      return undefined;
+    },
+  );
+  (page.default as () => unknown)();
+  assert.equal(typeof submit, "function");
+  await submit({ preventDefault() {} });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, "/api/validation/subjects");
+  assert.equal(requests[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), {
+    creationOrigin: "user_entered",
+    label: "Independent idea",
+    contextSnapshot: { description: "Own context", label: "Independent idea" },
+  });
+  assert.deepEqual(destinations, ["/validation/subject"]);
 });
 test("layout projects capabilities; token page independently denies before reading token", async () => {
   mode("SURVEYS", "DISABLED");

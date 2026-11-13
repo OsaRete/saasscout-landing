@@ -1,5 +1,12 @@
 "use client";
 
+import { MethodPicker } from "./method-picker";
+import {
+  validationMethods,
+  findValidationMethod,
+  methodAvailable,
+  type MethodFamily,
+} from "./methods";
 import { useValidationCapabilities } from "./release-capabilities";
 import { useRef, useState } from "react";
 import {
@@ -18,29 +25,35 @@ import {
 } from "./plan-draft-handoff";
 
 export function ExperimentForm({
+  initialFamily,
   subjectId,
   hypothesisVersionId,
   onDone,
   onCancel,
 }: {
+  initialFamily?: MethodFamily;
   subjectId: string;
   hypothesisVersionId: string;
   onDone: (handoff: PlanDraftHandoff | null) => void;
   onCancel: () => void;
 }) {
   const capabilities = useValidationCapabilities();
-  const [family, setFamily] = useState<
-    | "customer_interview"
-    | "survey"
-    | "landing_waitlist"
-    | "commercial_intent"
-    | "external_mvp"
-    | "interactive_prototype"
-  >(capabilities.privateInterviews ? "customer_interview" : "survey");
+  const initialMethod =
+    validationMethods.find(
+      (method) =>
+        method.family === initialFamily &&
+        methodAvailable(method, capabilities),
+    ) ||
+    validationMethods.find((method) => methodAvailable(method, capabilities));
+  const [family, setFamily] = useState<MethodFamily | undefined>(
+    initialMethod?.family,
+  );
   const [audience, setAudience] = useState("");
-  const [method, setMethod] = useState("");
+  const [method, setMethod] = useState<string>(initialMethod?.collection || "");
   const [screening, setScreening] = useState("");
-  const [privacy, setPrivacy] = useState("anonymous_notes");
+  const [privacy, setPrivacy] = useState<string>(
+    initialMethod?.privacy || "anonymous_notes",
+  );
   const [draft, setDraft] = useState<ExperimentDesignDraft | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -92,6 +105,8 @@ export function ExperimentForm({
 
   function applyDraft() {
     if (!draft) return;
+    const recommended = findValidationMethod(draft.recommendedFamily);
+    if (!recommended || !methodAvailable(recommended, capabilities)) return;
     setFamily(draft.recommendedFamily);
     setAudience(draft.targetAudience.join("\n"));
     setMethod(draft.suggestedCollectionMethod);
@@ -104,6 +119,11 @@ export function ExperimentForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const selected = findValidationMethod(family);
+    if (!selected || !methodAvailable(selected, capabilities)) {
+      setError("Choose a method available in this release.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -112,7 +132,7 @@ export function ExperimentForm({
         version: {
           id: string;
           hypothesis_version_id: string;
-          family: typeof family;
+          family: MethodFamily;
         };
       }>(`/api/validation/subjects/${subjectId}/experiments`, {
         method: "POST",
@@ -132,7 +152,10 @@ export function ExperimentForm({
                     : "Structured responses",
           },
           screeningCriteria: words(screening),
-          consentPrivacyMode: privacy,
+          consentPrivacyMode:
+            selected.privacy === "identified_with_explicit_consent"
+              ? selected.privacy
+              : privacy,
         }),
       });
       onDone(
@@ -170,7 +193,7 @@ export function ExperimentForm({
   return (
     <form onSubmit={submit} className={`${card} grid gap-5`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-xl font-semibold">Create experiment shell</h3>
+        <h3 className="text-xl font-semibold">Create experiment</h3>
         {capabilities.privateAiDesign && (
           <Button
             variant="secondary"
@@ -181,72 +204,31 @@ export function ExperimentForm({
           </Button>
         )}
       </div>
-      <p className="text-xs text-slate-500">
-        Optional. Each click requests one draft. Applying it never creates or
-        starts an experiment.
-      </p>
+      {capabilities.privateAiDesign && (
+        <p className="text-sm text-slate-300">
+          Optional. Each click requests one draft. Applying it never creates or
+          starts an experiment.
+        </p>
+      )}
       <p role="status" aria-live="polite" className="text-sm text-cyan-200">
         {aiStatus}
       </p>
-      <Field label="Experiment family">
-        <SelectInput
-          value={family}
-          onChange={(event) => {
-            const next = event.target.value as typeof family;
-            setFamily(next);
-            if (next === "commercial_intent") {
-              setMethod("Consented nonbinding commercial intent");
-              setPrivacy("identified_with_explicit_consent");
-            }
-            if (next === "external_mvp") {
-              setMethod(
-                "Privately shared external MVP and structured feedback",
-              );
-              setPrivacy("identified_with_explicit_consent");
-            }
-            if (next === "interactive_prototype") {
-              setMethod("Privately shared navigable concept test");
-              setPrivacy("anonymous_notes");
-            }
-            if (next === "landing_waitlist")
-              setPrivacy("identified_with_explicit_consent");
-          }}
-        >
-          {capabilities.privateInterviews && (
-            <option value="customer_interview">Customer Interview</option>
-          )}
-          {capabilities.privateSurveys && (
-            <option value="survey">Survey</option>
-          )}
-          {capabilities.privateCommercialIntent && (
-            <option value="commercial_intent">
-              Commercial Intent Experiments
-            </option>
-          )}
-          {capabilities.privateExternalMvp && (
-            <option value="external_mvp">External MVP Testing</option>
-          )}
-          {capabilities.privatePrototypes && (
-            <option value="interactive_prototype">Interactive Prototype</option>
-          )}
-          {capabilities.privateLandingPages && (
-            <option value="landing_waitlist">Landing Page / Waitlist</option>
-          )}
-        </SelectInput>
-      </Field>
-      <div className="rounded-xl bg-white/[.035] p-4 text-sm text-slate-400">
-        {family === "customer_interview"
-          ? "Have focused conversations to understand pain, behavior, workarounds, and context."
-          : family === "commercial_intent"
-            ? "Test demo, quote, pilot, early-access or nonbinding willingness-to-pay interest. No payments or commitments."
-            : family === "external_mvp"
-              ? "Invite participants to try your externally hosted MVP and share feedback. SaaSScout does not host or run it."
-              : family === "interactive_prototype"
-                ? "Test a navigable visual concept and collect explicit participant feedback. No programming needed."
-                : family === "landing_waitlist"
-                  ? "Publish a focused offer and measure consented interest from your target audience."
-                  : "Collect structured responses at greater breadth to test specific assumptions."}
-      </div>
+      <MethodPicker
+        value={family}
+        onSelect={(next) => {
+          const selected = findValidationMethod(next);
+          if (!selected || !methodAvailable(selected, capabilities)) return;
+          setFamily(next);
+          setMethod(selected.collection);
+          setPrivacy(selected.privacy);
+          setAppliedDraft(null);
+        }}
+      />
+      <p className="text-sm text-slate-300">
+        Creating an experiment saves a draft. Prepare its content, mark it ready
+        and start it before collecting. Publishing a participant link is a
+        separate action when available.
+      </p>
       <Field label="Target audience" helper="One audience criterion per line.">
         <TextArea
           required
@@ -352,7 +334,7 @@ export function ExperimentForm({
         </p>
       )}
       <div className="flex gap-3">
-        <Button type="submit" disabled={busy || aiBusy}>
+        <Button type="submit" disabled={busy || aiBusy || !family}>
           {busy ? "Creating…" : "Create experiment"}
         </Button>
         <Button variant="secondary" onClick={onCancel}>

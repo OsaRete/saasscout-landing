@@ -4,7 +4,12 @@ import { ExternalMvpWorkspace } from "@/components/validation/external-mvp-works
 import { PrototypeWorkspace } from "@/components/validation/prototype-workspace";
 import { LandingWorkspace } from "@/components/validation/landing-workspace";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  findValidationMethod,
+  methodAvailable,
+} from "@/components/validation/methods";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, LoadingState } from "@/components/ui";
 import {
   BackLink,
@@ -40,7 +45,9 @@ type ExperimentVersion = {
     | "customer_interview"
     | "survey"
     | "landing_waitlist"
-    | "commercial_intent" | "external_mvp" | "interactive_prototype";
+    | "commercial_intent"
+    | "external_mvp"
+    | "interactive_prototype";
   target_audience: string[];
   collection_method: string;
   consent_privacy_mode: string;
@@ -173,6 +180,12 @@ export default function WorkspacePage({
   const capabilities = useValidationCapabilities();
   const { id } = use(params);
   const router = useRouter();
+  const query = useSearchParams();
+  const requestedMethod = findValidationMethod(query.get("method"));
+  const selectedMethod =
+    requestedMethod && methodAvailable(requestedMethod, capabilities)
+      ? requestedMethod
+      : undefined;
   const [data, setData] = useState<Workspace | null>(null);
   const [error, setError] = useState("");
   const [revise, setRevise] = useState(false);
@@ -356,6 +369,41 @@ export default function WorkspacePage({
           New validation
         </Button>
       </header>
+      <nav
+        aria-label="Study navigation"
+        className="my-6 flex flex-wrap gap-4 text-sm text-cyan-200"
+      >
+        <a
+          href="#hypothesis"
+          className="rounded focus-visible:outline-2 focus-visible:outline-cyan-300"
+        >
+          1. Define hypothesis
+        </a>
+        <a
+          href="#experiments"
+          className="rounded focus-visible:outline-2 focus-visible:outline-cyan-300"
+        >
+          2. Manage experiments and results
+        </a>
+        {data.links
+          .filter((link) => link.source_type === "opportunity")
+          .map((link) => (
+            <Link
+              key={link.source_row_id}
+              href={`/opportunity/${encodeURIComponent(link.source_row_id)}`}
+              className="rounded focus-visible:outline-2 focus-visible:outline-cyan-300"
+            >
+              Back to source opportunity
+            </Link>
+          ))}
+      </nav>
+      {requestedMethod && (
+        <p role="status" className="my-4 text-sm text-cyan-200">
+          {selectedMethod
+            ? `Selected method: ${selectedMethod.label}. ${latestHypothesis ? "Choose Create experiment to continue." : "First define a hypothesis below; your method will be selected when you create an experiment."}`
+            : "The requested method is unavailable in this release. Choose an available method when creating an experiment."}
+        </p>
+      )}
       <section className="mt-7">
         <ContextNotice>
           <p>{description}</p>
@@ -372,7 +420,7 @@ export default function WorkspacePage({
       </section>
       <div className="mt-8 space-y-8">
         <div className="space-y-8">
-          <section>
+          <section id="hypothesis" className="scroll-mt-24">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[.18em] text-violet-300">
@@ -461,7 +509,7 @@ export default function WorkspacePage({
               </div>
             )}
           </section>
-          <section>
+          <section id="experiments" className="scroll-mt-24">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[.18em] text-cyan-300">
@@ -481,6 +529,7 @@ export default function WorkspacePage({
               </div>
             ) : experiment ? (
               <ExperimentForm
+                initialFamily={selectedMethod?.family}
                 subjectId={id}
                 hypothesisVersionId={latestHypothesis.id}
                 onDone={(handoff) => {
@@ -492,10 +541,39 @@ export default function WorkspacePage({
               />
             ) : data.experiments.length === 0 ? (
               <div className={`${card} text-sm text-slate-400`}>
-                No experiments yet. Create a research experiment when you are ready.
+                No experiments yet. Choose Create experiment to select a method
+                and prepare a draft.
               </div>
             ) : (
               <div className="space-y-4">
+                <nav
+                  aria-label="Experiment index"
+                  className={`${card} flex flex-wrap gap-3 text-sm text-cyan-200`}
+                >
+                  {data.experiments.map((experiment, index) => {
+                    const version = [...experiment.versions].sort(
+                      (a, b) => b.version_number - a.version_number,
+                    )[0];
+                    return (
+                      <a
+                        key={experiment.id}
+                        href={`#experiment-${experiment.id}`}
+                        className="rounded focus-visible:outline-2 focus-visible:outline-cyan-300"
+                      >
+                        {index + 1}.{" "}
+                        {findValidationMethod(version.family)?.label ||
+                          "Experiment"}{" "}
+                        · {version.lifecycle}
+                      </a>
+                    );
+                  })}
+                </nav>
+                <p className="text-sm leading-6 text-slate-300">
+                  Results belong to each experiment below. Counts describe
+                  recorded interactions, not verified people or demand. Compare
+                  raw feedback and conflicting signals with your hypothesis
+                  criteria before deciding what to test next.
+                </p>
                 {data.experiments.map((e) => {
                   const v = [...e.versions].sort(
                     (a, b) => b.version_number - a.version_number,
@@ -513,11 +591,16 @@ export default function WorkspacePage({
                     ? planDraftHandoff
                     : null;
                   return (
-                    <article key={e.id} className={card}>
+                    <article
+                      key={e.id}
+                      id={`experiment-${e.id}`}
+                      className={`${card} scroll-mt-24 min-w-0`}
+                    >
                       <div className="flex flex-wrap justify-between gap-3">
                         <div>
                           <Badge tone="cyan">
-                            {v.family.replaceAll("_", " ")}
+                            {findValidationMethod(v.family)?.label ||
+                              v.family.replaceAll("_", " ")}
                           </Badge>
                           <h3 className="mt-3 font-semibold">
                             Experiment V{v.version_number}
@@ -540,6 +623,17 @@ export default function WorkspacePage({
                       </p>
                       <p className="mt-2 text-sm text-slate-400">
                         Collection: {v.collection_method}
+                      </p>
+                      <p className="mt-4 text-sm leading-6 text-slate-300">
+                        {v.lifecycle === "draft"
+                          ? "Next: prepare the content below, then mark ready."
+                          : v.lifecycle === "ready"
+                            ? "Next: start the experiment. Publish a participant link separately when available."
+                            : v.lifecycle === "running"
+                              ? "Collecting is allowed only through this method’s admitted workflow. Review results below; pause to stop new collection."
+                              : v.lifecycle === "paused"
+                                ? "New collection is paused. Review existing results below or resume when ready."
+                                : "This experiment has ended. Review its retained results below."}
                       </p>
                       <div className="mt-5 flex flex-wrap gap-2">
                         {transitions[v.lifecycle].map(([label, target]) => (
@@ -604,12 +698,20 @@ export default function WorkspacePage({
                           onSuggestionsDone={() => setPlanDraftHandoff(null)}
                         />
                       )}
-                      {v.family === "commercial_intent" && capabilities.privateCommercialIntent && (
-                        <CommercialIntentWorkspace versionId={v.id} lifecycle={v.lifecycle} />
-                      )}
-                      {v.family === "external_mvp" && capabilities.privateExternalMvp && (
-                        <ExternalMvpWorkspace versionId={v.id} lifecycle={v.lifecycle} />
-                      )}
+                      {v.family === "commercial_intent" &&
+                        capabilities.privateCommercialIntent && (
+                          <CommercialIntentWorkspace
+                            versionId={v.id}
+                            lifecycle={v.lifecycle}
+                          />
+                        )}
+                      {v.family === "external_mvp" &&
+                        capabilities.privateExternalMvp && (
+                          <ExternalMvpWorkspace
+                            versionId={v.id}
+                            lifecycle={v.lifecycle}
+                          />
+                        )}
                       {v.family === "interactive_prototype" &&
                         capabilities.privatePrototypes && (
                           <PrototypeWorkspace
@@ -665,7 +767,7 @@ export default function WorkspacePage({
         >
           <section className={card}>
             <p className="text-xs font-semibold uppercase tracking-[.18em] text-violet-300">
-              Evidence
+              Interview observations
             </p>
             <h2 className="mt-2 text-2xl font-semibold">
               {data.observations.length} observations
@@ -673,11 +775,13 @@ export default function WorkspacePage({
             {data.observations.length === 0 ? (
               <>
                 <p className="mt-4 text-sm font-medium">
-                  No real-world evidence has been recorded yet.
+                  No interview observations recorded yet.
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Responses from interviews, surveys, or observed behavior will
-                  appear here as future experiment workflows collect them.
+                  Interview observations appear here when you explicitly record
+                  them. Survey responses, interest, prototype activity and MVP
+                  or commercial feedback stay in their respective experiment
+                  panels above.
                 </p>
               </>
             ) : (

@@ -49,3 +49,13 @@ preview, immutable publication, consent, private results and contact-removal
 workflow is described in [Commercial Intent Experiments](VALIDATION_COMMERCIAL_INTENT.md).
 Page loads and intent statements remain separate; no payments, revenue claims,
 AI evidence certification or shared Data Moat promotion are introduced.
+
+## Beta Validation Hub integration
+
+The sidebar now opens the [Validation Hub](VALIDATION_HUB.md), with six-method
+objective guidance, capability-aware selection and existing study summaries.
+An allowlisted method preference follows new-study creation into the experiment
+form. Studies provide source-opportunity return links, an experiment index and
+lifecycle/results guidance. Historical two-method scope above is superseded by
+the separately admitted Beta families; no backend or shared evidence boundary
+changes. Other methods' raw results remain separate from interview observations.

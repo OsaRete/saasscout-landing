@@ -25,7 +25,7 @@ const navItems = [
   { href: "/results", label: "Opportunities", icon: "signal", separated: false },
   { href: "/saved", label: "Saved Ideas", icon: "bookmark", separated: false },
   { href: "/weekly", label: "Weekly Intelligence", icon: "pulse", separated: true },
-  { href: "/validation", label: "Idea Validation", icon: "validation", separated: false },
+  { href: "/validation", label: "Validation Hub", icon: "validation", separated: false },
 ] as const;
 
 function NavIcon({ name }: { name: (typeof navItems)[number]["icon"] }) {
