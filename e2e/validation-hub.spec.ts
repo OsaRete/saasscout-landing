@@ -9,6 +9,8 @@ test.use({
   },
 });
 async function auth(page: Page) {
+  // Synthetic founder membership; real admission/RLS is covered separately.
+  await page.route("**/api/user/capabilities", (route) => route.fulfill({ json: { capabilities: {} } }));
   await page.addInitScript(() => {
     const session = {
       access_token: "synthetic-test-token",

@@ -58,6 +58,10 @@ function harness(t: TestContext, failedTable?: string) {
       return index < 0 ? json({ message: "Invalid synthetic token" }, 401)
         : json({ id: owners[index], aud: "authenticated", role: "authenticated" });
     }
+    if (url.pathname === "/rest/v1/rpc/application_beta_access") {
+      assert.ok(["Bearer token-a", "Bearer token-b"].includes(headers.get("authorization") || ""));
+      return json(true);
+    }
     assert.equal(headers.get("apikey"), "synthetic-service-role");
     const table = url.pathname.replace("/rest/v1/", "");
     if (init?.method === "POST") {

@@ -3,9 +3,10 @@ import { createClient } from "@supabase/supabase-js";
 export class AuthError extends Error {
   status = 401;
 
-  constructor(message = "Unauthorized") {
+  constructor(message = "Unauthorized", status = 401) {
     super(message);
     this.name = "AuthError";
+    this.status = status;
   }
 }
 
@@ -49,6 +50,21 @@ export async function requireUser(req: Request) {
 
   if (error || !user) {
     throw new AuthError();
+  }
+
+  // The JWT establishes identity, never Beta authority. Recheck the persisted
+  // membership on every protected request, including OAuth and existing sessions.
+  let admission;
+  try {
+    admission = await supabase.rpc("application_beta_access");
+  } catch {
+    throw new AuthError("Beta access could not be verified.", 503);
+  }
+  if (admission.error || typeof admission.data !== "boolean") {
+    throw new AuthError("Beta access could not be verified.", 503);
+  }
+  if (admission.data !== true) {
+    throw new AuthError("An active Beta invitation is required.", 403);
   }
 
   return user;

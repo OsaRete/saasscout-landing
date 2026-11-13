@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +115,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    await requireUser(req);
+
     if (!process.env.X_BEARER_TOKEN) {
       return NextResponse.json(
         { success: false, error: "X_BEARER_TOKEN is missing." },
@@ -176,6 +179,9 @@ export async function GET(req: NextRequest) {
       meta: data?.meta || null,
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       {
         success: false,
