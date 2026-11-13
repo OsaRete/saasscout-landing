@@ -27,12 +27,12 @@ function sql(statement: string): string {
   return command("docker", ["--host=unix:///var/run/docker.sock", "exec", "-i", container,
     "psql", "-U", "postgres", "-d", "postgres", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1"], statement);
 }
-assert.equal(sql("select count(*) from auth.users;"), "0", "Only an empty fresh disposable database is allowed");
 const status = JSON.parse(readFileSync(resolve(workdir, "connection.json"), "utf8")) as Record<string, string>;
 assert.equal(status.phase, phase);
 const owned = JSON.parse(command("docker", ["--host=unix:///var/run/docker.sock", "inspect", container]));
 assert.equal(owned[0].Config.Labels["saasscout.beta-membership-disposable"], status.fixture_id);
 assert.equal(status.API_URL, "http://127.0.0.1:56321");
+assert.equal(sql("select count(*) from auth.users;"), "0", "Only an empty fresh disposable database is allowed");
 const url = status.API_URL;
 assert.ok(status.ANON_KEY && status.SERVICE_ROLE_KEY);
 const client = () => createClient(url, status.ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -181,5 +181,9 @@ where n.nspname='public' and c.relkind='r' and c.relname<>'beta-signups'
 and (has_table_privilege('authenticated',c.oid,'SELECT') or has_table_privilege('authenticated',c.oid,'INSERT') or has_table_privilege('authenticated',c.oid,'UPDATE') or has_table_privilege('authenticated',c.oid,'DELETE'))
 and not exists(select 1 from pg_policy p where p.polrelid=c.oid and p.polname='beta_membership_required' and not p.polpermissive);`), "0");
 assert.equal((await client().rpc("application_beta_access")).error?.code, "42501");
+assert.equal(sql(`select string_agg(p.proname,',' order by p.proname) from pg_proc p
+join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+and p.prosecdef and p.prorettype<>'trigger'::regtype
+and has_function_privilege('authenticated',p.oid,'EXECUTE');`), "application_beta_access");
 assert.equal((await client().from("beta-signups").insert({ name: "fixture", email: "fixture@example.test", role: "founder", niche: "fixture" })).error, null, "Public acquisition remains separate");
 console.log(`${phase}: real Auth/PostgREST admission, forgery, direct RLS, cross-owner, revocation, expiry and grant inventory passed; no paid providers called.`);

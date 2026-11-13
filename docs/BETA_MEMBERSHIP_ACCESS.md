@@ -93,6 +93,10 @@ authorized in-flight work and existing statement/transaction snapshots may
 finish, and data already downloaded cannot be recalled. No token revocation,
 session termination or real-time subscription retroactive erasure is claimed.
 Older service-role deployments must remain restricted after migration/revoke.
+Founder membership revocation does not revoke published participant capability
+links. Their existing release, publication and token/cookie checks remain
+independent; closing those publications is a separate existing operation or
+trusted owner support action. No public participation is activated here.
 
 Rollback must retain the restrictive RLS/membership objects and close privileged
 ingress before reverting application code. Never restore access by dropping
