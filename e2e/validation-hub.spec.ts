@@ -296,6 +296,67 @@ test("method survives new study creation, including verified opportunity provena
   ).toBeVisible();
 });
 
+for (const sourceType of [undefined, "opportunity"]) {
+  test(`direct-entry keeps user_entered provenance ${sourceType ? "after leaving an opportunity handoff" : "without Discovery or Scan"}`, async ({
+    page,
+  }) => {
+    await auth(page);
+    const submissions: unknown[] = [];
+    const unexpected: string[] = [];
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/validation/subjects" && request.method() === "POST") {
+        submissions.push(request.postDataJSON());
+        await route.fulfill({ json: { data: { subject: { id: "subject" } } } });
+      } else if (
+        path === "/api/validation/subjects/subject" &&
+        request.method() === "GET"
+      ) {
+        await route.fulfill({
+          json: {
+            data: {
+              ...workspace(),
+              subject: { ...subject, creation_origin: "user_entered" },
+              links: [],
+            },
+          },
+        });
+      } else {
+        unexpected.push(path);
+        await route.abort();
+      }
+    });
+    const query = new URLSearchParams({
+      method: "survey",
+      label: "Independent idea",
+      description: "Own context",
+      sourceId: "unused-opportunity",
+    });
+    if (sourceType) query.set("sourceType", sourceType);
+    await page.goto(`${base}/validation/new?${query}`);
+    const ownIdea = page.getByRole("button", { name: /Enter my own idea/ });
+    if (sourceType) await ownIdea.click();
+    await expect(ownIdea).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Owned source reference")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Create validation", exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/validation\/subject\?method=survey$/);
+    expect(submissions).toEqual([
+      {
+        creationOrigin: "user_entered",
+        label: "Independent idea",
+        contextSnapshot: {
+          description: "Own context",
+          label: "Independent idea",
+        },
+      },
+    ]);
+    expect(unexpected).toEqual([]);
+  });
+}
+
 test("restricted capabilities disable method cards and ignore a forged method preference", async ({
   page,
 }) => {
