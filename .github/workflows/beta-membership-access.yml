@@ -20,7 +20,6 @@ jobs:
     timeout-minutes: 20
     env:
       BETA_MEMBERSHIP_DISPOSABLE: '1'
-      BETA_MEMBERSHIP_LOCAL_WORKDIR: ${{ runner.temp }}/beta-membership-local
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,6 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Set isolated fixture directory
+        run: printf 'BETA_MEMBERSHIP_LOCAL_WORKDIR=%s/beta-membership-local\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: npm ci
       - name: Focused admission and preservation tests
         run: >-
