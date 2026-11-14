@@ -202,7 +202,7 @@ test("owner predicate/family checks precede RPC; hash-only token publication and
 test("HTTP verifies auth before client/body and rejects foreign-origin public POST", async () => {
   let client = false,
     read = false;
-  class AuthError extends Error {}
+  class AuthError extends Error { status = 401; }
   const h = validationTestModule(
     "lib/validation/server/external-mvp-http.ts",
     (s) => {

@@ -115,12 +115,13 @@ Verified on the PR 1 source before publication:
 | Check | Result |
 | --- | --- |
 | Ten focused Node suites | 3,107 passed, zero failures/skips; includes the original 18 admission tests and preservation suites |
-| Final admission suite after adding x-search coverage | 19 passed, zero failures/skips; 3,108 distinct focused cases covered in total |
+| Final admission suite including x-search and private Validation API denial | 20 passed, zero failures/skips; 3,109 distinct focused cases covered in total |
 | Real local upgrade acceptance | Passed: real users/tester row created under main, then new migration applied |
 | Real local fresh acceptance | Passed: complete application migration chain including this migration, then real users |
 | Chromium against the built local app | Three passed: recovery/signed-out behavior; denied/admitted/revoked same synthetic session; default-off Validation and public-page separation |
 | Focused Validation integration regressions | 146 Node cases passed, including the admission rerun, capability resources and unchanged fixture source pins/readers; three Hub browser regressions passed |
-| Focused strict TypeScript | Exit 0, including changed runtime entrypoints, new helpers and acceptance/unit harnesses |
+| Specialized method HTTP Auth fixtures and final admission suite | 48 passed, zero failures/skips; Auth mocks retain the actual default 401 status, without changing runtime guards |
+| Focused strict TypeScript | Exit 0 across all 25 changed non-e2e entrypoints, including runtime, helpers and acceptance/unit harnesses |
 | Repository lint | Exit 0; four inherited Discover/Saved/Scans warnings, no errors |
 | Production build | Exit 0, standard Next.js 16.2.4 build |
 | Repository TypeScript | 175 inherited diagnostics, unchanged from the clean main baseline; no added diagnostics |
@@ -135,7 +136,11 @@ password update/new login after revoke, independent expiry and public signup
 acquisition. Direct Scan service admission still enforces three ordinary Scans,
 reuses duplicates without extra quota and admits exactly one concurrent claim.
 The browser session check also verifies that focus revalidation does not erase
-unsaved founder input. The security-pinned test module loader and fixture source
+unsaved founder input. Final review additionally strengthened and passed both
+existing direct-entry browser cases: unsaved Validation label and context text
+survive an admission recheck and are submitted unchanged, with and without an
+opportunity handoff. No new runtime change or full test campaign was needed.
+The security-pinned test module loader and fixture source
 manifest remain byte-identical to main; only new admission tests use workflow
 traps. Existing browser fixtures explicitly model invited founders, and their
 strict catch-all request trap falls through only for the membership lookup.
@@ -145,8 +150,12 @@ public-schema SECURITY DEFINER functions executable by authenticated browsers.
 Paid providers are mocked/trapped in offline tests; no actual paid call was made.
 Local command records remain in `/workspace/work/beta-membership/`. The new
 focused CI workflow reproduces offline plus disposable upgrade/fresh acceptance
-with read-only GitHub permissions and no Production credentials. It has not been
-represented as a completed hosted CI run.
+with read-only GitHub permissions and no Production credentials. On the reviewed
+`4fda9c5` head, hosted membership, Playwright, Validation database and Hub/browser
+jobs passed; the Validation static job exposed the four incomplete Auth mocks
+corrected in the final test-only update. See the PR checks for the latest head
+and final workflow results. These fixture corrections do not weaken assertions
+or change production behavior.
 
 Limitations: this is a real local PostgreSQL/Auth/PostgREST acceptance result,
 not a remote or full Supabase-platform certification. No real Google OAuth
@@ -222,3 +231,49 @@ container. The prepare script can replace only its named, manifest-matching
 containers after the explicit `fresh`/`stop` action. Tokens are random disposable
 credentials in a private workdir file; never commit that file. No Production,
 shared Preview, provider, F4 or promotion execution is part of these commands.
+
+## Exact PR 1 file inventory
+
+The final diff contains 37 files. Runtime implementations and their small Auth
+error-status adapters are separate from the migration, owner script, disposable
+acceptance infrastructure, focused tests and documentation listed below.
+
+```text
+.github/workflows/beta-membership-access.yml
+app/api/_utils/auth.ts
+app/api/discover/actions/route.ts
+app/api/opportunities/route.ts
+app/api/saved-ideas/route.ts
+app/api/user/capabilities/route.ts
+app/api/weekly-intelligence/route.ts
+app/api/x-search/route.ts
+app/layout.tsx
+components/app-shell.tsx
+components/beta-workspace-access.tsx
+docs/BETA_ADMISSION_SPENDING_AUDIT.md
+docs/BETA_MEMBERSHIP_ACCESS.md
+e2e/beta-membership.spec.ts
+e2e/validation-commercial-intent.spec.ts
+e2e/validation-external-mvp.spec.ts
+e2e/validation-hub.spec.ts
+e2e/validation-landing-pages.spec.ts
+e2e/validation-prototypes.spec.ts
+lib/auth/beta-membership.ts
+lib/auth/workspace-path.ts
+lib/validation/server/commercial-intent-http.ts
+lib/validation/server/external-mvp-http.ts
+lib/validation/server/http.ts
+lib/validation/server/landing-http.ts
+lib/validation/server/prototype-http.ts
+scripts/beta-membership-disposable.mjs
+scripts/beta-membership-owner.sql
+supabase/migrations/20261116000000_beta_membership_access.sql
+tests/beta-membership-db.ts
+tests/beta-membership.test.ts
+tests/discovery-weekly-owner-isolation.test.ts
+tests/validation-capability-resources.test.ts
+tests/validation-commercial-intent.test.ts
+tests/validation-external-mvp.test.ts
+tests/validation-landing-pages.test.ts
+tests/validation-prototypes.test.ts
+```

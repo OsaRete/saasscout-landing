@@ -225,7 +225,7 @@ test("publication token is hashed; safe normalized content and public validation
 test("prototype HTTP authenticates owners before reading bodies or creating clients, rejects cross-origin public posts", async () => {
   let client = false,
     read = false;
-  class AuthError extends Error {}
+  class AuthError extends Error { status = 401; }
   const httpModule = validationTestModule(
     "lib/validation/server/prototype-http.ts",
     (specifier) => {

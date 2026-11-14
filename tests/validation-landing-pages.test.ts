@@ -230,7 +230,7 @@ test("public submission requires strict consent, honeypot, email and server brow
 test("landing HTTP authenticates owners before reading bodies or creating clients, rejects cross-origin public posts", async () => {
   let client = false,
     read = false;
-  class AuthError extends Error {}
+  class AuthError extends Error { status = 401; }
   const httpModule = validationTestModule(
     "lib/validation/server/landing-http.ts",
     (specifier) => {

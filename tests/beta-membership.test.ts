@@ -81,9 +81,14 @@ test("unavailable membership fails closed; missing/invalid identity never asks f
   assert.deepEqual(h.calls, ["auth"]);
 });
 
-for (const route of ["discover-opportunities", "collect-sources", "scan/acceptance", "scan/workflow", "weekly-intelligence", "saved-ideas"]) {
+for (const route of ["discover-opportunities", "collect-sources", "scan/acceptance", "scan/workflow", "weekly-intelligence", "saved-ideas", "validation/subjects"]) {
   test(`direct ${route} request stops at membership before body/provider/privileged work`, async (t) => {
     const h = harness(t);
+    if (route.startsWith("validation/")) {
+      const old = process.env.VALIDATION_PRIVATE_MODE;
+      process.env.VALIDATION_PRIVATE_MODE = "INTERVIEWS";
+      t.after(() => { if (old === undefined) delete process.env.VALIDATION_PRIVATE_MODE; else process.env.VALIDATION_PRIVATE_MODE = old; });
+    }
     if (route === "scan/workflow") {
       const old = process.env.SCAN_SERVER_WORKFLOW_ENABLED;
       process.env.SCAN_SERVER_WORKFLOW_ENABLED = "true";
