@@ -433,7 +433,7 @@ for (const scenario of ["success", "unauthenticated", "unexpected", "resource"])
   test(`HTTP ${scenario} is private/no-store and sanitizes errors`, async () => {
     mode("INTERVIEWS");
     const events: string[] = [];
-    class AuthError extends Error {}
+    class AuthError extends Error { status = 401; }
     const exports = validationTestModule(
       "lib/validation/server/http.ts",
       (specifier) => {

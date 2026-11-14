@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AppShell from "../components/app-shell";
+import BetaWorkspaceAccess from "../components/beta-workspace-access";
+import { getValidationReleasePolicy } from "@/lib/validation/server/release-policy";
 
 export const metadata: Metadata = {
   title: "SaaSScout",
@@ -19,9 +21,10 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const validation = getValidationReleasePolicy();
   return (
     <html lang="en">
-      <body><AppShell>{children}</AppShell></body>
+      <body><AppShell><BetaWorkspaceAccess validationAvailable={validation.privateInterviews || validation.privateSurveys}>{children}</BetaWorkspaceAccess></AppShell></body>
     </html>
   );
 }

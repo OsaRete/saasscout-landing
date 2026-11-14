@@ -1,0 +1,50 @@
+name: Beta membership access
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/beta-membership-access.yml'
+      - 'app/api/**'
+      - 'app/layout.tsx'
+      - 'lib/auth/**'
+      - 'components/beta-workspace-access.tsx'
+      - 'lib/validation/server/**'
+      - 'scripts/beta-membership-*'
+      - 'supabase/migrations/**'
+      - 'tests/beta-membership*'
+      - 'tests/support/validation-module.ts'
+permissions:
+  contents: read
+jobs:
+  membership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BETA_MEMBERSHIP_DISPOSABLE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Set isolated fixture directory
+        run: printf 'BETA_MEMBERSHIP_LOCAL_WORKDIR=%s/beta-membership-local\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Focused admission and preservation tests
+        run: >-
+          node --loader ./tests/support/server-only-loader.mjs --test
+          tests/beta-membership.test.ts tests/scan-acceptance.test.ts
+          tests/scan-status-aware-acceptance.test.ts
+          tests/discovery-weekly-owner-isolation.test.ts
+          tests/validation-release-boundary.test.ts
+      - name: Upgrade acceptance with real local Auth and PostgREST
+        run: |
+          node scripts/beta-membership-disposable.mjs upgrade
+          node --loader ./tests/support/server-only-loader.mjs tests/beta-membership-db.ts upgrade
+      - name: Fresh-install acceptance
+        run: |
+          node scripts/beta-membership-disposable.mjs fresh
+          node --loader ./tests/support/server-only-loader.mjs tests/beta-membership-db.ts fresh
+      - name: Stop only labeled fixture containers
+        if: always()
+        run: node scripts/beta-membership-disposable.mjs stop
