@@ -1,3 +1,4 @@
+import { withProviderBudget, ProviderBudgetError } from "../../../lib/spending/provider-budget.ts";
 // app/api/discover-opportunities/route.ts
 
 import { NextResponse } from "next/server";
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
     // Once admitted, an ambiguous failure remains charged and this key never dispatches again.
     let result;
     try {
-      result = await discoverOpportunitiesWorkflow(user.id);
+      result = await withProviderBudget({ userId: user.id, workflow: "discovery", requestId: requestId.toLowerCase() }, () => discoverOpportunitiesWorkflow(user.id));
     } catch (failure) {
       await client.from("application_discovery_admissions").update({ status: "failed" }).eq("user_id", user.id).eq("request_id", requestId);
       throw failure;
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("Discover opportunities error:", error);
 
-    if (error instanceof AuthError) {
+    if (error instanceof AuthError || error instanceof ProviderBudgetError) {
       return NextResponse.json(
         { success: false, error: error.message },
         { status: error.status }

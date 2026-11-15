@@ -115,7 +115,7 @@ test("scheduled membership uses the same persisted predicate and denies revoked 
   admitted = false;
   await assert.rejects(requireBetaMember("owner-a", client), { status: 403 });
   assert.deepEqual(calls, Array(2).fill(["application_beta_member", { p_user_id: "owner-a" }]));
-  assert.match(readFileSync("app/api/weekly-intelligence/route.ts", "utf8"), /await requireBetaMember\(userId\);\s+return runAuthoritativeWeeklyGenerationForUser/);
+  assert.match(readFileSync("app/api/weekly-intelligence/route.ts", "utf8"), /await requireBetaMember\(userId\);\s+return withProviderBudget\(\{ userId, workflow: "weekly", requestId: "unclaimed" \}, \(\) => runAuthoritativeWeeklyGenerationForUser/);
 });
 
 test("x-search retains its Production 404 and denies non-member development calls", async (t) => {

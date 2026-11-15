@@ -1,3 +1,4 @@
+import { withProviderBudget } from "../spending/provider-budget.ts";
 import "server-only";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -60,7 +61,7 @@ export async function executeAcceptedScanWorkflow(input: ScanWorkflowInput & { l
   console.info("Scan acceptance", { scanId: acceptance.scanId, fingerprintVersion: SCAN_REQUEST_FINGERPRINT_VERSION, disposition: acceptance.disposition, existingStatus: acceptance.existingStatus, claimAttempted: true, claimResult: claim.claimed, unlimitedEntitlementUsed: acceptance.unlimitedEntitlementUsed, retryOfScanId: acceptance.retryOfScanId });
   if (!claim.claimed) return { acceptance, workflow: null, claim } as const;
   try {
-    const workflow = await executeScanOrchestrationWorkflow(input, authorization);
+    const workflow = await withProviderBudget({ userId, workflow: "scan", requestId: acceptance.scanId }, () => executeScanOrchestrationWorkflow(input, authorization));
     await persistLegacyResults(client, userId, acceptance.scanId, workflow, input.legacyContext);
     await finishLegacyScan(client, acceptance.scanId, userId, "completed");
     return { acceptance, workflow, claim } as const;

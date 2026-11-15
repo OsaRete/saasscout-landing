@@ -1,3 +1,4 @@
+import { dispatchProviderFetch } from "./spending/provider-budget.ts";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -141,7 +142,7 @@ export async function collectWeeklyExternalEvidence(input: { topics: readonly We
 export function createWeeklySerpApiProvider(fetcher: typeof fetch = fetch): WeeklyExternalProvider {
   return { name: "serpapi", configured: () => Boolean(process.env.SERPAPI_API_KEY), async search({ query, limit, signal }) {
     const params = new URLSearchParams({ engine: "google", q: query, num: String(limit), api_key: process.env.SERPAPI_API_KEY || "" });
-    const response = await fetcher(`https://serpapi.com/search.json?${params}`, { cache: "no-store", signal });
+    const response = await dispatchProviderFetch(`https://serpapi.com/search.json?${params}`, { cache: "no-store", signal }, fetcher);
     const body = await response.json() as { organic_results?: Array<{ title?: string; link?: string; snippet?: string; date?: string; position?: number }>; error?: string };
     if (!response.ok) throw new Error("SerpApi request failed");
     return (body.organic_results || []).map((item) => ({ provider: "serpapi", sourceType: "google_search", url: item.link || "", title: item.title, snippet: item.snippet, publishedAt: item.date, rank: item.position }));

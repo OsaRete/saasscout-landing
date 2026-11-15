@@ -26,10 +26,10 @@ export type ScanAcceptanceContract = Readonly<{
 export type ScanExecutionClaim = Readonly<{ claimed: boolean; resultingStatus: "processing" | "completed" | "failed" | null; rejectionCode: string | null }>;
 
 export class ScanAcceptanceError extends Error {
-  readonly code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded";
+  readonly code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded" | "scan_global_budget_unavailable";
 
   constructor(
-    code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded",
+    code: "scan_acceptance_request_invalid" | "scan_acceptance_persistence_failed" | "scan_acceptance_limit_exceeded" | "scan_global_budget_unavailable",
     message = "The Scan acceptance request is invalid.",
   ) {
     super(message);
@@ -108,6 +108,7 @@ export function createScanAcceptanceClient(): SupabaseClient {
 }
 
 export function scanAcceptanceHttpStatusForCode(code: ScanAcceptanceError["code"]): number {
+  if (code === "scan_global_budget_unavailable") return 503;
   if (code === "scan_acceptance_limit_exceeded") return 402;
   if (code === "scan_acceptance_persistence_failed") return 500;
   return 400;
@@ -136,6 +137,10 @@ export async function acceptScanRequest(input: ScanAcceptanceInput, user: Authen
 
   if (result.accepted === false && result.rejection_code === "scan_limit_exceeded") {
     throw new ScanAcceptanceError("scan_acceptance_limit_exceeded", "You have reached your plan Scan limit.");
+  }
+
+  if (result.accepted === false && result.rejection_code === "global_budget_unavailable") {
+    throw new ScanAcceptanceError("scan_global_budget_unavailable", "Global provider spending admission is unavailable or exhausted.");
   }
 
   const dispositions = new Set(["created", "reused_pending", "already_processing", "already_completed", "retry_created"]);

@@ -3,6 +3,13 @@ import { afterEach, describe, it, mock } from "node:test";
 
 import { collectExternalSources } from "../lib/evidence/sources/discovery-external-sources.ts";
 
+import { withProviderBudget } from "../lib/spending/provider-budget.ts";
+const admittedSources = (limit: number) => withProviderBudget(
+  { userId: "synthetic-user", workflow: "discovery", requestId: "synthetic-request" },
+  () => collectExternalSources(limit),
+  { rpc: async () => ({ data: true, error: null }) },
+);
+
 const originalSerpApiKey = process.env.SERPAPI_API_KEY;
 const originalXBearerToken = process.env.X_BEARER_TOKEN;
 
@@ -71,7 +78,7 @@ describe("collectExternalSources", () => {
       );
     });
 
-    const sources = await collectExternalSources(2);
+    const sources = await admittedSources(2);
 
     assert.equal(
       requestedUrls.filter((url) => url.startsWith("https://serpapi.com/search.json")).length,
@@ -131,10 +138,26 @@ describe("collectExternalSources", () => {
 
     const errorLog = mock.method(console, "error", () => {});
 
-    const sources = await collectExternalSources(3);
+    const sources = await admittedSources(3);
 
     assert.equal(errorLog.mock.callCount(), 1);
     assert.equal(sources.some((source) => source.source_type === "x"), false);
     assert.equal(sources[0].source_type, "google_search");
   });
+});
+
+it("optional X budget denial never dispatches X and retains metered Google sources", async () => {
+  process.env.SERPAPI_API_KEY = "mock";
+  process.env.X_BEARER_TOKEN = "mock";
+  let requests = 0;
+  mock.method(globalThis, "fetch", async (url: string | URL) => {
+    assert.ok(String(url).startsWith("https://serpapi.com/search.json"));
+    requests++;
+    return new Response(JSON.stringify({organic_results:[{title:"Manual workflow",link:"https://example.test/manual",snippet:"Synthetic source"}]}));
+  });
+  const sources = await withProviderBudget({userId:"synthetic",workflow:"discovery",requestId:"x-disabled"},
+    () => collectExternalSources(2),
+    {rpc:async (_name,args)=>({data:args.p_provider!=="x",error:null})});
+  assert.equal(requests,6);
+  assert.equal(sources.length,1);
 });

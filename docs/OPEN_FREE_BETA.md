@@ -61,6 +61,10 @@ One admitted generation is not one paid provider request. Replacement/corrective
 
 ## Required dependent spending PR — precise scope, not implemented here
 
+The independent implementation and operating policy are now documented in
+[GLOBAL_PROVIDER_SPENDING.md](GLOBAL_PROVIDER_SPENDING.md). This section records
+the access PR dependency contract; it does not activate budgets or public access.
+
 The original PR 2 spending work spans independent provider/workflow state machines and is not folded into this access/admin adaptation. No dependent PR was created/pushed because deployments are forbidden and the owner requested local work only. Public launch stays blocked until it is implemented and accepted.
 
 1. Use additive PostgreSQL service-owned reservations/claims; no new queue, Redis or external platform. Reserve before every paid dispatch, with stable server-bound workflow/owner/request/attempt identity and durable uniqueness. Make denied/missing/malformed budget state fail closed. Count all outgoing requests, including replacements, corrective calls, retries, external searches and ambiguous failures.
