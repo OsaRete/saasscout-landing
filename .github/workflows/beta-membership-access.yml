@@ -4,6 +4,12 @@ on:
     paths:
       - '.github/workflows/beta-membership-access.yml'
       - 'app/api/**'
+      - 'app/admin/**'
+      - 'app/discover/**'
+      - 'app/scan/**'
+      - 'app/weekly/**'
+      - 'tests/open-beta*'
+      - 'scripts/open-beta-*'
       - 'app/layout.tsx'
       - 'lib/auth/**'
       - 'components/beta-workspace-access.tsx'
@@ -33,18 +39,18 @@ jobs:
       - name: Focused admission and preservation tests
         run: >-
           node --loader ./tests/support/server-only-loader.mjs --test
-          tests/beta-membership.test.ts tests/scan-acceptance.test.ts
+          tests/open-beta.test.ts tests/beta-membership.test.ts tests/scan-acceptance.test.ts
           tests/scan-status-aware-acceptance.test.ts
           tests/discovery-weekly-owner-isolation.test.ts
           tests/validation-release-boundary.test.ts
       - name: Upgrade acceptance with real local Auth and PostgREST
         run: |
           node scripts/beta-membership-disposable.mjs upgrade
-          node --loader ./tests/support/server-only-loader.mjs tests/beta-membership-db.ts upgrade
+          node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts upgrade
       - name: Fresh-install acceptance
         run: |
           node scripts/beta-membership-disposable.mjs fresh
-          node --loader ./tests/support/server-only-loader.mjs tests/beta-membership-db.ts fresh
+          node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts fresh
       - name: Stop only labeled fixture containers
         if: always()
         run: node scripts/beta-membership-disposable.mjs stop

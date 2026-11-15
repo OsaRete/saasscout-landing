@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
+import { requireOwnerAdministrator } from "@/lib/auth/owner-administrator";
 import { requireBetaMember } from "@/lib/auth/beta-membership";
 import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, WEEKLY_EXECUTION_CONTRACT_VERSION, WEEKLY_MODEL_ENVELOPE_LIMITS, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
@@ -295,7 +296,7 @@ export async function POST(req: Request) {
   const weeklyExecutionId = createWeeklyExecutionId();
   try {
     logWeeklyDiagnostic("received", { weeklyExecutionId, entryPath: "button" });
-    const user = await requireUser(req);
+    const { user } = await requireOwnerAdministrator(req);
     logWeeklyDiagnostic("authenticated", { weeklyExecutionId, entryPath: "button", userId: user.id });
 
     let profile;

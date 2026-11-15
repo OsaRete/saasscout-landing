@@ -13,11 +13,11 @@ test("signed-out workspace blocks child database calls while recovery stays avai
   for (const path of ["/login", "/reset-password", "/update-password"]) {
     await page.goto(`${base}${path}`);
     await expect(page.getByRole("heading").last()).toBeVisible();
-    await expect(page.getByText("An active Beta invitation is required.")).toHaveCount(0);
+    await expect(page.getByText("Verify your email to continue.")).toHaveCount(0);
   }
 });
 
-test("same session: denied, admitted, then revoked; children mount only after admission", async ({ page }) => {
+test("same session: restricted, active, then suspended; children mount only after admission", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("sb-placeholder-auth-token", JSON.stringify({
       access_token: "synthetic-token", token_type: "bearer", refresh_token: "synthetic-refresh",
@@ -32,14 +32,14 @@ test("same session: denied, admitted, then revoked; children mount only after ad
   await page.route("**/auth/v1/user", (route) => route.fulfill({ json: { id: "fixture-owner", email: "fixture@example.test" } }));
   await page.route("**/api/user/capabilities", (route) => {
     checks += 1;
-    return route.fulfill({ status: admitted ? 200 : 403, json: admitted ? { capabilities: {} } : { error: "Invitation required" } });
+    return route.fulfill({ status: admitted ? 200 : 403, json: admitted ? { capabilities: {} } : { error: "Account restricted" } });
   });
   await page.route("**/rest/v1/**", (route) => {
     if (route.request().method() === "GET") reads += 1; else writes += 1;
     return route.fulfill({ json: null });
   });
   await page.goto(`${base}/founder-profile`);
-  await expect(page.getByText(/An active Beta invitation is required/)).toBeVisible();
+  await expect(page.getByText(/Verify your email to continue/)).toBeVisible();
   expect(reads).toBe(0);
   admitted = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -55,7 +55,7 @@ test("same session: denied, admitted, then revoked; children mount only after ad
   expect(reads).toBe(previousReads);
   admitted = false;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByText(/An active Beta invitation is required/)).toBeVisible();
+  await expect(page.getByText(/Verify your email to continue/)).toBeVisible();
   expect(reads).toBe(previousReads);
   expect(writes).toBe(0);
 });

@@ -1,5 +1,8 @@
 # Beta admission and spending: pre-implementation audit and proposed split
 
+**Open Free Beta continuation:** [OPEN_FREE_BETA.md](OPEN_FREE_BETA.md) supersedes invitation-only product decisions and owner operations below. The prior implementation/acceptance record is retained as historical evidence. Public launch remains blocked on dependent spending controls.
+
+
 Status: investigation and baseline verification only. No security or spending
 fix is implemented by this document. This is not Beta activation approval.
 

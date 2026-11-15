@@ -81,7 +81,7 @@ test("unavailable membership fails closed; missing/invalid identity never asks f
   assert.deepEqual(h.calls, ["auth"]);
 });
 
-for (const route of ["discover-opportunities", "collect-sources", "scan/acceptance", "scan/workflow", "weekly-intelligence", "saved-ideas", "validation/subjects"]) {
+for (const route of ["discover-opportunities", "collect-sources", "admin/users", "scan/acceptance", "scan/workflow", "weekly-intelligence", "saved-ideas", "validation/subjects"]) {
   test(`direct ${route} request stops at membership before body/provider/privileged work`, async (t) => {
     const h = harness(t);
     if (route.startsWith("validation/")) {

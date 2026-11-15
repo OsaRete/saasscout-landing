@@ -98,8 +98,17 @@ await ready(async () => { try { return (await fetch(`${connection.API_URL}/auth/
 sql("CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT coalesce(nullif(current_setting('request.jwt.claim.sub',true),''), nullif(current_setting('request.jwt.claims',true),'')::jsonb->>'sub')::uuid $$;");
 const files = readdirSync("supabase/migrations").filter((name)=>name.endsWith(".sql")).sort();
 for (const file of files) {
-  if (action === "upgrade" && file === "20261116000000_beta_membership_access.sql") continue;
+  if (action === "upgrade" && file >= "20261116000000") continue;
   sql(readFileSync(resolve("supabase/migrations",file),"utf8"));
 }
 sql("NOTIFY pgrst, 'reload schema';");
+await ready(async () => {
+  try {
+    return (await fetch(`${connection.API_URL}/rest/v1/application_user_access?select=user_id&limit=0`, {
+      headers: { Authorization: `Bearer ${connection.SERVICE_ROLE_KEY}`, apikey: connection.SERVICE_ROLE_KEY },
+      signal: AbortSignal.timeout(1000),
+    })).ok;
+  } catch { return false; }
+});
+writeFileSync(statusFile, JSON.stringify({ ...connection, prepared: "true" }), { mode: 0o600 });
 console.log(`Prepared ${action} fixture with real PostgreSQL 17, GoTrue and PostgREST on fixed loopback port. No remote database used.`);

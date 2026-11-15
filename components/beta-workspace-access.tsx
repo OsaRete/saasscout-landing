@@ -70,8 +70,8 @@ export default function BetaWorkspaceAccess({ children, validationAvailable }: {
   const visibleAdmission = admission === "allowed" && approvedPath !== pathname ? "checking" : admission;
   if (!protectedPath || visibleAdmission === "allowed") return children;
   return <main className="mx-auto max-w-xl px-6 py-20 text-white" aria-live="polite">
-    <h1 className="text-2xl font-semibold">{visibleAdmission === "checking" ? "Checking access…" : "SaaSScout private Beta"}</h1>
-    {visibleAdmission === "denied" && <p className="mt-4 text-slate-300">An active Beta invitation is required. Contact the owner who invited you to request access.</p>}
+    <h1 className="text-2xl font-semibold">{visibleAdmission === "checking" ? "Checking access…" : "SaaSScout Free Beta"}</h1>
+    {visibleAdmission === "denied" && <p className="mt-4 text-slate-300">Verify your email to continue. If your account is restricted or Beta is not open yet, contact support.</p>}
     {visibleAdmission === "signed_out" && <p className="mt-4"><Link href="/login" className="text-violet-300">Sign in to check your Beta access</Link></p>}
     {visibleAdmission === "unavailable" && <p className="mt-4 text-slate-300">Access could not be verified. Please try again.</p>}
     {visibleAdmission !== "checking" && <button className="mt-6 rounded-lg bg-violet-600 px-4 py-2" onClick={() => setRetry((value) => value + 1)}>Check again</button>}

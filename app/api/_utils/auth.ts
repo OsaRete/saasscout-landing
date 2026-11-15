@@ -64,7 +64,7 @@ export async function requireUser(req: Request) {
     throw new AuthError("Beta access could not be verified.", 503);
   }
   if (admission.data !== true) {
-    throw new AuthError("An active Beta invitation is required.", 403);
+    throw new AuthError("A verified, active Beta account is required.", 403);
   }
 
   return user;

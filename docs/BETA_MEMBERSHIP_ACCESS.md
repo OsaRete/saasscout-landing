@@ -1,5 +1,8 @@
 # Beta membership and access enforcement (PR 1)
 
+**Open Free Beta continuation:** [OPEN_FREE_BETA.md](OPEN_FREE_BETA.md) supersedes invitation-only product decisions and owner operations below. The prior implementation/acceptance record is retained as historical evidence. Public launch remains blocked on dependent spending controls.
+
+
 ## Approved scope and implementation plan
 
 Continues the audit on verified main

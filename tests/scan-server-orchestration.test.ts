@@ -63,6 +63,8 @@ test("scan server orchestration authorization is server owned and environment ga
   assert.equal(config.persistenceShadowEnabled, true);
   assert.deepEqual(authorizeScanOrchestration({ id: "user-a" }, config), { authenticated: true, authorizationMode: "internal_user" });
   assert.equal(authorizeScanOrchestration({ id: "user-c" }, config), null);
+  assert.deepEqual(authorizeScanOrchestration({ id: "user-c" }, config, true), { authenticated: true, authorizationMode: "eligible_plan" });
+  assert.equal(authorizeScanOrchestration(null, config, true), null);
 });
 
 test("scan server orchestration response mapping preserves public workflow compatibility", () => {
