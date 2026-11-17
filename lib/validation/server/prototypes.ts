@@ -162,6 +162,12 @@ export class PrototypeService {
         error?.code === "23505" ? "idempotency_conflict" : "not_found",
         "The prototype is unavailable or this response conflicts with a prior submission. Reload before trying again.",
       );
+    if ((data as { capacity?: boolean }).capacity)
+      throw new ValidationServerError(
+        409,
+        "constraint_conflict",
+        "This experiment has reached its collection limit. Please contact the creator.",
+      );
     if ((data as { limited?: boolean }).limited)
       throw new ValidationServerError(
         429,

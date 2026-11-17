@@ -51,7 +51,7 @@ test("required multiple choice rejects no selections while optional empty answer
 });
 
 test("forward migration enforces required blank checks before atomic submission writes", () => {
-  const migration = readFileSync(new URL("../supabase/migrations/20261024000000_survey_required_answer_integrity.sql", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/20261120000000_validation_public_collection_bounds.sql", import.meta.url), "utf8");
   const rpcStart = migration.indexOf("create or replace function public.validation_submit_public_survey");
   const rpcEnd = migration.indexOf("end $$;", rpcStart);
   assert.ok(rpcStart >= 0 && rpcEnd > rpcStart);

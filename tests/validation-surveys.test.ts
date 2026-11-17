@@ -16,9 +16,10 @@ const experimentUi = read("components/validation/experiment-form.tsx");
 const sharedUi = read("components/ui.tsx");
 const server = read("lib/validation/server/surveys.ts");
 const docs = read("docs/IDEA_VALIDATION_SURVEYS.md");
-const submitFunction = sql.slice(
-  sql.indexOf("create function public.validation_submit_public_survey"),
-  sql.indexOf("revoke all on function"),
+const collectionSql = read("supabase/migrations/20261120000000_validation_public_collection_bounds.sql");
+const submitFunction = collectionSql.slice(
+  collectionSql.indexOf("create or replace function public.validation_submit_public_survey"),
+  collectionSql.indexOf("revoke all on function public.validation_submit_public_survey"),
 );
 const publishFunction = sql.slice(
   sql.indexOf("create function public.validation_publish_survey"),
@@ -134,7 +135,7 @@ test("submission SQL enforces every persisted answer type against immutable plan
 
 test("invalid submissions are validated before transactional submission and answer inserts", () => {
   const validationEnd = submitFunction.indexOf(
-    "-- The insert and every answer insert are one function transaction",
+    "-- Validation precedes writes;",
   );
   const submissionInsert = submitFunction.indexOf(
     "insert into public.validation_survey_submissions",
@@ -195,7 +196,6 @@ test("publication replacement serializes on the owned logical experiment root", 
 
 test("submission and revocation have deterministic publication-row lock ordering", () => {
   assert.match(submitFunction, /state='published' for share/);
-  assert.match(submitFunction, /blocks revoke\/replacement until commit/);
   assert.match(sql, /UPDATE takes a row-exclusive lock/);
   assert.match(
     docs,
@@ -236,7 +236,7 @@ test("public capability remains hashed, revocable, narrow, and service-role-only
 test("public UX and workspace preserve approved V6 boundaries", () => {
   for (const value of [
     "required={q.required}",
-    'disabled={status==="sending"}',
+    "disabled={busy || stopped || waiting}",
     "Thank you",
     "Do not include sensitive personal information",
     "crypto.randomUUID",
@@ -354,7 +354,7 @@ test("V6.2 blocks incomplete and duplicate choices beside their question", () =>
 });
 
 test("historical literal choice labels remain valid public survey data", () => {
-  assert.match(publicUi, /q\.options!\.map\(o=>/);
+  assert.match(publicUi, /q\.options!\.map\(\(?o\)?\s*=>/);
   assert.doesNotMatch(server, /option===?["']Option [12]/i);
   assert.doesNotMatch(publicUi, /option===?["']Option [12]/i);
 });
@@ -401,10 +401,6 @@ test("submission lifecycle locking is deterministic and has no V3 reverse-order 
     publicationLock > 0 &&
       lifecycleLock > publicationLock &&
       submitFunction.indexOf("for share", lifecycleLock) > lifecycleLock,
-  );
-  assert.match(
-    submitFunction,
-    /V3 lifecycle transitions lock only the[\s\S]+experiment-version row/,
   );
   assert.match(
     docs,

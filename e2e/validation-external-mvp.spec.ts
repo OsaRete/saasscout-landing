@@ -73,7 +73,7 @@ test("participant mobile: external link, consent, optional contact and unchanged
     .check();
   await page.getByRole("button", { name: "Send feedback" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toHaveText(
-    "Retry please.",
+    "Your submission status could not be confirmed. Retry the same response.",
   );
   await page.getByRole("button", { name: "Retry same response" }).click();
   await expect(

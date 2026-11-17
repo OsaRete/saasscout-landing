@@ -1,5 +1,6 @@
 "use client";
-import { useRef, useState } from "react";
+import { useState } from "react";
+import { usePublicSubmission } from "./use-public-submission";
 import {
   Button,
   Field,
@@ -26,12 +27,16 @@ export function ExternalMvpExperience({
     [email, setEmail] = useState(""),
     [consent, setConsent] = useState(false),
     [contactConsent, setContactConsent] = useState(false),
-    [website, setWebsite] = useState(""),
-    [busy, setBusy] = useState(false),
-    [done, setDone] = useState(false),
-    [error, setError] = useState(""),
-    [held, setHeld] = useState(false);
-  const pending = useRef<object | null>(null);
+    [website, setWebsite] = useState("");
+  const {
+    submit: send,
+    busy,
+    held,
+    done,
+    stopped,
+    waiting,
+    error,
+  } = usePublicSubmission();
   let url = "";
   try {
     url = externalMvpUrl(content.url);
@@ -39,9 +44,7 @@ export function ExternalMvpExperience({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!token || !consent) return;
-    setBusy(true);
-    setError("");
-    pending.current ||= {
+    await send(`/api/public/validation/external-mvp/${token}/submit`, () => ({
       requestId: crypto.randomUUID(),
       outcome,
       answers,
@@ -49,27 +52,7 @@ export function ExternalMvpExperience({
       consent,
       contactConsent,
       website,
-    };
-    setHeld(true);
-    try {
-      const r = await fetch(
-        `/api/public/validation/external-mvp/${token}/submit`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          body: JSON.stringify(pending.current),
-        },
-      );
-      const x = await r.json();
-      if (!r.ok)
-        throw new Error(x?.error?.message || "Could not save feedback.");
-      setDone(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    }));
   }
   if (done)
     return (
@@ -202,6 +185,8 @@ export function ExternalMvpExperience({
           disabled={
             !token ||
             busy ||
+            stopped ||
+            waiting ||
             !consent ||
             !outcome ||
             answers.some((a) => !a.trim()) ||
@@ -210,9 +195,13 @@ export function ExternalMvpExperience({
         >
           {busy
             ? "Submitting…"
-            : held
-              ? "Retry same response"
-              : "Send feedback"}
+            : waiting
+              ? "Please wait…"
+              : stopped
+                ? "Submission unavailable"
+                : held
+                  ? "Retry same response"
+                  : "Send feedback"}
         </Button>
         {error && (
           <p role="alert" className="text-rose-200">

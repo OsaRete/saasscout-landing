@@ -34,6 +34,9 @@ async function handle(operation: () => Promise<unknown>) {
               : status === 401
                 ? "unauthenticated"
                 : "constraint_conflict",
+          ...(error instanceof ValidationServerError && error.submissionRejected
+            ? { submissionRejected: true }
+            : {}),
           message:
             error instanceof ValidationServerError
               ? error.message

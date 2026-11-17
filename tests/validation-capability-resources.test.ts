@@ -94,7 +94,10 @@ function mockDb(tables: Record<string, Row[]> = {}) {
     async rpc(name: string, args: Row) {
       writes.push({ name, args });
       return {
-        data: { id: "new-record", subject_id: args.p_subject_id },
+        data:
+          name === "validation_submit_public_survey"
+            ? { submissionId: "new-record", duplicate: false }
+            : { id: "new-record", subject_id: args.p_subject_id },
         error: null,
       };
     },
@@ -433,7 +436,9 @@ for (const scenario of ["success", "unauthenticated", "unexpected", "resource"])
   test(`HTTP ${scenario} is private/no-store and sanitizes errors`, async () => {
     mode("INTERVIEWS");
     const events: string[] = [];
-    class AuthError extends Error { status = 401; }
+    class AuthError extends Error {
+      status = 401;
+    }
     const exports = validationTestModule(
       "lib/validation/server/http.ts",
       (specifier) => {
@@ -581,6 +586,10 @@ test("public survey success exposes only participant-safe fields and derives sub
   assert.deepEqual(accepted, { accepted: true, duplicate: false });
   assert.equal(mock.writes[0].name, "validation_submit_public_survey");
   assert.equal(mock.writes[0].args.p_token_hash, tokenHash);
+  assert.equal(
+    mock.writes[0].args.p_network_hash,
+    createHash("sha256").update(`${token}:unknown`).digest("hex"),
+  );
   assert.equal("p_owner_id" in mock.writes[0].args, false);
   await assert.rejects(
     () => service.submit(token, { owner_id: "forged", answers: [] }),

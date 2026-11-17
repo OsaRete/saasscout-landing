@@ -30,7 +30,7 @@ The authenticated workspace shows submission/respondent counts and literal choic
 
 The browser generates a request UUID, not an authoritative record ID. The server hashes a canonical answer payload. The database uniqueness boundary is publication plus idempotency key: identical retries return the original submission; a changed payload conflicts. Request bodies, question/answer counts, text, options, and numeric ranges are bounded.
 
-A small process-local limiter allows ten requests per minute for a truncated network-address/token bucket. High-entropy tokens resist guessing and malformed tokens fail safely. This limiter is intentionally modest: it is not distributed across instances, durable, CAPTCHA, or sophisticated bot detection. Production scale should move the same boundary to shared infrastructure without widening database grants.
+PostgreSQL owns the shared resolve/submit admission budget: ten operations per publication/network/minute and 600 aggregate operations per publication/minute. Full token-scoped network hashes contain no raw address. Aggregate admission is serialized before network bucket creation; buckets older than one day are pruned even on limited outcomes. Cumulative submissions are capped at 1,000 per exact experiment version across replacement publications. Counters are seeded from retained history and are not refunded. These are resource bounds, not monthly entitlements or proof of human identity. See [public collection integrity](./VALIDATION_PUBLIC_PARTICIPANT_INTEGRITY.md).
 
 ## Database authority and concurrency
 
