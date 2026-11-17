@@ -4,8 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
-
-const workspaceRoutes = ["/dashboard", "/scan", "/scans", "/discover", "/results", "/saved", "/weekly", "/validation", "/opportunity", "/sources", "/founder-profile"];
+import { isFounderWorkspacePath } from "@/lib/auth/workspace-path";
 const SIDEBAR_MODE_KEY = "saasscout-sidebar-mode";
 const LEGACY_COLLAPSED_KEY = "saasscout-sidebar-collapsed";
 
@@ -68,8 +67,7 @@ export default function AppShell({ children, active }: { children: ReactNode; ac
   const modeControlRef = useRef<HTMLDivElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
-  const publicLanding = (pathname.startsWith("/validation/commercial-intent/") || pathname.startsWith("/validation/external-mvp/") || pathname.startsWith("/validation/landing/") || pathname.startsWith("/validation/prototype/"));
-  const inWorkspace = !publicLanding && workspaceRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  const inWorkspace = isFounderWorkspacePath(pathname);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSidebarMode(readStoredMode()), 0);

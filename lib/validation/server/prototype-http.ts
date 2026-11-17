@@ -23,7 +23,7 @@ async function handle(operation: () => Promise<unknown>) {
       return validationDisabledResponse();
     const status =
       error instanceof AuthError
-        ? 401
+        ? error.status
         : error instanceof ValidationServerError
           ? error.status
           : 500;

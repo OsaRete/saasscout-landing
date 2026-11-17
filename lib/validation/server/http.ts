@@ -39,7 +39,7 @@ export async function validationHandler(
             message: "Authentication required.",
           },
         },
-        { status: 401, headers: VALIDATION_PRIVATE_HEADERS },
+        { status: error.status, headers: VALIDATION_PRIVATE_HEADERS },
       );
     if (error instanceof ValidationServerError)
       return Response.json(

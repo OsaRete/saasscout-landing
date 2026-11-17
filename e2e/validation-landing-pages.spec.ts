@@ -80,6 +80,8 @@ test("private owner: edit, preview, publish/share, metrics and unpublish", async
   const owner = "11000000-0000-0000-0000-000000000001",
     subject = "subject",
     version = "version";
+  // Synthetic founder membership; real admission/RLS is covered separately.
+  await page.route("**/api/user/capabilities", (route) => route.fulfill({ json: { capabilities: {} } }));
   await page.addInitScript(
     ({ owner }) => {
       const session = {

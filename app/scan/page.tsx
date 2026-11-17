@@ -48,6 +48,8 @@ type UserCapabilities = {
   role: "internal_tester" | null;
   isInternalTester: boolean;
   unlimitedScans: boolean;
+  isOwnerAdministrator?: boolean;
+  scansThisMonth?: number;
 };
 
 function formatFileSize(bytes: number) {
@@ -377,16 +379,16 @@ if (profileData) {
               </p>
             </div>
 
-            {capabilities?.isInternalTester && capabilities.unlimitedScans ? (
+            {capabilities?.unlimitedScans ? (
               <div className="inline-flex shrink-0 items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-violet-200">
-                Internal tester · Unlimited scans
+                {capabilities.isOwnerAdministrator ? "Owner administrator" : "Internal tester"} · Unlimited scans
               </div>
             ) : (
               <div className="w-fit rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-300">
                 {userProfile
   ? `${userProfile.plan.toUpperCase()} · ${
-      userProfile.scan_limit - userProfile.scans_used
-    } scans left`
+      userProfile.plan === "free" ? Math.max(0, Math.min(3, userProfile.scan_limit) - (capabilities?.scansThisMonth ?? 0)) : Math.max(0, Math.min(userProfile.scan_limit - userProfile.scans_used, 3 - (capabilities?.scansThisMonth ?? 0)))
+    } scans left this UTC month`
   : "Loading plan..."}
               </div>
             )}

@@ -58,8 +58,14 @@ function harness(t: TestContext, failedTable?: string) {
       return index < 0 ? json({ message: "Invalid synthetic token" }, 401)
         : json({ id: owners[index], aud: "authenticated", role: "authenticated" });
     }
+    if (url.pathname === "/rest/v1/rpc/application_beta_access") {
+      assert.ok(["Bearer token-a", "Bearer token-b"].includes(headers.get("authorization") || ""));
+      return json(true);
+    }
     assert.equal(headers.get("apikey"), "synthetic-service-role");
     const table = url.pathname.replace("/rest/v1/", "");
+    if (table === "rpc/application_admit_discovery") return json("admitted");
+    if (table === "application_discovery_admissions" && init?.method === "PATCH") return json(null);
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       const rows = Array.isArray(body) ? body : [body];
@@ -136,7 +142,7 @@ for (const [index, token] of ["token-a", "token-b"].entries()) {
     const h = harness(t);
     const foreignIndex = 1 - index;
     const response = await h.post(new Request("https://app.test/api/discover-opportunities", {
-      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      method: "POST", headers: { "Idempotency-Key": "00000000-0000-4000-8000-000000000099", Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ userId: owners[foreignIndex], ownerId: owners[foreignIndex] }),
     }));
     assert.equal(response.status, 200);
@@ -188,7 +194,7 @@ for (const table of ["weekly_detected_problems", "weekly_sources"]) {
   test(`${table} query failure cannot fall back to unscoped context or invoke AI`, async (t) => {
     const h = harness(t, table);
     const response = await h.post(new Request("https://app.test/api/discover-opportunities", {
-      method: "POST", headers: { Authorization: "Bearer token-a" },
+      method: "POST", headers: { "Idempotency-Key": "00000000-0000-4000-8000-000000000099", Authorization: "Bearer token-a" },
     }));
     assert.equal(response.status, 500);
     assert.deepEqual(h.prompts, []);

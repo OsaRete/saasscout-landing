@@ -1,4 +1,6 @@
+import { budgetedProviderFetch, withProviderBudget, spendingRequestId, ProviderBudgetError } from "../../../lib/spending/provider-budget.ts";
 import { NextRequest, NextResponse } from "next/server";
+import { AuthError, requireUser } from "../_utils/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +116,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const user = await requireUser(req);
+    const requestId = spendingRequestId(req);
+
     if (!process.env.X_BEARER_TOKEN) {
       return NextResponse.json(
         { success: false, error: "X_BEARER_TOKEN is missing." },
@@ -127,7 +132,7 @@ export async function GET(req: NextRequest) {
       searchParams.get("query") ||
       '("too much manual work" OR "manual workflow" OR "still using spreadsheets" OR "google sheets" OR "wasting time") ("business" OR "clients" OR "workflow" OR "operations" OR "agency" OR "freelance" OR "founder" OR "startup")';
 
-    const query = cleanQuery(rawQuery);
+    const query = cleanQuery(rawQuery.slice(0, 1000));
 
     const params = new URLSearchParams({
       query,
@@ -135,7 +140,7 @@ export async function GET(req: NextRequest) {
       "tweet.fields": "created_at,public_metrics,author_id,lang",
     });
 
-    const response = await fetch(
+    const response = await withProviderBudget({ userId: user.id, workflow: "x-search", requestId }, () => budgetedProviderFetch(
       `https://api.x.com/2/tweets/search/recent?${params}`,
       {
         headers: {
@@ -143,7 +148,7 @@ export async function GET(req: NextRequest) {
         },
         cache: "no-store",
       }
-    );
+    ));
 
     const data = await response.json();
 
@@ -176,6 +181,9 @@ export async function GET(req: NextRequest) {
       meta: data?.meta || null,
     });
   } catch (error) {
+    if (error instanceof AuthError || error instanceof ProviderBudgetError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       {
         success: false,

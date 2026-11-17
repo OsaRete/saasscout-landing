@@ -81,6 +81,8 @@ test("participant mobile: consent, navigation, explicit feedback and safe retry"
 test("owner: template, edit, preview, save, publish, results and evidence-preserving removal", async ({
   page,
 }) => {
+  // Synthetic founder membership; real admission/RLS is covered separately.
+  await page.route("**/api/user/capabilities", (route) => route.fulfill({ json: { capabilities: {} } }));
   await page.addInitScript(() => {
     const session = {
       access_token: "synthetic-test-token",

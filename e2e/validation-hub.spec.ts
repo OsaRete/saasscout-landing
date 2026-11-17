@@ -9,6 +9,8 @@ test.use({
   },
 });
 async function auth(page: Page) {
+  // Synthetic founder membership; real admission/RLS is covered separately.
+  await page.route("**/api/user/capabilities", (route) => route.fulfill({ json: { capabilities: {} } }));
   await page.addInitScript(() => {
     const session = {
       access_token: "synthetic-test-token",
@@ -20,6 +22,7 @@ async function auth(page: Page) {
     };
     localStorage.setItem("sb-127-auth-token", JSON.stringify(session));
     localStorage.setItem("sb-127.0.0.1-auth-token", JSON.stringify(session));
+    localStorage.setItem("sb-placeholder-auth-token", JSON.stringify(session));
   });
   await page.route("**/auth/v1/user", (route) =>
     route.fulfill({ json: { id: "owner", email: "owner@example.com" } }),
@@ -306,6 +309,7 @@ for (const sourceType of [undefined, "opportunity"]) {
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
+      if (path === "/api/user/capabilities") return route.fallback();
       if (path === "/api/validation/subjects" && request.method() === "POST") {
         submissions.push(request.postDataJSON());
         await route.fulfill({ json: { data: { subject: { id: "subject" } } } });
@@ -339,6 +343,17 @@ for (const sourceType of [undefined, "opportunity"]) {
     if (sourceType) await ownIdea.click();
     await expect(ownIdea).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Owned source reference")).toHaveCount(0);
+    const draftLabel = "Unsaved independent idea";
+    const draftContext = "Unsaved context from this session";
+    await page.getByLabel("Idea / validation label").fill(draftLabel);
+    await page.getByLabel("Context description (optional)").fill(draftContext);
+    const rechecked = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/user/capabilities",
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await rechecked;
+    await expect(page.getByLabel("Idea / validation label")).toHaveValue(draftLabel);
+    await expect(page.getByLabel("Context description (optional)")).toHaveValue(draftContext);
     await page
       .getByRole("button", { name: "Create validation", exact: true })
       .click();
@@ -346,10 +361,10 @@ for (const sourceType of [undefined, "opportunity"]) {
     expect(submissions).toEqual([
       {
         creationOrigin: "user_entered",
-        label: "Independent idea",
+        label: draftLabel,
         contextSnapshot: {
-          description: "Own context",
-          label: "Independent idea",
+          description: draftContext,
+          label: draftLabel,
         },
       },
     ]);

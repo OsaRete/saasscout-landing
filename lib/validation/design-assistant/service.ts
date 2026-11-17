@@ -1,3 +1,4 @@
+import { budgetedProviderFetch } from "../../spending/provider-budget.ts";
 import { assertValidationOperation } from "../server/release-policy.ts";
 import "server-only";
 import OpenAI from "openai";
@@ -133,6 +134,8 @@ class OpenRouterValidationDesignProvider implements Provider {
     if (!apiKey)
       throw new ValidationDesignError("provider_configuration_missing", 503);
     const client = new OpenAI({
+    maxRetries: 0,
+    fetch: budgetedProviderFetch,
       apiKey,
       baseURL: "https://openrouter.ai/api/v1",
     });

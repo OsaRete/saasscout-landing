@@ -1,3 +1,4 @@
+import { budgetedProviderFetch, ProviderBudgetError } from "../../spending/provider-budget.ts";
 import type { DiscoverySource } from "../../knowledge/discovery-data-moat-sources";
 
 type Source = DiscoverySource;
@@ -142,7 +143,7 @@ async function searchSerpApi(query: string, resultsPerQuery: number) {
     num: String(resultsPerQuery),
   });
 
-  const response = await fetch(`https://serpapi.com/search.json?${params}`, {
+  const response = await budgetedProviderFetch(`https://serpapi.com/search.json?${params}`, {
     method: "GET",
     cache: "no-store",
   });
@@ -168,7 +169,7 @@ async function searchXSignals() {
     "tweet.fields": "created_at,public_metrics,author_id,lang",
   });
 
-  const response = await fetch(
+  const response = await budgetedProviderFetch(
     `https://api.x.com/2/tweets/search/recent?${params}`,
     {
       headers: {
@@ -222,7 +223,12 @@ export async function collectExternalSources(sourcesLimit: number) {
     }
   }
 
-  const xResults = await searchXSignals();
+  // X is optional, like an unsuccessful X HTTP response. Budget denial yields
+  // no X evidence and must never fall back to an unmetered transport.
+  const xResults = await searchXSignals().catch((error: unknown) => {
+    if (error instanceof ProviderBudgetError) return [];
+    throw error;
+  });
 
   xResults.forEach((item, index) => {
     const text = item.tweet.text || "";

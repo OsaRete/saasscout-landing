@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -132,6 +132,7 @@ function getFounderFitLabel(score: number) {
 
 export default function DiscoverPage() {
   const router = useRouter();
+  const discoveryRequestId = useRef<string | null>(null);
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
@@ -318,16 +319,19 @@ export default function DiscoverPage() {
         return;
       }
 
+      discoveryRequestId.current ??= crypto.randomUUID();
       const response = await fetch("/api/discover-opportunities", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": discoveryRequestId.current,
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({}),
       });
 
       const result = await response.json();
+      discoveryRequestId.current = null;
 
       if (!response.ok) {
         setMessage(result.error || "Could not analyze market signals.");

@@ -151,6 +151,7 @@ export default function WeeklyPage() {
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
   const [message, setMessage] = useState("");
 
   const [runs, setRuns] = useState<WeeklyRun[]>([]);
@@ -165,6 +166,10 @@ export default function WeeklyPage() {
       if (!user) { router.push("/login"); return; }
       setLoadingAuth(false);
       const { data: { session } } = await supabase.auth.getSession();
+      const capabilityResponse = await fetch("/api/user/capabilities", {
+        headers: { Authorization: `Bearer ${session?.access_token || ""}` }, cache: "no-store",
+      });
+      if (capabilityResponse.ok) setIsOwner((await capabilityResponse.json()).capabilities?.isOwnerAdministrator === true);
       const response = await fetch("/api/weekly-intelligence", {
         headers: { Authorization: `Bearer ${session?.access_token || ""}` }, cache: "no-store",
       });
@@ -303,13 +308,14 @@ export default function WeeklyPage() {
             </div>
 
             <div className="flex flex-col gap-3">
-              <button
+              {isOwner && <button
                 onClick={handleRunWeeklyIntelligence}
                 disabled={generating}
                 className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {generating ? "Refreshing..." : "Refresh Weekly Intelligence"}
-              </button>
+              </button>}
+              {isOwner && <Link href="/admin/users" className="text-violet-300">Manage users</Link>}
 
               <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">
                 <p className="text-xs uppercase tracking-widest text-violet-300">
@@ -333,8 +339,7 @@ export default function WeeklyPage() {
           <section className="mt-10 rounded-3xl border border-white/10 bg-[#0B1020] p-10 text-center">
             <h2 className="text-2xl font-bold">No weekly intelligence yet</h2>
             <p className="mt-3 text-gray-400">
-              Run the first weekly intelligence analysis to detect market
-              problems automatically.
+              Your report will appear after the next scheduled generation.
             </p>
           </section>
         ) : (

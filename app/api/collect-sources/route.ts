@@ -1,3 +1,4 @@
+import { budgetedProviderFetch, withProviderBudget, spendingRequestId, ProviderBudgetError } from "../../../lib/spending/provider-budget.ts";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
 
@@ -135,7 +136,7 @@ async function searchSerpApi(query: string) {
     num: "5",
   });
 
-  const response = await fetch(`https://serpapi.com/search.json?${params}`, {
+  const response = await budgetedProviderFetch(`https://serpapi.com/search.json?${params}`, {
     method: "GET",
     cache: "no-store",
   });
@@ -151,13 +152,30 @@ async function searchSerpApi(query: string) {
 
 export async function POST(req: Request) {
   try {
-    await requireUser(req);
+    const user = await requireUser(req);
+    const requestId = spendingRequestId(req);
 
-    const body = await req.json();
+    // Use the existing admin-route streamed bound pattern before JSON parsing.
+    const reader = req.body?.getReader();
+    if (!reader) throw new AuthError("JSON body required.", 400);
+    let text = "";
+    let bytes = 0;
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 2048) { await reader.cancel(); throw new AuthError("Request too large.", 413); }
+      text += decoder.decode(value, { stream: true });
+    }
+    let body;
+    try { body = JSON.parse(text + decoder.decode()); } catch { throw new AuthError("Invalid JSON.", 400); }
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+      Object.keys(body).some(key => !["market", "audience", "region"].includes(key))) throw new AuthError("Invalid source request.", 400);
 
-    const market = String(body.market || "").trim();
-    const audience = String(body.audience || "").trim();
-    const region = String(body.region || "").trim();
+    const market = String(body.market || "").trim().slice(0, 120);
+    const audience = String(body.audience || "").trim().slice(0, 120);
+    const region = String(body.region || "").trim().slice(0, 80);
 
     if (!market) {
       return NextResponse.json(
@@ -177,10 +195,12 @@ export async function POST(req: Request) {
 
     const allResults: SerpApiOrganicResult[] = [];
 
-    for (const query of queries.slice(0, 4)) {
-      const results = await searchSerpApi(query);
-      allResults.push(...results);
-    }
+    await withProviderBudget({ userId: user.id, workflow: "collect-sources", requestId }, async () => {
+      for (const query of queries.slice(0, 4)) {
+        const results = await searchSerpApi(query);
+        allResults.push(...results);
+      }
+    });
 
     const seenUrls = new Set<string>();
 
@@ -224,7 +244,7 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("Collect sources error:", error);
 
-    if (error instanceof AuthError) {
+    if (error instanceof AuthError || error instanceof ProviderBudgetError) {
       return NextResponse.json(
         { success: false, error: error.message },
         { status: error.status }
