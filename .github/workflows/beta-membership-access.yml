@@ -12,6 +12,13 @@ on:
       - 'scripts/open-beta-*'
       - 'app/layout.tsx'
       - 'lib/auth/**'
+      - 'lib/spending/**'
+      - 'lib/scan/**'
+      - 'lib/weekly*'
+      - 'lib/evidence/sources/**'
+      - 'lib/intelligence/discover-opportunities-workflow.ts'
+      - 'tests/provider-spending*'
+      - 'tests/discovery-external-sources.test.ts'
       - 'components/beta-workspace-access.tsx'
       - 'lib/validation/server/**'
       - 'scripts/beta-membership-*'
@@ -40,17 +47,21 @@ jobs:
         run: >-
           node --loader ./tests/support/server-only-loader.mjs --test
           tests/open-beta.test.ts tests/beta-membership.test.ts tests/scan-acceptance.test.ts
-          tests/scan-status-aware-acceptance.test.ts
+          tests/scan-status-aware-acceptance.test.ts tests/provider-spending.test.ts
+          tests/discovery-external-sources.test.ts tests/weekly-external-evidence.test.ts
+          tests/weekly-intelligence-quality.test.ts tests/weekly-intelligence-consolidation.test.ts
           tests/discovery-weekly-owner-isolation.test.ts
           tests/validation-release-boundary.test.ts
       - name: Upgrade acceptance with real local Auth and PostgREST
         run: |
           node scripts/beta-membership-disposable.mjs upgrade
           node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts upgrade
+          node --loader ./tests/support/server-only-loader.mjs tests/provider-spending-db.ts
       - name: Fresh-install acceptance
         run: |
           node scripts/beta-membership-disposable.mjs fresh
           node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts fresh
+          node --loader ./tests/support/server-only-loader.mjs tests/provider-spending-db.ts
       - name: Stop only labeled fixture containers
         if: always()
         run: node scripts/beta-membership-disposable.mjs stop

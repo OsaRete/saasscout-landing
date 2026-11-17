@@ -1,3 +1,4 @@
+import { budgetedProviderFetch } from "../spending/provider-budget.ts";
 import "server-only";
 
 import OpenAI from "openai";
@@ -80,6 +81,8 @@ export type ProblemIntelligenceServiceResult = Readonly<{
 
 export function createOpenRouterClient() {
   return new OpenAI({
+    maxRetries: 0,
+    fetch: budgetedProviderFetch,
     apiKey: process.env.OPENROUTER_API_KEY,
     baseURL: "https://openrouter.ai/api/v1",
     defaultHeaders: {

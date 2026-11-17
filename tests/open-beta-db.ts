@@ -56,6 +56,12 @@ if (phase==='upgrade') {
   for (const name of ['20261116000000_beta_membership_access.sql','20261117000000_open_free_beta_access.sql','20261118000000_free_beta_monthly_admission.sql']) {
     sql(`BEGIN;\n${readFileSync(`supabase/migrations/${name}`,'utf8')}\nCOMMIT;`);
   }
+  // Upgrade through the exact dependency schema before the additive spending migration.
+  const historical = sql(`INSERT INTO public.scan(user_id,market,audience,region,evidence,status)
+    VALUES('${owner.id}','upgrade fixture','synthetic','synthetic','retain evidence','completed') RETURNING id;`).split('\n')[0];
+  const before = sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`);
+  sql(`BEGIN;\n${readFileSync('supabase/migrations/20261119000000_global_provider_spending.sql','utf8')}\nCOMMIT;`);
+  assert.equal(sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`), before, 'Upgrade preserves historical Scan evidence and identity');
 }
 for(let i=0;i<40;i++) {
   if (!(await a.client.rpc('application_beta_access')).error) break;
@@ -128,6 +134,8 @@ assert.equal((await admit(a.id,same)).data,'already_admitted','Old idempotency k
 assert.equal((await admit(a.id,randomUUID())).data,'admitted','UTC month rollover permits new Discovery admission');
 const ownerAdmissions=await Promise.all(Array.from({length:4},()=>admit(owner.id,randomUUID())));
 assert.ok(ownerAdmissions.every(r=>r.data==='admitted'),'Owner exempt from individual Discovery quota only');
+// Only this manifest-verified disposable fixture enables test ceilings. No production defaults.
+sql('UPDATE public.application_spending_policy SET enabled=true,total_requests=10000,openrouter_requests=10000,serpapi_requests=10000,x_requests=10000,search_requests=10000,user_ai_requests=1000,user_search_requests=1000,max_concurrent=1000,weekly_max_executions=2;');
 const scan=async(u:string,fingerprint:string)=>{
   const result=await admin.rpc('accept_scan_request_v2',{p_user_id:u,p_request_fingerprint:fingerprint,p_market:'fixture',p_audience:'fixture',p_region:'fixture',p_evidence:'Synthetic fixture evidence'});
   assert.equal(result.error,null);return result.data[0];

@@ -1,3 +1,4 @@
+import { budgetedProviderFetch } from "../spending/provider-budget.ts";
 import OpenAI from "openai";
 import { recordOperationalEvent } from "@/lib/operational-events";
 import { createClient } from "@supabase/supabase-js";
@@ -431,6 +432,8 @@ function runDiscoveryOrchestratorDiagnostics({
 
 function getOpenRouterClient() {
   return new OpenAI({
+    maxRetries: 0,
+    fetch: budgetedProviderFetch,
     apiKey: process.env.OPENROUTER_API_KEY,
     baseURL: "https://openrouter.ai/api/v1",
     defaultHeaders: {
