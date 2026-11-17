@@ -5,7 +5,7 @@ import {createHash,randomBytes} from "node:crypto";
 import type {SupabaseAdminClient} from "@/lib/supabase/server-admin";
 import type {SurveyQuestion} from "@/lib/validation/types";
 import {SURVEY_QUESTION_TYPES,validateSurveyAnswers} from "@/lib/validation/surveys";
-import {ValidationServerError,assertObject,optionalText,rejectAuthorityFields,text} from "./contracts";
+import {ValidationServerError,publicSubmissionValidation,assertObject,optionalText,rejectAuthorityFields,text} from "./contracts";
 const hash=(value:string)=>createHash("sha256").update(value).digest("hex");
 const canonical=(value:unknown):string=>Array.isArray(value)?`[${value.map(canonical).join(",")}]`:value&&typeof value==="object"?`{${Object.entries(value as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`:JSON.stringify(value);
 const choiceKey=(value:string)=>value.trim().replace(/\s+/g," ").toLocaleLowerCase("en-US");
@@ -15,5 +15,102 @@ export class SurveyService{constructor(private db:SupabaseAdminClient){}
  async createPlan(ownerId:string,input:unknown){assertValidationOperation("survey.plan","POST");assertObject(input);rejectAuthorityFields(input);const args={p_owner_id:ownerId,p_experiment_version_id:text(input.experimentVersionId,"experimentVersionId",100),p_title:text(input.title,"title",200),p_purpose:text(input.purpose,"purpose",1000),p_questions:questions(input.questions),p_supersedes_survey_plan_version_id:optionalText(input.supersedesSurveyPlanVersionId,"supersedesSurveyPlanVersionId",100)??null};await ownedValidationVersion(this.db,ownerId,args.p_experiment_version_id,"survey");const{data,error}=await this.db.rpc("validation_create_survey_plan",args);if(error||!data)failures(error,"Could not save survey plan.");return data;}
  async publish(ownerId:string,input:unknown){assertValidationOperation("survey.publish","POST");assertObject(input);rejectAuthorityFields(input);await ownedSurveyResource(this.db,ownerId,text(input.surveyPlanVersionId,"surveyPlanVersionId",100),"validation_survey_plan_versions");const token=randomBytes(32).toString("base64url");const{data,error}=await this.db.rpc("validation_publish_survey",{p_owner_id:ownerId,p_survey_plan_version_id:text(input.surveyPlanVersionId,"surveyPlanVersionId",100),p_token_hash:hash(token)});if(error||!data)failures(error,"Could not publish survey.");return{...(data as object),publicPath:`/validation/survey/${token}`};}
  async revoke(ownerId:string,id:string){assertValidationOperation("survey.revoke","POST");await ownedSurveyResource(this.db,ownerId,id,"validation_survey_publications");const{data,error}=await this.db.rpc("validation_revoke_survey",{p_owner_id:ownerId,p_publication_id:id});if(error||!data)failures(error,"Could not revoke survey.");return data;}
- async resolve(token:string){assertValidationOperation("survey.resolve","GET");if(!/^[A-Za-z0-9_-]{40,100}$/.test(token))throw new ValidationServerError(404,"not_found","This survey is unavailable.");const{data:publication,error}=await this.db.from("validation_survey_publications").select("id,owner_id,subject_id,hypothesis_id,hypothesis_version_id,state,survey_plan_version_id,experiment_id,experiment_version_id").eq("token_hash",hash(token)).maybeSingle();if(error||!publication||publication.state!=="published")throw new ValidationServerError(404,"not_found","This survey is closed or unavailable.");const{data:experiment,error:experimentError}=await this.db.from("validation_experiment_versions").select("id,experiment_id,subject_id,hypothesis_id,hypothesis_version_id").eq("owner_id",publication.owner_id).eq("subject_id",publication.subject_id).eq("hypothesis_id",publication.hypothesis_id).eq("hypothesis_version_id",publication.hypothesis_version_id).eq("id",publication.experiment_version_id).eq("experiment_id",publication.experiment_id).eq("family","survey").eq("lifecycle","running").maybeSingle();if(experimentError||!experiment)throw new ValidationServerError(404,"not_found","This survey is closed or unavailable.");const{data:plan,error:planError}=await this.db.from("validation_survey_plan_versions").select("title,purpose,questions,version_number").eq("owner_id",publication.owner_id).eq("subject_id",publication.subject_id).eq("experiment_version_id",publication.experiment_version_id).eq("id",publication.survey_plan_version_id).single();if(planError||!plan)throw new ValidationServerError(404,"not_found","This survey is unavailable.");return{title:plan.title,purpose:plan.purpose,questions:plan.questions,notice:"This survey is collecting research responses for idea validation. Do not include sensitive personal information."};}
- async submit(token:string,input:unknown){assertValidationOperation("survey.submit","POST");assertObject(input);rejectAuthorityFields(input);const survey=await this.resolve(token);let normalized;try{normalized=validateSurveyAnswers(survey.questions as SurveyQuestion[],input.answers)}catch(error){throw new ValidationServerError(400,"invalid_request",error instanceof Error?error.message:"Invalid answers.")}const idempotencyKey=text(input.idempotencyKey,"idempotencyKey",200);if(idempotencyKey.length<16)throw new ValidationServerError(400,"invalid_request","Idempotency key is too short.");const payloadHash=hash(canonical(normalized));const{data,error}=await this.db.rpc("validation_submit_public_survey",{p_token_hash:hash(token),p_idempotency_key:idempotencyKey,p_payload_hash:payloadHash,p_answers:normalized});if(error||!data)failures(error,"Submission conflicts with an earlier request.");return{accepted:true,duplicate:Boolean((data as {duplicate?:boolean}).duplicate)};}}
+ async resolve(token:string,network?:string){
+ assertValidationOperation("survey.resolve","GET");if(!/^[A-Za-z0-9_-]{40,100}$/.test(token))throw new ValidationServerError(404,"not_found","This survey is unavailable.");
+ if(network!==undefined){
+  const {data,error}=await this.db.rpc("validation_admit_public_survey_resolution",{p_token_hash:hash(token),p_network_hash:hash(`${token}:${network}`)});
+  if(error||!data)throw new ValidationServerError(error?.code==="P0002"?404:500,error?.code==="P0002"?"not_found":"constraint_conflict","This survey is unavailable.");
+  if((data as {limited?:boolean}).limited)throw new ValidationServerError(429,"invalid_request","Too many requests. Please wait one minute.");
+ }
+const{data:publication,error}=await this.db.from("validation_survey_publications").select("id,owner_id,subject_id,hypothesis_id,hypothesis_version_id,state,survey_plan_version_id,experiment_id,experiment_version_id").eq("token_hash",hash(token)).maybeSingle();if(error||!publication||publication.state!=="published")throw new ValidationServerError(404,"not_found","This survey is closed or unavailable.");const{data:experiment,error:experimentError}=await this.db.from("validation_experiment_versions").select("id,experiment_id,subject_id,hypothesis_id,hypothesis_version_id").eq("owner_id",publication.owner_id).eq("subject_id",publication.subject_id).eq("hypothesis_id",publication.hypothesis_id).eq("hypothesis_version_id",publication.hypothesis_version_id).eq("id",publication.experiment_version_id).eq("experiment_id",publication.experiment_id).eq("family","survey").eq("lifecycle","running").maybeSingle();if(experimentError||!experiment)throw new ValidationServerError(404,"not_found","This survey is closed or unavailable.");const{data:plan,error:planError}=await this.db.from("validation_survey_plan_versions").select("title,purpose,questions,version_number").eq("owner_id",publication.owner_id).eq("subject_id",publication.subject_id).eq("experiment_version_id",publication.experiment_version_id).eq("id",publication.survey_plan_version_id).single();if(planError||!plan)throw new ValidationServerError(404,"not_found","This survey is unavailable.");return{title:plan.title,purpose:plan.purpose,questions:plan.questions,notice:"This survey is collecting research responses for idea validation. Do not include sensitive personal information."};}
+
+  async submit(token: string, input: unknown, network = "unknown") {
+    assertValidationOperation("survey.submit", "POST");
+    const survey = await this.resolve(token);
+    const { normalized, idempotencyKey } = publicSubmissionValidation(() => {
+      assertObject(input);
+      rejectAuthorityFields(input);
+      let normalized;
+      try {
+        normalized = validateSurveyAnswers(
+          survey.questions as SurveyQuestion[],
+          input.answers,
+        );
+      } catch (error) {
+        throw new ValidationServerError(
+          400,
+          "invalid_request",
+          error instanceof Error ? error.message : "Invalid answers.",
+        );
+      }
+      const idempotencyKey = text(input.idempotencyKey, "idempotencyKey", 200);
+      if (idempotencyKey.length < 16)
+        throw new ValidationServerError(
+          400,
+          "invalid_request",
+          "Invalid submission identifier.",
+        );
+      return { normalized, idempotencyKey };
+    });
+    const { data, error } = await this.db.rpc(
+      "validation_submit_public_survey",
+      {
+        p_token_hash: hash(token),
+        p_idempotency_key: idempotencyKey,
+        p_payload_hash: hash(canonical(normalized)),
+        p_answers: normalized,
+        p_network_hash: hash(`${token}:${network}`),
+      },
+    );
+    if (error || !data)
+      throw new ValidationServerError(
+        error?.code === "P0002" ? 404 : 500,
+        error?.code === "P0002" ? "not_found" : "constraint_conflict",
+        "Survey submission could not be confirmed.",
+      );
+    const result = data as {
+      limited?: boolean;
+      capacity?: boolean;
+      rejected?: boolean;
+      conflict?: boolean;
+      duplicate?: boolean;
+      submissionId?: string;
+    };
+    if (result.limited)
+      throw new ValidationServerError(
+        429,
+        "invalid_request",
+        "Too many requests. Please wait one minute.",
+      );
+    if (result.capacity)
+      throw new ValidationServerError(
+        409,
+        "constraint_conflict",
+        "This survey has reached its response limit.",
+      );
+    if (result.conflict)
+      throw new ValidationServerError(
+        409,
+        "idempotency_conflict",
+        "This submission conflicts with an earlier response.",
+      );
+    if (result.rejected)
+      publicSubmissionValidation(() => {
+        throw new ValidationServerError(
+          400,
+          "invalid_request",
+          "Please check your answers.",
+        );
+      });
+    if (
+      typeof result.submissionId !== "string" ||
+      typeof result.duplicate !== "boolean"
+    )
+      throw new ValidationServerError(
+        500,
+        "constraint_conflict",
+        "Survey submission could not be confirmed.",
+      );
+    return { accepted: true, duplicate: result.duplicate };
+  }
+}

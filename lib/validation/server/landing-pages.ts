@@ -155,6 +155,12 @@ export class LandingService {
         "not_found",
         "This page is closed or unavailable. Reload before trying again.",
       );
+    if ((data as { capacity?: boolean }).capacity)
+      throw new ValidationServerError(
+        409,
+        "constraint_conflict",
+        "This experiment has reached its collection limit. Please contact the creator.",
+      );
     if ((data as { limited?: boolean }).limited)
       throw new ValidationServerError(
         429,

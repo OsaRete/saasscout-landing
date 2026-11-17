@@ -73,7 +73,7 @@ test("participant mobile: nonbinding offer, consent, optional contact and unchan
     .getByRole("button", { name: "Submit nonbinding response" })
     .click();
   await expect(page.getByRole("main").getByRole("alert")).toHaveText(
-    "Retry please.",
+    "Your submission status could not be confirmed. Retry the same response.",
   );
   await page.getByRole("button", { name: "Retry same response" }).click();
   await expect(

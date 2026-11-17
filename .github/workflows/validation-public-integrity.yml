@@ -1,0 +1,80 @@
+name: Public Validation integrity
+on:
+  pull_request:
+    paths:
+      - "app/api/public/surveys/**"
+      - "app/validation/survey/**"
+      - "components/validation/*experience.tsx"
+      - "components/validation/use-public-submission.ts"
+      - "lib/validation/public-submission.ts"
+      - "lib/validation/server/**"
+      - "supabase/migrations/**"
+      - "tests/validation-public-submission.test.ts"
+      - "scripts/validation-public-collection-db.ts"
+      - "e2e/validation-public-integrity.spec.ts"
+      - ".github/workflows/validation-public-integrity.yml"
+permissions:
+  contents: read
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        mode: [upgrade, fresh]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Start isolated disposable PostgreSQL
+        run: |
+          docker run -d --name saasscout-public-integrity-test-ci-${{ matrix.mode }} --network none -e POSTGRES_PASSWORD=disposable-only postgres:17-alpine
+          for attempt in $(seq 1 60); do
+            if docker exec saasscout-public-integrity-test-ci-${{ matrix.mode }} pg_isready -U postgres; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Complete migration chain and concurrent collection acceptance
+        env:
+          VALIDATION_PUBLIC_COLLECTION_DISPOSABLE: "1"
+          VALIDATION_PUBLIC_COLLECTION_CONTAINER: saasscout-public-integrity-test-ci-${{ matrix.mode }}
+        run: |
+          extra=()
+          if [ '${{ matrix.mode }}' = fresh ]; then extra+=(--fresh); fi
+          node --loader ./tests/support/server-only-loader.mjs scripts/validation-public-collection-db.ts --prepare "${extra[@]}"
+      - if: always()
+        run: docker rm -f saasscout-public-integrity-test-ci-${{ matrix.mode }}
+  participant:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --loader ./tests/support/server-only-loader.mjs --test tests/validation-public-submission.test.ts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Synthetic participant recovery on the production build
+        env:
+          VALIDATION_PRIVATE_MODE: INTERVIEWS_AND_SURVEYS
+          VALIDATION_PUBLIC_SURVEYS: ENABLED
+          VALIDATION_PRIVATE_EXTERNAL_MVP: ENABLED
+          VALIDATION_PUBLIC_EXTERNAL_MVP: ENABLED
+          VALIDATION_PRIVATE_COMMERCIAL_INTENT: ENABLED
+          VALIDATION_PUBLIC_COMMERCIAL_INTENT: ENABLED
+          VALIDATION_PUBLIC_INTEGRITY_UI_BASE: http://127.0.0.1:3101
+        run: |
+          npm run start -- --hostname 127.0.0.1 --port 3101 > /tmp/public-integrity-app.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3101/ >/dev/null; then break; fi
+            sleep 1
+          done
+          npx playwright test e2e/validation-public-integrity.spec.ts --project=chromium --workers=1 --reporter=line

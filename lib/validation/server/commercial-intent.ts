@@ -8,6 +8,7 @@ import {
   type CommercialObjective,
 } from "../commercial-intent";
 import {
+  publicSubmissionValidation,
   assertObject,
   rejectAuthorityFields,
   text,
@@ -121,39 +122,42 @@ export class CommercialIntentService {
         "not_found",
         "This commercial experiment is closed or unavailable.",
       );
-    let payload = null,
-      requestId: string | null = null;
-    if (action !== "resolve") {
-      assertObject(input);
-      rejectAuthorityFields(input);
-      if (
-        (action === "submit" && input.consent !== true) ||
-        input.website !== ""
-      )
-        throw new ValidationServerError(
-          400,
-          "invalid_request",
-          "Explicit consent is required.",
-        );
-      requestId = text(input.requestId, "requestId", 36);
-      if (
-        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
-          requestId,
+    const { payload, requestId } = publicSubmissionValidation(() => {
+      let payload = null,
+        requestId: string | null = null;
+      if (action !== "resolve") {
+        assertObject(input);
+        rejectAuthorityFields(input);
+        if (
+          (action === "submit" && input.consent !== true) ||
+          input.website !== ""
         )
-      )
-        throw new ValidationServerError(
-          400,
-          "invalid_request",
-          "Invalid request identifier.",
-        );
-      if (action === "submit") payload = commercialIntentFeedback(input);
-      if (!network)
-        throw new ValidationServerError(
-          400,
-          "invalid_request",
-          "Reload the page before submitting.",
-        );
-    }
+          throw new ValidationServerError(
+            400,
+            "invalid_request",
+            "Explicit consent is required.",
+          );
+        requestId = text(input.requestId, "requestId", 36);
+        if (
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
+            requestId,
+          )
+        )
+          throw new ValidationServerError(
+            400,
+            "invalid_request",
+            "Invalid request identifier.",
+          );
+        if (action === "submit") payload = commercialIntentFeedback(input);
+        if (!network)
+          throw new ValidationServerError(
+            400,
+            "invalid_request",
+            "Reload the page before submitting.",
+          );
+      }
+      return { payload, requestId };
+    });
     const { data, error } = await this.db.rpc(
       "validation_commercial_intent_public",
       {
@@ -167,10 +171,29 @@ export class CommercialIntentService {
         p_consent: action === "submit",
       },
     );
+    // These exact RPC exceptions occur before response persistence; PostgreSQL rolls
+    // the failed statement back. Unknown SQL/transport failures remain ambiguous.
+    if (
+      error?.code === "P0001" &&
+      ["invalid feedback", "answer limits", "contact consent"].includes(
+        error.message,
+      )
+    )
+      publicSubmissionValidation(() => {
+        throw new ValidationServerError(
+          400,
+          "invalid_request",
+          "Please check your response and consent.",
+        );
+      });
     if (error || !data)
       throw new ValidationServerError(
-        error?.code === "23505" ? 409 : 404,
-        error?.code === "23505" ? "idempotency_conflict" : "not_found",
+        error?.code === "23505" ? 409 : error?.code === "P0002" ? 404 : 500,
+        error?.code === "23505"
+          ? "idempotency_conflict"
+          : error?.code === "P0002"
+            ? "not_found"
+            : "constraint_conflict",
         "The commercial experiment is unavailable or this response conflicts with a prior submission. Reload before trying again.",
       );
     if ((data as { capacity?: boolean }).capacity)

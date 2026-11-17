@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { usePublicSubmission } from "./use-public-submission";
 import {
   Button,
   Field,
@@ -26,12 +27,16 @@ export function CommercialIntentExperience({
     [email, setEmail] = useState(""),
     [consent, setConsent] = useState(false),
     [contactConsent, setContactConsent] = useState(false),
-    [website, setWebsite] = useState(""),
-    [busy, setBusy] = useState(false),
-    [done, setDone] = useState(false),
-    [error, setError] = useState(""),
-    [held, setHeld] = useState(false);
-  const pending = useRef<object | null>(null);
+    [website, setWebsite] = useState("");
+  const {
+    submit: send,
+    busy,
+    held,
+    done,
+    stopped,
+    waiting,
+    error,
+  } = usePublicSubmission();
   const viewRequest = useRef<string | null>(null);
   useEffect(() => {
     if (!token) return;
@@ -46,37 +51,18 @@ export function CommercialIntentExperience({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!token || !consent) return;
-    setBusy(true);
-    setError("");
-    pending.current ||= {
-      requestId: crypto.randomUUID(),
-      outcome,
-      answers,
-      email,
-      consent,
-      contactConsent,
-      website,
-    };
-    setHeld(true);
-    try {
-      const r = await fetch(
-        `/api/public/validation/commercial-intent/${token}/submit`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          body: JSON.stringify(pending.current),
-        },
-      );
-      const x = await r.json();
-      if (!r.ok)
-        throw new Error(x?.error?.message || "Could not save response.");
-      setDone(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await send(
+      `/api/public/validation/commercial-intent/${token}/submit`,
+      () => ({
+        requestId: crypto.randomUUID(),
+        outcome,
+        answers,
+        email,
+        consent,
+        contactConsent,
+        website,
+      }),
+    );
   }
   if (done)
     return (
@@ -187,16 +173,20 @@ export function CommercialIntentExperience({
           </div>
         </fieldset>
         <p className="text-xs leading-5 text-slate-400">
-          Anonymous page loads are recorded as events, without cookies or unique-person tracking. Participation is optional. Close this page to leave before submitting.
-          Response and any consented email are retained privately by the
-          creator. For contact removal, use the channel that supplied this link.
-          No identity or independent participant verification is performed.
+          Anonymous page loads are recorded as events, without cookies or
+          unique-person tracking. Participation is optional. Close this page to
+          leave before submitting. Response and any consented email are retained
+          privately by the creator. For contact removal, use the channel that
+          supplied this link. No identity or independent participant
+          verification is performed.
         </p>
         <Button
           type="submit"
           disabled={
             !token ||
             busy ||
+            stopped ||
+            waiting ||
             !consent ||
             !outcome ||
             answers.some((a) => !a.trim()) ||
@@ -205,9 +195,13 @@ export function CommercialIntentExperience({
         >
           {busy
             ? "Submitting…"
-            : held
-              ? "Retry same response"
-              : "Submit nonbinding response"}
+            : waiting
+              ? "Please wait…"
+              : stopped
+                ? "Submission unavailable"
+                : held
+                  ? "Retry same response"
+                  : "Submit nonbinding response"}
         </Button>
         {error && (
           <p role="alert" className="text-rose-200">
