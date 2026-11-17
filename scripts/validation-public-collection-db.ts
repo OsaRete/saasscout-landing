@@ -73,7 +73,8 @@ if (process.argv.includes("--prepare")) {
       file === "20261120000000_validation_public_collection_bounds.sql"
     )
       continue;
-    await sql(`begin;${readFileSync(new URL(file, directory), "utf8")}commit;`);
+    // Match membership psql / CLI execution: the migration must own any required transaction.
+    await sql(readFileSync(new URL(file, directory), "utf8"));
   }
   console.log(
     "PASS complete application migration chain on disposable PostgreSQL (synthetic Auth schema)",
@@ -186,7 +187,13 @@ const historicalSurveyKey = await sql(
 const before = await history();
 if (!migrationApplied)
   await sql(
-    `begin;${readFileSync(new URL("../supabase/migrations/20261120000000_validation_public_collection_bounds.sql", import.meta.url), "utf8")}commit;`,
+    readFileSync(
+      new URL(
+        "../supabase/migrations/20261120000000_validation_public_collection_bounds.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
   );
 assert.equal(await history(), before);
 console.log(

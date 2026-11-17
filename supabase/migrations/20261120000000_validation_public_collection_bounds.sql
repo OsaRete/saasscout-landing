@@ -1,4 +1,7 @@
 -- Public participant integrity and bounded collection. Retain all evidence and grants.
+-- This pending migration owns its transaction: psql and Supabase CLI may apply
+-- statements without an implicit file transaction. Keep locks, seeding and RPCs atomic.
+begin;
 -- Block ingress while seeding retained usage and replacing RPCs in this transaction.
 lock table public.validation_survey_submissions, public.validation_survey_answers,
  public.validation_landing_views, public.validation_landing_submissions,
@@ -271,3 +274,5 @@ revoke all on function public.validation_admit_public_survey_resolution(text,tex
 grant execute on function public.validation_admit_public_survey_resolution(text,text) to service_role;
 
 notify pgrst, 'reload schema';
+
+commit;
