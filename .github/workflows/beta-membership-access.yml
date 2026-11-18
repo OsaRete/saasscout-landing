@@ -25,6 +25,25 @@ on:
       - 'supabase/migrations/**'
       - 'tests/beta-membership*'
       - 'tests/support/validation-module.ts'
+      - 'tests/support/beta-acceptance-egress.mjs'
+      - 'tests/support/beta-acceptance-provider.mjs'
+      - 'tests/scan-artifact-fixture.ts'
+      - 'e2e/beta-disposable-scan.spec.ts'
+      - 'e2e/beta-disposable-discovery.spec.ts'
+      - 'e2e/beta-disposable-survey.spec.ts'
+      - 'e2e/beta-disposable-validation.spec.ts'
+      - 'e2e/beta-disposable-weekly.spec.ts'
+      - 'app/validation/**'
+      - 'e2e/beta-disposable-account.spec.ts'
+      - 'scripts/beta-acceptance-browser.mjs'
+      - 'app/login/**'
+      - 'app/update-password/**'
+      - 'app/dashboard/**'
+      - 'app/founder-profile/**'
+      - 'app/opportunity/**'
+      - 'app/saved/**'
+      - 'app/scan/**'
+      - 'lib/user-actions.ts'
 permissions:
   contents: read
 jobs:
@@ -62,6 +81,12 @@ jobs:
           node scripts/beta-membership-disposable.mjs fresh
           node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts fresh
           node --loader ./tests/support/server-only-loader.mjs tests/provider-spending-db.ts
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Real Auth browser and database acceptance
+        run: |
+          node scripts/beta-membership-disposable.mjs fresh
+          node scripts/beta-acceptance-browser.mjs
       - name: Stop only labeled fixture containers
         if: always()
         run: node scripts/beta-membership-disposable.mjs stop

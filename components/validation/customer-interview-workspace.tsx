@@ -235,7 +235,7 @@ export function CustomerInterviewWorkspace({
         body: JSON.stringify({
           expectedStatus: session.status,
           targetStatus,
-          notes: notes[session.id] ?? "",
+          notes: notes[session.id]?.trim() || undefined,
         }),
       });
       await onChange();
@@ -507,6 +507,7 @@ export function CustomerInterviewWorkspace({
                     {session.status === "in_progress" && (
                       <InterviewObservationForm
                         sessionId={session.id}
+                        plan={plans.find((plan) => plan.id === session.interview_plan_version_id)}
                         onDone={onChange}
                       />
                     )}

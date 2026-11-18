@@ -722,20 +722,22 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   }
   discoveryId = discoveryData.id;
 
-  const discoverySnapshotInput = buildDiscoverOpportunitiesSnapshotInput({
-    discoveryId: discoveryData.id,
-    createdAt: discoveryData.created_at || discoveryExecutionStartedAt,
-    completedAt: discoveryData.created_at || discoveryExecutionStartedAt,
-    userId,
-    plan: profile.plan || "free",
-    sourcesLimit,
-    externalSources,
-    moatSources,
-    problems,
-    summary: analysis.summary || null,
-  });
+  if (problems.length > 0) {
+    const discoverySnapshotInput = buildDiscoverOpportunitiesSnapshotInput({
+      discoveryId: discoveryData.id,
+      createdAt: discoveryData.created_at || discoveryExecutionStartedAt,
+      completedAt: discoveryData.created_at || discoveryExecutionStartedAt,
+      userId,
+      plan: profile.plan || "free",
+      sourcesLimit,
+      externalSources,
+      moatSources,
+      problems,
+      summary: analysis.summary || null,
+    });
 
-  await persistDiscoverOpportunitiesSnapshotIfEnabled({ snapshotInput: discoverySnapshotInput });
+    await persistDiscoverOpportunitiesSnapshotIfEnabled({ snapshotInput: discoverySnapshotInput });
+  }
 
   const legacyProblemsToInsert = buildLegacyDiscoveredProblemRows({
     problems,
@@ -754,6 +756,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   const dualWriteResult = await writeDual({
     legacy: {
       write: async () => {
+        if (problemsToInsert.length === 0) return [];
         let { data: insertedProblems, error: problemsError } = await getSupabaseAdminClient()
           .from("discovered_problems")
           .insert(problemsToInsert)

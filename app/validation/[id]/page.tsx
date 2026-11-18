@@ -140,6 +140,7 @@ type Workspace = {
     origin: string;
     modality: string;
     observed_at: string;
+    question_attribution?: { planVersionId: string; position: number } | null;
   }>;
   classifications: Array<{
     id: string;
@@ -797,6 +798,7 @@ export default function WorkspacePage({
                     <span className="block text-xs text-slate-500">
                       {o.modality.replaceAll("_", " ")} ·{" "}
                       {displayDate(o.observed_at)}
+                      {o.question_attribution && ` · Planned question ${o.question_attribution.position}`}
                     </span>
                   </li>
                 ))}
