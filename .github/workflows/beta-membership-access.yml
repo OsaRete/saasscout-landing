@@ -84,7 +84,9 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Real Auth browser and database acceptance
-        run: node scripts/beta-acceptance-browser.mjs
+        run: |
+          node scripts/beta-membership-disposable.mjs fresh
+          node scripts/beta-acceptance-browser.mjs
       - name: Stop only labeled fixture containers
         if: always()
         run: node scripts/beta-membership-disposable.mjs stop

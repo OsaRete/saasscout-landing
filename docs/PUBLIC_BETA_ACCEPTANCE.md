@@ -20,10 +20,11 @@ for mode in upgrade fresh; do
   node --loader ./tests/support/server-only-loader.mjs tests/open-beta-db.ts "$mode" || exit
   node --loader ./tests/support/server-only-loader.mjs tests/provider-spending-db.ts || exit
 done
+node scripts/beta-membership-disposable.mjs fresh
 node scripts/beta-acceptance-browser.mjs
 ```
 
-With system Chromium, set `BETA_ACCEPTANCE_CHROMIUM=/usr/bin/chromium` for the last command. The launcher runs a production-mode build, creates browser contexts at desktop and 390×844, and restores the disposable release gate on exit. Run the public Validation SQL fresh/upgrade commands and existing participant browser commands from the [public participant integrity contract](VALIDATION_PUBLIC_PARTICIPANT_INTEGRITY.md).
+With system Chromium, set `BETA_ACCEPTANCE_CHROMIUM=/usr/bin/chromium` for the last command. Start the browser suite on a separate fresh fixture because the SQL spending suite intentionally leaves unfinished reservations. The launcher runs a production-mode build, creates browser contexts at desktop and 390×844, and restores the disposable release gate on exit. Run the public Validation SQL fresh/upgrade commands and existing participant browser commands from the [public participant integrity contract](VALIDATION_PUBLIC_PARTICIPANT_INTEGRITY.md).
 
 The focused unit and route command passed 3,135 checks.
 

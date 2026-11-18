@@ -65,12 +65,14 @@ for (const name of [db, "beta-membership-disposable-auth", "beta-membership-disp
 }
 const [gateway] = JSON.parse(docker(["inspect", "beta-membership-disposable-gateway"]));
 assert.deepEqual(gateway.NetworkSettings.Ports["8000/tcp"], [{ HostIp: "127.0.0.1", HostPort: "56321" }]);
-const sql = (statement) => docker(["exec", "-i", db, "psql", "-U", "postgres", "-X", "-v", "ON_ERROR_STOP=1"], statement);
+const sql = (statement) => docker(["exec", "-i", db, "psql", "-U", "postgres", "-X", "-At", "-v", "ON_ERROR_STOP=1"], statement);
 function run(args, commandEnv = env) {
   const result = spawnSync(process.execPath, args, { env: commandEnv, stdio: "inherit", timeout: 300_000 });
   assert.equal(result.status, 0, `Acceptance command failed: ${args[0]}`);
 }
 
+assert.equal(sql("SELECT count(*) FROM public.application_provider_reservations;").trim(),
+  "0", "Prepare a fresh browser fixture after the database boundary suite");
 const appUrl = "http://127.0.0.1:3100";
 const occupied = await fetch(appUrl, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
 assert.equal(occupied, false, "Acceptance app port is already in use");
