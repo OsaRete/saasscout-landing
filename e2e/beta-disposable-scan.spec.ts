@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
 
@@ -37,7 +37,7 @@ test("Scan browser submits, reserves, persists, reuses, retries and exhausts quo
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "SaaSScout Intelligence Control Center" })).toBeVisible();
 
-  async function submit(market: string, upload = false) {
+  async function submit(market: string, upload = false, race = false, failTransport = false) {
     await page.goto(`${app}/scan`);
     await page.getByPlaceholder(/Context: Freelance designers/).fill(market);
     const evidence = "Agency operators manually build weekly reports from spreadsheets.";
@@ -46,14 +46,34 @@ test("Scan browser submits, reserves, persists, reuses, retries and exhausts quo
         name: "founder-notes.txt", mimeType: "text/plain", buffer: Buffer.from(evidence),
       });
     } else {
-      await page.getByPlaceholder(/Example: Paste Reddit posts/).fill(evidence);
+      await page.getByPlaceholder(/Example: Paste Reddit posts/).fill(failTransport ? evidence + " Simulate connection loss." : evidence);
+    }
+    if (race) {
+      const release = `${process.env.BETA_ACCEPTANCE_PROVIDER_LOG}.release-scan`;
+      rmSync(release, { force: true });
+      await page.route(`${app}/api/scan/workflow`, async (route) => {
+        const original = route.fetch({ maxRedirects: 0 });
+        try {
+          await expect.poll(() => providerLog().slice(before)).toEqual(["problem"]);
+          const duplicate = await route.fetch({ maxRedirects: 0 });
+          expect(duplicate.status()).toBe(202);
+          const held = await duplicate.json();
+          expect(held).toMatchObject({ error: { code: "scan_already_processing" } });
+          expect(await admin.from("scan").select("id,status").eq("user_id", userId))
+            .toMatchObject({ error: null, data: [{ id: held.scanId, status: "processing" }] });
+          expect(providerLog().slice(before)).toEqual(["problem"]);
+        } finally {
+          writeFileSync(release, "");
+        }
+        await route.fulfill({ response: await original });
+      }, { times: 1 });
     }
     const response = page.waitForResponse((value) => value.url() === `${app}/api/scan/workflow`);
     await page.getByRole("button", { name: "Find Opportunities" }).click();
     return response;
   }
 
-  const first = await submit("Agency reporting acceptance", true);
+  const first = await submit("Agency reporting acceptance", true, true);
   const result = await first.json();
   expect(first.status(), JSON.stringify(result)).toBe(200);
   expect(result.workflow).toMatchObject({ status: "completed", problemIntelligence: { inferred_market: "Agency ops" },
@@ -66,7 +86,7 @@ test("Scan browser submits, reserves, persists, reuses, retries and exhausts quo
   expect(await reused.json()).toMatchObject({ scanId: result.scanId, reused: true });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const failure = await submit("Fixture provider failure");
+    const failure = await submit("Fixture provider failure", false, false, true);
     expect(failure.ok()).toBe(false);
     expect((await failure.json()).error.stage).toBe("problem_intelligence_started");
   }
@@ -89,6 +109,10 @@ test("Scan browser submits, reserves, persists, reuses, retries and exhausts quo
   expect(ledger.data).toHaveLength(6);
   expect(ledger.data?.filter((row) => row.dispatched_at)).toHaveLength(4);
   expect(ledger.data?.filter((row) => row.finished_at)).toHaveLength(2);
+  for (const row of scans.data!.filter((candidate) => candidate.status === "failed")) {
+    expect(ledger.data?.filter((entry) => entry.request_id === row.id && entry.dispatched_at && !entry.finished_at))
+      .toHaveLength(1);
+  }
   expect(providerLog().slice(before)).toEqual(["problem", "solution", "problem", "problem"]);
   expect(external).toEqual([]);
 });

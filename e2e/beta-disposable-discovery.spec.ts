@@ -62,8 +62,15 @@ test("Discovery persists zero-result runs, rejects ambiguous replay and charges 
   expect(replay.status()).toBe(409);
   const second = await submit();
   expect(second.status(), await second.text()).toBe(200);
-  expect(await second.json()).toMatchObject({ success: true });
+  const result = await second.json();
+  const title = "Spreadsheet reconciliation for agency reports";
+  expect(result).toMatchObject({ success: true, problems: [{ problem_title: title }] });
+  expect(await admin.from("discovered_problems").select("problem_title,user_id").eq("discovery_id", result.discovery.id))
+    .toMatchObject({ error: null, data: [{ user_id: userId, problem_title: title }] });
   await expect(page.getByText(/Discovery completed. Live signals/)).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText(title, { exact: true })).toBeVisible();
 
   const reserved = await admin.rpc("application_reserve_provider", {
     p_user_id: userId, p_workflow: "discovery", p_request_id: randomUUID(), p_provider: "openrouter", p_slots: 2,
@@ -94,8 +101,32 @@ test("Discovery persists zero-result runs, rejects ambiguous replay and charges 
   const other = await admin.auth.admin.createUser({ email: otherEmail, password, email_confirm: true });
   expect(other.error).toBeNull();
   const foreign = createClient(backend, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, options);
-  expect((await foreign.auth.signInWithPassword({ email: otherEmail, password })).error).toBeNull();
+  const foreignLogin = await foreign.auth.signInWithPassword({ email: otherEmail, password });
+  expect(foreignLogin.error).toBeNull();
   expect(await foreign.from("opportunity_discoveries").select("id").eq("user_id", userId))
     .toMatchObject({ error: null, data: [] });
+  const faultLogBaseline = log().length;
+  const authToken = foreignLogin.data.session!.access_token;
+  for (const dispatchCount of [1, 3]) {
+    const key = randomUUID();
+    const invoke = () => page.evaluate(async ({ url, authToken, key }) => {
+      const response = await fetch(url, {
+        method: "POST", headers: { Authorization: `Bearer ${authToken}`, "Idempotency-Key": key },
+      });
+      return response.status;
+    }, { url: endpoint, authToken, key });
+    expect(await invoke()).toBe(500);
+    expect(await invoke()).toBe(409);
+    expect(await admin.from("application_discovery_admissions").select("status")
+      .eq("user_id", other.data.user!.id).eq("request_id", key)).toMatchObject({ error: null, data: [{ status: "failed" }] });
+    expect(await admin.from("opportunity_discoveries").select("id").eq("user_id", other.data.user!.id))
+      .toMatchObject({ error: null, data: [] });
+    expect(log().slice(faultLogBaseline).filter((entry) => entry.startsWith("discovery-"))).toHaveLength(dispatchCount);
+  }
+  const faults = await admin.from("application_provider_reservations").select("dispatched_at,finished_at")
+    .eq("user_id", other.data.user!.id).eq("workflow", "discovery").eq("provider", "openrouter");
+  expect(faults.error).toBeNull();
+  expect(faults.data?.filter((row) => row.dispatched_at)).toHaveLength(3);
+  expect(faults.data?.filter((row) => row.finished_at)).toHaveLength(2);
   expect(external).toEqual([]);
 });

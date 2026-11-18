@@ -100,6 +100,47 @@ for (const method of publicMethods) {
     const count = () => admin.from(`validation_${method.table}_submissions`)
       .select("id,publication_id,owner_id").eq("owner_id", owner.id);
     expect(await count()).toMatchObject({ error: null, data: [] });
+    const url = published.publicPath.replace("/validation/", "/api/public/validation/");
+    let requestNumber = 0;
+    let committedBody: string | null = null;
+    await page.route(`${app}${url}/submit`, async (route) => {
+      requestNumber += 1;
+      if (requestNumber === 1 && (method.table === "external_mvp" || method.table === "commercial_intent")) {
+        const rejected = await route.fetch({ postData: { ...route.request().postDataJSON(), email: "invalid-email" }, maxRedirects: 0 });
+        expect(rejected.status()).toBe(400);
+        expect(await rejected.json()).toMatchObject({ error: { submissionRejected: true } });
+        expect(await count()).toMatchObject({ error: null, data: [] });
+        await route.fulfill({ response: rejected });
+        return;
+      }
+      if (committedBody !== null) {
+        expect(route.request().postData()).toBe(committedBody);
+        await route.continue();
+        return;
+      }
+      if (method.table === "landing" || method.table === "prototype") {
+        const cookie = (await page.context().cookies(`${app}${url}/submit`))
+          .find((value) => value.name.startsWith(method.table === "landing" ? "vl_" : "vp_"));
+        expect(cookie).toBeDefined();
+        const tampered = await route.fetch({ headers: {
+          ...await route.request().allHeaders(), cookie: `${cookie!.name}=${cookie!.value.slice(0, -1)}z`,
+        }, maxRedirects: 0 });
+        expect(tampered.status()).toBe(400);
+        expect(await count()).toMatchObject({ error: null, data: [] });
+      }
+      const committed = await route.fetch({ maxRedirects: 0 });
+      expect(committed.status()).toBe(200);
+      expect((await count()).data).toHaveLength(1);
+      if (method.table === "landing") {
+        const duplicate = await route.fetch({ maxRedirects: 0 });
+        expect(duplicate.status()).toBe(200);
+        expect((await count()).data).toHaveLength(1);
+        await route.fulfill({ response: duplicate });
+      } else {
+        committedBody = route.request().postData();
+        await route.abort("failed");
+      }
+    });
     if (method.table === "landing") {
       const send = page.getByRole("button", { name: landing.cta });
       await expect(send).toBeDisabled();
@@ -138,6 +179,12 @@ for (const method of publicMethods) {
       await page.getByRole("checkbox", { name: /I agree to share my email/ }).check();
       await expect(send).toBeEnabled();
       await send.click();
+      await expect(page.getByText("Please correct your response and submit again.", { exact: true })).toBeVisible();
+      await page.getByLabel("Email for follow-up (optional)").fill("participant-corrected@example.test");
+      await send.click();
+    }
+    if (method.table !== "landing") {
+      await page.getByRole("button", { name: "Retry same response" }).click();
     }
     await expect(page.getByText(method.success, { exact: true })).toBeVisible();
     const rows = await count();
@@ -151,7 +198,7 @@ for (const method of publicMethods) {
       const details = () => admin.from(`validation_${method.table}_submissions`)
         .select("payload,email,contact_removed").eq("id", rows.data![0].id).single();
       const before = await details();
-      expect(before).toMatchObject({ error: null, data: { email: "participant@example.test", contact_removed: false } });
+      expect(before).toMatchObject({ error: null, data: { email: "participant-corrected@example.test", contact_removed: false } });
       const remove = await post("remove", { revision: 1, submissionId: rows.data![0].id });
       expect(remove.status(), await remove.text()).toBe(200);
       expect(await details()).toMatchObject({ error: null, data: { email: null, contact_removed: true, payload: before.data!.payload } });
@@ -197,13 +244,29 @@ test("interview plan, private observations and explicit polarity persist across 
   const session = await admin.from("validation_interview_sessions").select("id,status,participant_id,interview_plan_version_id")
     .eq("experiment_version_id", versionId).single();
   expect(session).toMatchObject({ error: null, data: { status: "completed", participant_id: expect.any(String), interview_plan_version_id: expect.any(String) } });
+  expect(await admin.from("validation_interview_plan_versions").select("questions")
+    .eq("id", session.data!.interview_plan_version_id).single())
+    .toMatchObject({ error: null, data: { questions: [{ prompt: "How did you complete last week's report?" }] } });
   const observations = await admin.from("validation_evidence_observations").select("id").eq("interview_session_id", session.data!.id);
   expect(observations.error).toBeNull();
   expect(observations.data).toHaveLength(3);
-  const classifications = await admin.from("validation_evidence_classifications").select("polarity")
+  const classifications = await admin.from("validation_evidence_classifications").select("id,observation_id,polarity,supersedes_classification_id")
     .in("observation_id", observations.data!.map((row) => row.id));
   expect(classifications.error).toBeNull();
   expect(classifications.data?.map((row) => row.polarity).sort()).toEqual(["contradicting", "mixed", "supporting"]);
+  const original = classifications.data!.find((row) => row.polarity === "supporting")!;
+  const correction = await page.request.post(`${app}/api/validation/classifications`, {
+    headers: owner.headers, data: { observationId: original.observation_id, polarity: "neutral",
+      classificationSource: "user_supplied", authorityStatus: "authoritative", supersedesClassificationId: original.id },
+  });
+  expect(correction.status(), await correction.text()).toBe(200);
+  const history = await admin.from("validation_evidence_classifications")
+    .select("id,observation_id,polarity,supersedes_classification_id").eq("observation_id", original.observation_id);
+  expect(history.error).toBeNull();
+  expect(history.data).toHaveLength(2);
+  expect(history.data).toEqual(expect.arrayContaining([original, expect.objectContaining({
+    polarity: "neutral", supersedes_classification_id: original.id,
+  })]));
   await page.reload();
   await expect(page.getByText("How did you complete last week's report?")).toBeVisible();
   const restricted = await page.request.get(`${app}/api/validation/subjects/${subjectId}`, { headers: stranger.headers });
