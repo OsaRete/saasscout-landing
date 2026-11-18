@@ -16,7 +16,7 @@ test("Scan browser submits, reserves, persists, reuses, retries and exhausts quo
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const email = `scan-${randomUUID()}@example.test`;
-  const password = "Disposable-scan-acceptance-12!";
+  const password = randomUUID();
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   expect(created.error).toBeNull();
   const userId = created.data.user!.id;

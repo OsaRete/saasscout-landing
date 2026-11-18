@@ -6,7 +6,7 @@ test.use({ launchOptions: { executablePath: process.env.BETA_ACCEPTANCE_CHROMIUM
 
 const app = "http://127.0.0.1:3100";
 const auth = "http://127.0.0.1:56321";
-const password = "Disposable-account-test-41!";
+const password = randomUUID();
 const dashboard = "SaaSScout Intelligence Control Center";
 
 async function credentials(page: Page, email: string, action: "Sign in" | "Create account") {
@@ -195,7 +195,7 @@ test("disposable Auth, profiles and saved opportunities across two browser ident
     if (recoveryUrl.pathname === "/verify") recoveryUrl.pathname = "/auth/v1/verify";
     await first.goto(recoveryUrl.toString());
     await expect(first.getByRole("heading", { name: "Create a new password" })).toBeVisible();
-    const nextPassword = "Disposable-recovered-account-42!";
+    const nextPassword = randomUUID();
     await first.getByPlaceholder("New password", { exact: true }).fill(nextPassword);
     await first.getByPlaceholder("Confirm new password").fill(nextPassword);
     await first.getByRole("button", { name: "Update password" }).click();

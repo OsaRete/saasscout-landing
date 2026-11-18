@@ -19,7 +19,7 @@ async function fixture(page: Page, family: string) {
   const admin = createClient(backend, process.env.SUPABASE_SERVICE_ROLE_KEY!, options);
   async function founder() {
     const email = `validation-${randomUUID()}@example.test`;
-    const password = "Disposable-validation-77!";
+    const password = randomUUID();
     const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
     expect(created.error).toBeNull();
     const client = createClient(backend, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, options);

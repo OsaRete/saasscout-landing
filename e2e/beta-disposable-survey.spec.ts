@@ -22,7 +22,7 @@ test("anonymous survey commits once after lost response, then owner revokes it",
 
   async function founder() {
     const email = `survey-${randomUUID()}@example.test`;
-    const password = "Disposable-survey-acceptance-14!";
+    const password = randomUUID();
     const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
     expect(created.error).toBeNull();
     const client = createClient(backend, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, options);

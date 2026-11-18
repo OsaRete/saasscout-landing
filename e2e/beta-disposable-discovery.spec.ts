@@ -15,7 +15,7 @@ test("Discovery persists zero-result runs, rejects ambiguous replay and charges 
   const options = { auth: { autoRefreshToken: false, persistSession: false } };
   const admin = createClient(backend, process.env.SUPABASE_SERVICE_ROLE_KEY!, options);
   const email = `discovery-${randomUUID()}@example.test`;
-  const password = "Disposable-discovery-acceptance-81!";
+  const password = randomUUID();
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   expect(created.error).toBeNull();
   const userId = created.data.user!.id;
