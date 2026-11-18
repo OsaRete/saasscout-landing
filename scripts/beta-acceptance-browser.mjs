@@ -1,6 +1,9 @@
 /** Run the real-Auth browser tests against the owned fresh membership fixture. */
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { createClient } from "@supabase/supabase-js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,6 +32,16 @@ const env = {
   SERPAPI_API_KEY: "disposable-transport-trap",
   VALIDATION_PRIVATE_MODE: "INTERVIEWS_AND_SURVEYS",
   VALIDATION_PUBLIC_SURVEYS: "ENABLED",
+  VALIDATION_PRIVATE_LANDING_PAGES: "ENABLED",
+  VALIDATION_PUBLIC_LANDING_PAGES: "ENABLED",
+  VALIDATION_LANDING_COOKIE_SECRET: randomBytes(32).toString("hex"),
+  VALIDATION_PRIVATE_PROTOTYPES: "ENABLED",
+  VALIDATION_PUBLIC_PROTOTYPES: "ENABLED",
+  VALIDATION_PROTOTYPE_COOKIE_SECRET: randomBytes(32).toString("hex"),
+  VALIDATION_PRIVATE_EXTERNAL_MVP: "ENABLED",
+  VALIDATION_PUBLIC_EXTERNAL_MVP: "ENABLED",
+  VALIDATION_PRIVATE_COMMERCIAL_INTENT: "ENABLED",
+  VALIDATION_PUBLIC_COMMERCIAL_INTENT: "ENABLED",
   SCAN_SERVER_WORKFLOW_ENABLED: "true",
   KNOWLEDGE_EVOLUTION_DUAL_WRITE: "0",
   KNOWLEDGE_EVOLUTION_DIAGNOSTICS: "0",
@@ -53,8 +66,8 @@ for (const name of [db, "beta-membership-disposable-auth", "beta-membership-disp
 const [gateway] = JSON.parse(docker(["inspect", "beta-membership-disposable-gateway"]));
 assert.deepEqual(gateway.NetworkSettings.Ports["8000/tcp"], [{ HostIp: "127.0.0.1", HostPort: "56321" }]);
 const sql = (statement) => docker(["exec", "-i", db, "psql", "-U", "postgres", "-X", "-v", "ON_ERROR_STOP=1"], statement);
-function run(args) {
-  const result = spawnSync(process.execPath, args, { env, stdio: "inherit", timeout: 300_000 });
+function run(args, commandEnv = env) {
+  const result = spawnSync(process.execPath, args, { env: commandEnv, stdio: "inherit", timeout: 300_000 });
   assert.equal(result.status, 0, `Acceptance command failed: ${args[0]}`);
 }
 
@@ -68,22 +81,55 @@ sql(`UPDATE public.application_beta_release SET open_free_beta = true;
 UPDATE public.application_spending_policy SET enabled=true,total_requests=5000,
   openrouter_requests=1000,serpapi_requests=4000,x_requests=0,search_requests=4000,
   user_ai_requests=6,user_search_requests=160,max_concurrent=32,weekly_max_executions=2;`);
-const app = spawn(process.execPath, [
-  "--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/next/dist/bin/next",
-  "start", "--hostname", "127.0.0.1", "--port", "3100",
-], { env, stdio: "inherit" });
-try {
-  let ready = false;
-  for (let attempt = 0; attempt < 60 && app.exitCode === null; attempt += 1) {
-    ready = await fetch(appUrl, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
-    if (ready) break;
-    await delay(500);
+async function runBrowser(specs, overrides = {}) {
+  const scenarioEnv = { ...env, ...overrides };
+  const app = spawn(process.execPath, [
+    "--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/next/dist/bin/next",
+    "start", "--hostname", "127.0.0.1", "--port", "3100",
+  ], { env: scenarioEnv, stdio: "inherit" });
+  const exited = once(app, "exit");
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 60 && app.exitCode === null; attempt += 1) {
+      ready = await fetch(appUrl, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
+      if (ready) break;
+      await delay(500);
+    }
+    assert.ok(ready, "Disposable acceptance server failed to start");
+    run(["node_modules/@playwright/test/cli.js", "test", ...specs,
+      "--project=chromium", "--workers=1", "--retries=0", "--reporter=line"], scenarioEnv);
+  } finally {
+    app.kill();
+    await exited;
   }
-  assert.ok(ready, "Disposable acceptance server failed to start");
-  run(["node_modules/@playwright/test/cli.js", "test", "e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts", "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
-    "--project=chromium", "--workers=1", "--retries=0", "--reporter=line"]);
+}
+try {
+  await runBrowser(["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts",
+    "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
+    "e2e/beta-disposable-validation.spec.ts"]);
+
+  const weeklyEmail = `weekly-${connection.fixture_id}-${randomBytes(4).toString("hex")}@example.test`;
+  const weeklyPassword = randomBytes(24).toString("base64url");
+  const admin = createClient(connection.API_URL, connection.SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await admin.auth.admin.createUser({
+    email: weeklyEmail, password: weeklyPassword, email_confirm: true,
+  });
+  assert.equal(error, null, "Disposable Weekly founder setup failed");
+  const weeklyUserId = data.user?.id;
+  assert.match(weeklyUserId, /^[0-9a-f-]{36}$/);
+  sql(`INSERT INTO public.application_user_access
+    (user_id,access_role,is_active,unlimited_scans,owner_administrator)
+    VALUES ('${weeklyUserId}','beta_member',false,false,true);
+    UPDATE public.user_profiles SET weekly_intelligence_enabled=(user_id='${weeklyUserId}');`);
+  await runBrowser(["e2e/beta-disposable-weekly.spec.ts"], {
+    CRON_SECRET: randomBytes(32).toString("hex"),
+    BETA_ACCEPTANCE_WEEKLY_USER_ID: weeklyUserId,
+    BETA_ACCEPTANCE_WEEKLY_EMAIL: weeklyEmail,
+    BETA_ACCEPTANCE_WEEKLY_PASSWORD: weeklyPassword,
+  });
 } finally {
-  app.kill();
   sql(`UPDATE public.application_beta_release SET open_free_beta = false;
 UPDATE public.application_spending_policy SET enabled=false;`);
   assert.equal(readFileSync(env.BETA_ACCEPTANCE_EGRESS_LOG, "utf8"), "", "External server fetch attempted");

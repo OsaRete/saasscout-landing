@@ -235,7 +235,7 @@ export function CustomerInterviewWorkspace({
         body: JSON.stringify({
           expectedStatus: session.status,
           targetStatus,
-          notes: notes[session.id] ?? "",
+          notes: notes[session.id]?.trim() || undefined,
         }),
       });
       await onChange();

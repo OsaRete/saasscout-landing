@@ -31,6 +31,8 @@ on:
       - 'e2e/beta-disposable-scan.spec.ts'
       - 'e2e/beta-disposable-discovery.spec.ts'
       - 'e2e/beta-disposable-survey.spec.ts'
+      - 'e2e/beta-disposable-validation.spec.ts'
+      - 'e2e/beta-disposable-weekly.spec.ts'
       - 'app/validation/**'
       - 'e2e/beta-disposable-account.spec.ts'
       - 'scripts/beta-acceptance-browser.mjs'

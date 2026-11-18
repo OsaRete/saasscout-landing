@@ -68,7 +68,8 @@ VALIDATION_CHROMIUM_PATH=/usr/bin/chromium npx playwright test \
 | --- | --- | --- |
 | Account admission, admin authority, account status | PASS | Real disposable Auth/PostgREST on fresh and upgrade. Password signup with autoconfirm, unconfirmed identity and login denial, verified admission, founder admin versus ordinary owner, metadata forgery denial, suspension/reactivation, ban, deletion hold, profile ownership. |
 | Browser account and recovery | PASS | Real Auth browser signup, unconfirmed login denial, verified login, desktop dashboard, narrow profile isolation, ban, logout and generated recovery link with durable password update. Invalid bearer gets HTTP 401. |
-| Remaining identity journeys | NOT VERIFIED | Expired browser session, suspension and deletion hold through the browser, simulated OAuth callback and the browser recovery request/email leg. |
+| Session callback and expiry | PASS | Local GoTrue magic-link handoff exercises the callback route. A browser-clock expiry with a revoked local refresh session returns to login. |
+| Remaining identity journeys | NOT VERIFIED | Browser suspension and deletion hold, Google-specific identity callback exchange, and live email delivery. |
 | Dashboard and saved opportunities | PASS | Real browser dashboard/empty state, recoverable save error, save/reopen/remove, ownership denial and durable row assertions. |
 | Dashboard loading and failure states | NOT VERIFIED | Full loading and error recovery and user-specific intelligence widgets remain open. |
 | Knowledge Evolution | PASS | Browser launcher explicitly selects dual-write and diagnostics off. Focused tests check shared Validation preparation, promotion and consumption denial. B4.3 F4 stays deferred. |
@@ -76,24 +77,30 @@ VALIDATION_CHROMIUM_PATH=/usr/bin/chromium npx playwright test \
 | Scan browser generation | PASS | Chromium, actual workflow HTTP, both mocked OpenRouter stages, result reopening, completed replay, failed retry and fourth denial. Database assertions verify the result, three opportunities and six reservations with exactly four dispatches. |
 | Remaining Scan integration | NOT VERIFIED | Browser concurrency against a pending request, ambiguous provider outcomes and browser budget exhaustion. Existing DB checks cover pending reuse, exclusive claim and atomic budget denial. |
 | Discovery admission and private context | PASS | Fresh and upgrade DB checks cover durable UUID replay, distinct-key races, three admissions, fourth denial, rollover and owner individual exemption. Focused route tests assert source collection/replacement behavior and owner-scoped Weekly context. |
-| Discovery zero-result generation | PASS | Chromium, actual API, mocked SerpAPI and initial/replacement OpenRouter, durable zero-result success, committed response loss, same-key HTTP 409, charged budget denial and fourth admission denial. |
+| Discovery zero-result generation | PASS | Chromium, actual API, mocked SerpAPI and initial/replacement OpenRouter, durable zero-result success, committed response loss, same-key HTTP 409, charged budget denial and fourth admission denial. A second real bearer receives zero rows through PostgREST. |
 | Remaining Discovery integration | NOT VERIFIED | Positive problem persistence, foreign-owner browser read, provider failure after dispatch and persistence failure. |
 | Weekly claims and retries | PASS | DB asserts processing/completed reuse, failed/stale cumulative two-execution ceiling and concurrent reclaim. Focused tests cover evidence, quality and corrective-generation contracts. |
 | Weekly browser reads and denial | PASS | Chromium renders an owned PostgreSQL report, shows no report to a second founder, and hides manual generation for ordinary users. Real HTTP returns 404 for foreign run and 403 for ordinary manual generation. Missing cron configuration fails closed. |
-| Weekly generation and cron | NOT VERIFIED | Configured cron authorization, owner generation, corrective transport, budget denial and full report creation. |
+| Weekly configured cron and owner reuse | PASS | The disposable launcher restarts the same app with a synthetic cron secret and an evidence-free recipient. Invalid bearer denies, valid bearer creates one durable insufficient-context report, and owner Chromium reads and reuses it without dispatch. |
+| Weekly paid generation | NOT VERIFIED | Initial and corrective provider transport, evidence reuse and budget exhaustion through the full HTTP journey. Existing SQL verifies claim/reclaim limits and completed/processing reuse. |
 | Spending ceilings and safety | PASS | Existing fresh and upgrade DB groups cover total, OpenRouter, SerpAPI, X, combined search, per-user ceilings including owner, final-unit race, unfinished reservations including previous-month rows, UTC rollover, disabled/missing policy, dispatch uniqueness and guarded SerpAPI mock. Focused SDK test asserts one HTTP attempt on retryable failure and production constructors use guarded transport. |
-| Interviews | NOT VERIFIED | Integrated subject, hypothesis, plan/question, participant/session, supporting/contradicting/mixed evidence, classification, append-only correction, lineage and foreign owner denial remain open. |
+| Interviews, private observations | PASS | Seeded subject and hypothesis, then Chromium creates the plan, participant and session, records supporting, contradicting and mixed observations, and completes the session. PostgreSQL verifies lineage and explicit polarity. Foreign HTTP read denies. |
+| Remaining interview integration | NOT VERIFIED | Subject/hypothesis authoring through UI, question-level evidence links and append-only correction. |
 | Surveys, DB integrity | PASS | Concurrent final units at publication and aggregate scope, identical retry at capacity, definitive reject/conflict accounting, cumulative consumption across replacement, per-network resolution and submission, trusted roles and lifecycle closure. |
 | Surveys, integrated participant | PASS | The plan is seeded via real RPCs. Authenticated HTTP publishes it, rejects foreign revocation and accepts owner revocation. Anonymous Chromium exercises required fields and all five answer types, loses the committed response, retries the identical payload and verifies one submission and five answers in PostgreSQL. The revoked link is unavailable and history is retained. |
 | Remaining Survey integration | NOT VERIFIED | Owner drafting through browser UI, changed-payload conflict, malformed/definitive response correction and pause through the same integrated path. |
 | Landing pages, DB integrity | PASS | SQL checks isolation, snapshot immutability, lifecycle, duplicate contacts, consent, metrics, concurrency ceilings, retained consumption and removal. |
-| Landing pages, integrated browser | NOT VERIFIED | Draft/preview/save/publish, public rendering, cookie handling, token replacement, contact removal and closed links need end-to-end browser evidence. |
+| Landing pages, integrated participant | PASS | Real owner HTTP saves and publishes. Anonymous Chromium renders the signed-cookie waitlist, consents and persists one signup. Owner removes it and unpublishes. Foreign owner read denies. |
+| Landing pages, remaining integration | NOT VERIFIED | Owner editing and preview in browser, cookie tampering and token replacement. |
 | Prototypes, DB integrity | PASS | SQL checks authored navigation, invalid paths, consent, feedback, retry, metrics, snapshot and limits, closure, replacement, removal and owner isolation. |
-| Prototypes, integrated browser | NOT VERIFIED | Preview, publication, telemetry consent, valid/invalid navigation, feedback/task completion, cookie tampering, retry and revoked link need browser-to-DB evidence. |
+| Prototypes, integrated participant | PASS | Real owner HTTP saves and publishes. Anonymous Chromium consents, navigates to completion, and persists feedback. Unpublishing closes the link. Foreign owner read denies. |
+| Prototypes, remaining integration | NOT VERIFIED | Owner editing and preview in browser, invalid navigation, tampering and retry. |
 | External MVP, DB integrity | PASS | SQL checks URL, snapshots, revision, owner isolation, consent, retry, contact removal and closure. |
-| External MVP, integrated browser | NOT VERIFIED | External link and no automatic fetch, tried/not-tried and negative feedback, optional contact, definitive invalid email recovery without reload, lost-response retry and closed-links journey remain open with real persistence. |
+| External MVP, integrated participant | PASS | Real owner HTTP saves and publishes. Anonymous Chromium displays the external link without following it, submits consented not-tried feedback, and observes closure. Foreign owner read denies. |
+| External MVP, remaining integration | NOT VERIFIED | Owner editing in browser, tried outcome, invalid email correction, contact removal and lost-response retry through real HTTP. |
 | Commercial intent, DB integrity | PASS | SQL checks revision attribution, consent, retry, contact removal, lifecycle and isolation. |
-| Commercial intent, integrated browser | NOT VERIFIED | Nonbinding intent, positive/negative responses, objective attribution, view deduplication, definitive correction, uncertain retry, removal and closure need browser-to-DB evidence. Intent never represents a completed sale. |
+| Commercial intent, integrated participant | PASS | Real owner HTTP saves and publishes. Anonymous Chromium displays the no-purchase language and persists one consented nonbinding response attributed to the publication. Foreign owner read denies and the link closes. |
+| Commercial intent, remaining integration | NOT VERIFIED | Owner editing in browser, negative response, view deduplication, correction, retry and contact removal through real HTTP. |
 | Privacy and Data Moat | PASS | SQL verifies public table/RPC and cross-owner denials, lifecycle, consent and removal. Focused release checks deny AI and shared preparation, promotion and qualified consumption. |
 | Full privacy and Data Moat integration | NOT VERIFIED | Public projection minimization, signed-cookie integrity, preserved contradictory observations, unverified public feedback and zero shared qualified-evidence writes after the complete integrated journey require additional evidence. |
 | UI failure simulation | NOT VERIFIED | Durable lost-response and repeated-click recovery in the same browser/DB run, unsaved edits, expired authentication, forbidden and quota UX, and pause/revocation remain open across the product. |
@@ -110,6 +117,27 @@ required conflict target and preserves existing rows. Before a separately
 authorized release, check for existing duplicate non-null key pairs. Any
 duplicates require review before the migration can be applied. The migration
 contains no data cleanup.
+
+## Reproduced Discovery defects
+
+With actual Chromium, server handlers and disposable persistence, return zero
+problems from both OpenRouter mock calls. The old workflow writes a completed
+Discovery row and then returns HTTP 500 because a problem snapshot requires a
+nonempty input. Guard the snapshot and empty problem insert so a zero-result
+run returns success and persists its history without fabricating problem rows.
+
+After two successful runs, reserve the remaining two AI units for that founder
+and submit a third Discovery run. The SDK wraps the spending denial in a
+connection error. The route now unwraps only a typed `ProviderBudgetError`
+cause and returns 503. The third admission remains charged and no AI dispatch
+occurs for it. Other connection failures keep their prior response behavior.
+
+## Reproduced interview defect
+
+Click **Start interview** on a newly created session with its optional working
+notes blank. The UI sent an empty string and the API rejected it as a required
+field. The request now omits blank notes so the existing optional field and
+lifecycle rules apply. Nonblank notes remain in the private working record.
 
 ## Saved-opportunity production preflight
 
@@ -160,6 +188,9 @@ No production SQL, paid-provider call, production or shared Preview test, featur
 
 - `.github/workflows/beta-membership-access.yml` invokes the browser suite after the existing real Auth and DB checks.
 - `e2e/beta-disposable-scan.spec.ts`, `e2e/beta-disposable-discovery.spec.ts` and `e2e/beta-disposable-survey.spec.ts` exercise integrated Scan, Discovery and public Survey journeys.
+- `e2e/beta-disposable-validation.spec.ts` and `e2e/beta-disposable-weekly.spec.ts` cover the public methods, private interviews and local cron/owner reuse.
+- `app/api/discover-opportunities/route.ts` and `lib/intelligence/discover-opportunities-workflow.ts` repair the two reproduced Discovery defects.
+- `components/validation/customer-interview-workspace.tsx` omits blank optional notes during session transitions.
 - `tests/support/beta-acceptance-provider.mjs` provides explicit disposable Scan and Discovery provider responses.
 - `e2e/beta-disposable-account.spec.ts` drives real Auth, dashboard and profile journeys and verifies the durable profile, saved-opportunity state, isolation and Scan quota denial.
 - `scripts/beta-acceptance-browser.mjs` validates fixture identity, builds and launches the test app and restores the local release gate.

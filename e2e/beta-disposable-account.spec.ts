@@ -187,6 +187,31 @@ test("disposable Auth, profiles and saved opportunities across two browser ident
     await expect(first.getByText("Password updated successfully.")).toBeVisible();
     expect((await signed.auth.signInWithPassword({ email, password })).error).toBeTruthy();
     expect((await signed.auth.signInWithPassword({ email, password: nextPassword })).error).toBeNull();
+    await expect(first.getByRole("heading", { name: dashboard })).toBeVisible();
+    await first.getByRole("button", { name: "Logout" }).click();
+    await expect(first).toHaveURL(`${app}/login`);
+
+    // Use a real local Auth grant to exercise the callback's session handoff
+    // without contacting an external identity provider or delivering email.
+    const callback = await admin.auth.admin.generateLink({
+      type: "magiclink", email, options: { redirectTo: `${app}/auth/callback` },
+    });
+    expect(callback.error).toBeNull();
+    const callbackUrl = new URL(callback.data.properties!.action_link);
+    expect(callbackUrl.origin).toBe(auth);
+    if (callbackUrl.pathname === "/verify") callbackUrl.pathname = "/auth/v1/verify";
+    await first.goto(callbackUrl.toString());
+    await expect(first.getByRole("heading", { name: dashboard })).toBeVisible();
+    const session = await first.evaluate(() => {
+      const key = Object.keys(localStorage).find((candidate) => /^sb-.*-auth-token$/.test(candidate));
+      return key ? JSON.parse(localStorage.getItem(key)!) as { access_token: string; expires_at: number } : null;
+    });
+    expect(session).toBeTruthy();
+    expect((await admin.auth.admin.signOut(session!.access_token, "global")).error).toBeNull();
+    await first.clock.setFixedTime(new Date((session!.expires_at + 120) * 1000));
+    await first.goto(`${app}/founder-profile`);
+    await expect(first).toHaveURL(`${app}/login`);
+
   } finally {
     await Promise.all([desktop.close(), mobile.close()]);
     expect(external, "Unexpected browser destinations").toEqual([]);

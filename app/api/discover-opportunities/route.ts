@@ -42,7 +42,15 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("Discover opportunities error:", error);
 
-    if (error instanceof AuthError || error instanceof ProviderBudgetError) {
+    // The OpenAI SDK wraps a fetch rejection as a connection error.
+    const budgetError = error instanceof ProviderBudgetError ? error
+      : error instanceof Error && error.cause instanceof ProviderBudgetError ? error.cause
+      : null;
+    if (budgetError) {
+      return NextResponse.json({ success: false, error: budgetError.message }, { status: budgetError.status });
+    }
+
+    if (error instanceof AuthError) {
       return NextResponse.json(
         { success: false, error: error.message },
         { status: error.status }
