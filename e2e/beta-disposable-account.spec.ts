@@ -159,6 +159,21 @@ test("disposable Auth, profiles and saved opportunities across two browser ident
     await expect(second.getByText("You have reached your plan Scan limit.")).toBeVisible();
     const deniedScans = await admin.from("scan").select("id").eq("user_id", pending.data.user!.id);
     expect(deniedScans).toMatchObject({ error: null, data: [] });
+    const cappedUser = pending.data.user!.id;
+    expect((await admin.from("user_profiles").update({ scan_limit: 3 }).eq("user_id", cappedUser)).error).toBeNull();
+    expect(await admin.rpc("application_reserve_provider", {
+      p_user_id: cappedUser, p_workflow: "discovery", p_request_id: randomUUID(),
+      p_provider: "openrouter", p_slots: 6,
+    })).toMatchObject({ error: null, data: true });
+    const budgetDenial = second.waitForResponse((response) => response.url() === `${app}/api/scan/workflow`);
+    await submitScan.click();
+    const blocked = await budgetDenial;
+    expect(blocked.status()).toBe(503);
+    expect(await blocked.json()).toMatchObject({ error: { code: "scan_global_budget_unavailable" } });
+    expect(await admin.from("scan").select("id").eq("user_id", cappedUser)).toMatchObject({ error: null, data: [] });
+    expect(await admin.from("application_provider_reservations").select("request_id")
+      .eq("user_id", cappedUser).eq("workflow", "scan")).toMatchObject({ error: null, data: [] });
+
 
     expect((await admin.auth.admin.updateUserById(pending.data.user!.id, { ban_duration: "1h" })).error).toBeNull();
     await second.goto(`${app}/dashboard`);

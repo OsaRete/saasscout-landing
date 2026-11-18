@@ -103,6 +103,11 @@ async function runBrowser(specs, overrides = {}) {
     await exited;
   }
 }
+const qualifiedEvidenceCounts = () => sql(`SELECT
+  (SELECT count(*) FROM public.validation_customer_interview_shareable_evidence),
+  (SELECT count(*) FROM public.validation_evidence_promotions),
+  (SELECT count(*) FROM public.validation_qualified_evidence_snapshots);`);
+const qualifiedBefore = qualifiedEvidenceCounts();
 try {
   await runBrowser(["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts",
     "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
@@ -132,5 +137,6 @@ try {
 } finally {
   sql(`UPDATE public.application_beta_release SET open_free_beta = false;
 UPDATE public.application_spending_policy SET enabled=false;`);
+  assert.equal(qualifiedEvidenceCounts(), qualifiedBefore, "Shared Validation evidence changed");
   assert.equal(readFileSync(env.BETA_ACCEPTANCE_EGRESS_LOG, "utf8"), "", "External server fetch attempted");
 }

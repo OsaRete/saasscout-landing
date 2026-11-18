@@ -133,6 +133,9 @@ for (const method of publicMethods) {
       const send = page.getByRole("button", { name: isMvp ? "Send feedback" : "Submit nonbinding response" });
       await expect(send).toBeDisabled();
       await page.getByLabel(method.content.consent, { exact: true }).check();
+      await page.getByLabel("Email for follow-up (optional)").fill("participant@example.test");
+      await expect(send).toBeDisabled();
+      await page.getByRole("checkbox", { name: /I agree to share my email/ }).check();
       await expect(send).toBeEnabled();
       await send.click();
     }
@@ -144,8 +147,18 @@ for (const method of publicMethods) {
       expect(remove.status(), await remove.text()).toBe(200);
       expect(await count()).toMatchObject({ error: null, data: [] });
     }
+    if (method.table === "external_mvp" || method.table === "commercial_intent") {
+      const details = () => admin.from(`validation_${method.table}_submissions`)
+        .select("payload,email,contact_removed").eq("id", rows.data![0].id).single();
+      const before = await details();
+      expect(before).toMatchObject({ error: null, data: { email: "participant@example.test", contact_removed: false } });
+      const remove = await post("remove", { revision: 1, submissionId: rows.data![0].id });
+      expect(remove.status(), await remove.text()).toBe(200);
+      expect(await details()).toMatchObject({ error: null, data: { email: null, contact_removed: true, payload: before.data!.payload } });
+    }
     const close = await post("unpublish", { revision: 1 });
     expect(close.status(), await close.text()).toBe(200);
+    if (method.table !== "landing") expect(await count()).toMatchObject({ error: null, data: rows.data });
     await page.reload();
     await expect(page.getByText(/closed or unavailable|This page is unavailable/).first()).toBeVisible();
     expect(external).toEqual([]);
