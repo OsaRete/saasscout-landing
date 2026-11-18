@@ -173,11 +173,10 @@ Git leaves existing immutable deployments and aliases in place.
 
 The owner authorized keeping Git connected for Draft PR #248 and reported
 **Don't build anything** with command `exit 0`, protection for All Deployments,
-and no Deploy Hooks. GitHub reported a successful Vercel status and linked
-a deployment record on the first draft head. The connector exposes neither
-its build logs nor alias history. The linked Vercel dashboard could not be
-accessed from the task environment, so actual ignored-build execution and
-alias state still need owner verification. No Vercel settings were changed.
+and no Deploy Hooks. The Vercel bot reported **1 Skipped Deployment** and marked the first
+draft head’s linked record **Ignored**. The bot’s record confirms the build
+was skipped. Direct dashboard access and independent alias history were
+unavailable. No Vercel settings were changed.
 
 
 ## Spending and release boundaries
