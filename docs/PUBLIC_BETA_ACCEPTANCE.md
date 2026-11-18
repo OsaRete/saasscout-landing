@@ -2,7 +2,7 @@
 
 Baseline `4a4f036888e376341c565edd88d63f7d704336db` includes PRs #245, #246 and #247. The mission and repository contracts supply the acceptance specification. The pre-implementation [admission audit](BETA_ADMISSION_SPENDING_AUDIT.md) describes historical gaps. The merged access, spending and public collection contracts supersede its implementation status.
 
-This is a partial acceptance record. PASS applies to the indicated layer and assertions. NOT VERIFIED identifies missing evidence for an assertion or required integration. BLOCKED indicates an external dependency that prevented execution. Release decision is **NO-GO FOR MERGE** while critical browser-to-database and workflow cases remain open.
+This is a partial acceptance record. The follow-up starts at `cfb04e4a6b91789eeb25b514afe103ea80e2d86d`. Record the checkout SHA with `git rev-parse HEAD` before running the commands below. PASS applies to the indicated layer and assertions. NOT VERIFIED identifies missing evidence for an assertion or required integration. BLOCKED indicates an external dependency that prevented execution. Release decision is **NO-GO FOR MERGE** while critical browser-to-database and workflow cases remain open.
 
 ## Reproduction
 
@@ -73,15 +73,19 @@ VALIDATION_CHROMIUM_PATH=/usr/bin/chromium npx playwright test \
 | Dashboard loading and failure states | NOT VERIFIED | Full loading and error recovery and user-specific intelligence widgets remain open. |
 | Knowledge Evolution | PASS | Browser launcher explicitly selects dual-write and diagnostics off. Focused tests check shared Validation preparation, promotion and consumption denial. B4.3 F4 stays deferred. |
 | Scan admission and claim | PASS | Fresh and upgrade DB checks cover three admissions, duplicate fingerprint, concurrent submissions, exclusive claim, charged failed retry, UTC rollover, lower Free-plan quota and owner individual exemption. Spending SQL asserts atomic two-slot reserve and zero Scan usage/pending rows on budget denial. |
-| Scan browser generation | NOT VERIFIED | Pasted and uploaded evidence, invalid evidence, the two grounded stages, provenance, durable result and failure/ambiguity need integrated browser evidence. Unit and contract evidence does not establish the full path. |
+| Scan browser generation | PASS | Chromium, actual workflow HTTP, both mocked OpenRouter stages, result reopening, completed replay, failed retry and fourth denial. Database assertions verify the result, three opportunities and six reservations with exactly four dispatches. |
+| Remaining Scan integration | NOT VERIFIED | Browser concurrency against a pending request, ambiguous provider outcomes and browser budget exhaustion. Existing DB checks cover pending reuse, exclusive claim and atomic budget denial. |
 | Discovery admission and private context | PASS | Fresh and upgrade DB checks cover durable UUID replay, distinct-key races, three admissions, fourth denial, rollover and owner individual exemption. Focused route tests assert source collection/replacement behavior and owner-scoped Weekly context. |
-| Discovery integrated generation | NOT VERIFIED | Browser-to-DB success/zero-result persistence, provider/persistence failures, ambiguity and retained charge on post-admission spending denial remain open. |
+| Discovery zero-result generation | PASS | Chromium, actual API, mocked SerpAPI and initial/replacement OpenRouter, durable zero-result success, committed response loss, same-key HTTP 409, charged budget denial and fourth admission denial. |
+| Remaining Discovery integration | NOT VERIFIED | Positive problem persistence, foreign-owner browser read, provider failure after dispatch and persistence failure. |
 | Weekly claims and retries | PASS | DB asserts processing/completed reuse, failed/stale cumulative two-execution ceiling and concurrent reclaim. Focused tests cover evidence, quality and corrective-generation contracts. |
-| Weekly browser and cron | NOT VERIFIED | Missing cron configuration fails closed over HTTP. Integrated ordinary report reads, owner-only generation, forbidden foreign report, accepted/rejected configured cron bearer, schedule execution and reserved initial/corrective transport need end-to-end evidence. |
+| Weekly browser reads and denial | PASS | Chromium renders an owned PostgreSQL report, shows no report to a second founder, and hides manual generation for ordinary users. Real HTTP returns 404 for foreign run and 403 for ordinary manual generation. Missing cron configuration fails closed. |
+| Weekly generation and cron | NOT VERIFIED | Configured cron authorization, owner generation, corrective transport, budget denial and full report creation. |
 | Spending ceilings and safety | PASS | Existing fresh and upgrade DB groups cover total, OpenRouter, SerpAPI, X, combined search, per-user ceilings including owner, final-unit race, unfinished reservations including previous-month rows, UTC rollover, disabled/missing policy, dispatch uniqueness and guarded SerpAPI mock. Focused SDK test asserts one HTTP attempt on retryable failure and production constructors use guarded transport. |
 | Interviews | NOT VERIFIED | Integrated subject, hypothesis, plan/question, participant/session, supporting/contradicting/mixed evidence, classification, append-only correction, lineage and foreign owner denial remain open. |
 | Surveys, DB integrity | PASS | Concurrent final units at publication and aggregate scope, identical retry at capacity, definitive reject/conflict accounting, cumulative consumption across replacement, per-network resolution and submission, trusted roles and lifecycle closure. |
-| Surveys, integrated browser | NOT VERIFIED | Authoring/publication, all supported answer types, required answers, anonymous submission, lost committed response, payload conflict, repeat clicks, malformed recovery, definitive rejection and correction, pause/revocation still need one browser-to-real-DB evidence chain. |
+| Surveys, integrated participant | PASS | The plan is seeded via real RPCs. Authenticated HTTP publishes it, rejects foreign revocation and accepts owner revocation. Anonymous Chromium exercises required fields and all five answer types, loses the committed response, retries the identical payload and verifies one submission and five answers in PostgreSQL. The revoked link is unavailable and history is retained. |
+| Remaining Survey integration | NOT VERIFIED | Owner drafting through browser UI, changed-payload conflict, malformed/definitive response correction and pause through the same integrated path. |
 | Landing pages, DB integrity | PASS | SQL checks isolation, snapshot immutability, lifecycle, duplicate contacts, consent, metrics, concurrency ceilings, retained consumption and removal. |
 | Landing pages, integrated browser | NOT VERIFIED | Draft/preview/save/publish, public rendering, cookie handling, token replacement, contact removal and closed links need end-to-end browser evidence. |
 | Prototypes, DB integrity | PASS | SQL checks authored navigation, invalid paths, consent, feedback, retry, metrics, snapshot and limits, closure, replacement, removal and owner isolation. |
@@ -107,15 +111,56 @@ authorized release, check for existing duplicate non-null key pairs. Any
 duplicates require review before the migration can be applied. The migration
 contains no data cleanup.
 
+## Saved-opportunity production preflight
+
+Provide this query to the owner for a separately authorized read-only preflight.
+
+```sql
+SELECT user_id, opportunity_id, count(*) AS saved_row_count
+FROM public.saved_ideas
+WHERE user_id IS NOT NULL AND opportunity_id IS NOT NULL
+GROUP BY user_id, opportunity_id
+HAVING count(*) > 1;
+```
+
+Require zero rows before applying the index. Run the preflight under the
+approved release write hold so the result cannot race a saved-idea mutation.
+If any row is returned, hold the migration and have the owner review the
+affected saved rows and their references and authorize a retention decision.
+Preserve rows until that decision is approved and run the query again before
+continuing. PostgreSQL's ordinary unique index permits multiple null keys.
+
+## GitHub publication and Vercel
+
+Repo history records an earlier “Only build production” setting, and GitHub
+reports a Vercel success status for a prior PR-head commit. Neither establishes
+the effective current configuration for this branch. A Git push updates the
+GitHub ref. The Vercel integration can create a deployment record from that
+event, and an ignored build can leave a skipped or canceled record. A successful
+build can create an immutable artifact, and alias promotion separately changes
+which artifact serves the production domain. Holding builds or disconnecting
+Git leaves existing immutable deployments and aliases in place.
+
+Publication is blocked pending current owner evidence. In Vercel, open the
+owner team, select the SaaSScout project, and open **Settings → Git**. Verify
+the linked repository, Production Branch and **Ignored Build Step**. To enforce
+a hold that also prevents automatic deployment records, the owner can disconnect
+the Git integration during the publication window and confirm no other linked
+project or GitHub deploy workflow handles this repository. The owner should
+provide confirmation for the exact acceptance branch and Draft PR window.
+This task made no setting change.
+
 ## Spending and release boundaries
 
-Provider requests exercised by the contract/DB tests use injected transports. The account browser launcher supplies dummy paid-provider values, traps non-loopback server fetches, rejects fetch redirects and records browser requests to unexpected origins. This is evidence for the tested transports and journeys, with no integrated AI generation claimed by the account launcher. The candidate policy is a disposable fixture only. Request units do not cap dollars, input tokens, output tokens or billed credits. Pricing, balances, financial exposure and acceptable losses remain operational decisions.
+Provider requests exercised by the contract/DB tests use injected transports. The browser launcher supplies dummy paid-provider values. Explicit OpenRouter and SerpAPI mocks run at the transport boundary after durable dispatch claims. Unknown requests, including optional X, hit the egress trap. Browser contexts deny external origins. The browser compares mock invocations with committed dispatch rows for Scan and Discovery. The candidate policy is a disposable fixture only. Request units do not cap dollars, input tokens, output tokens or billed credits. Pricing, balances, financial exposure and acceptable losses remain operational decisions.
 
 No production SQL, paid-provider call, production or shared Preview test, feature-flag change, deployment, merge or activation is part of the acceptance commands.
 
 ## Changed files
 
 - `.github/workflows/beta-membership-access.yml` invokes the browser suite after the existing real Auth and DB checks.
+- `e2e/beta-disposable-scan.spec.ts`, `e2e/beta-disposable-discovery.spec.ts` and `e2e/beta-disposable-survey.spec.ts` exercise integrated Scan, Discovery and public Survey journeys.
+- `tests/support/beta-acceptance-provider.mjs` provides explicit disposable Scan and Discovery provider responses.
 - `e2e/beta-disposable-account.spec.ts` drives real Auth, dashboard and profile journeys and verifies the durable profile, saved-opportunity state, isolation and Scan quota denial.
 - `scripts/beta-acceptance-browser.mjs` validates fixture identity, builds and launches the test app and restores the local release gate.
 - `tests/support/beta-acceptance-egress.mjs` records and denies unexpected server fetch destinations.

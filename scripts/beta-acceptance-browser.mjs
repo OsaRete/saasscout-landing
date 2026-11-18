@@ -27,10 +27,13 @@ const env = {
   SUPABASE_SERVICE_ROLE_KEY: connection.SERVICE_ROLE_KEY,
   OPENROUTER_API_KEY: "disposable-transport-trap",
   SERPAPI_API_KEY: "disposable-transport-trap",
+  VALIDATION_PRIVATE_MODE: "INTERVIEWS_AND_SURVEYS",
+  VALIDATION_PUBLIC_SURVEYS: "ENABLED",
   SCAN_SERVER_WORKFLOW_ENABLED: "true",
   KNOWLEDGE_EVOLUTION_DUAL_WRITE: "0",
   KNOWLEDGE_EVOLUTION_DIAGNOSTICS: "0",
   BETA_ACCEPTANCE_EGRESS_LOG: resolve(workdir, "browser-egress.log"),
+  BETA_ACCEPTANCE_PROVIDER_LOG: resolve(workdir, "browser-provider.log"),
   BETA_ACCEPTANCE_BROWSER: "1",
   BETA_ACCEPTANCE_CHROMIUM: process.env.BETA_ACCEPTANCE_CHROMIUM,
 };
@@ -59,8 +62,12 @@ const appUrl = "http://127.0.0.1:3100";
 const occupied = await fetch(appUrl, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
 assert.equal(occupied, false, "Acceptance app port is already in use");
 writeFileSync(env.BETA_ACCEPTANCE_EGRESS_LOG, "", { mode: 0o600 });
+writeFileSync(env.BETA_ACCEPTANCE_PROVIDER_LOG, "", { mode: 0o600 });
 run(["--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/next/dist/bin/next", "build"]);
-sql("UPDATE public.application_beta_release SET open_free_beta = true;");
+sql(`UPDATE public.application_beta_release SET open_free_beta = true;
+UPDATE public.application_spending_policy SET enabled=true,total_requests=5000,
+  openrouter_requests=1000,serpapi_requests=4000,x_requests=0,search_requests=4000,
+  user_ai_requests=6,user_search_requests=160,max_concurrent=32,weekly_max_executions=2;`);
 const app = spawn(process.execPath, [
   "--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/next/dist/bin/next",
   "start", "--hostname", "127.0.0.1", "--port", "3100",
@@ -73,10 +80,11 @@ try {
     await delay(500);
   }
   assert.ok(ready, "Disposable acceptance server failed to start");
-  run(["node_modules/@playwright/test/cli.js", "test", "e2e/beta-disposable-account.spec.ts",
+  run(["node_modules/@playwright/test/cli.js", "test", "e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts", "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
     "--project=chromium", "--workers=1", "--retries=0", "--reporter=line"]);
 } finally {
   app.kill();
-  sql("UPDATE public.application_beta_release SET open_free_beta = false;");
+  sql(`UPDATE public.application_beta_release SET open_free_beta = false;
+UPDATE public.application_spending_policy SET enabled=false;`);
   assert.equal(readFileSync(env.BETA_ACCEPTANCE_EGRESS_LOG, "utf8"), "", "External server fetch attempted");
 }

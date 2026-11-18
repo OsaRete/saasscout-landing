@@ -17,7 +17,7 @@ async function credentials(page: Page, email: string, action: "Sign in" | "Creat
 
 test("disposable Auth, profiles and saved opportunities across two browser identities", async ({ browser }) => {
   test.skip(process.env.BETA_ACCEPTANCE_BROWSER !== "1", "Run via the owned disposable fixture launcher");
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   expect(process.env.NEXT_PUBLIC_SUPABASE_URL).toBe(auth);
   const admin = createClient(auth, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -81,6 +81,24 @@ test("disposable Auth, profiles and saved opportunities across two browser ident
     const foreign = await jwtClient.from("founder_profiles").select("user_id").eq("user_id", ownerId);
     expect(foreign.error).toBeNull();
     expect(foreign.data).toEqual([]);
+
+    const weeklyId = randomUUID();
+    const weeklySummary = "Disposable owned Weekly report";
+    const weekly = await admin.from("weekly_intelligence_runs").insert({
+      id: weeklyId, user_id: ownerId, summary: weeklySummary, status: "completed",
+      period_start: "2026-11-09T00:00:00Z", period_end: "2026-11-16T00:00:00Z", timezone: "UTC",
+    });
+    expect(weekly.error).toBeNull();
+    await first.goto(`${app}/weekly`);
+    await expect(first.getByText(weeklySummary, { exact: true })).toBeVisible();
+    await expect(first.getByRole("button", { name: "Refresh Weekly Intelligence" })).toHaveCount(0);
+    await second.goto(`${app}/weekly`);
+    await expect(second.getByText("No weekly intelligence yet")).toBeVisible();
+    const weeklyApi = `${app}/api/weekly-intelligence`;
+    const secondSession = await jwtClient.auth.getSession();
+    const secondHeaders = { Authorization: `Bearer ${secondSession.data.session!.access_token}` };
+    expect((await second.request.get(`${weeklyApi}?runId=${weeklyId}`, { headers: secondHeaders })).status()).toBe(404);
+    expect((await second.request.post(weeklyApi, { headers: secondHeaders })).status()).toBe(403);
 
     const opportunityId = randomUUID();
     const title = "Disposable opportunity for a founder";
