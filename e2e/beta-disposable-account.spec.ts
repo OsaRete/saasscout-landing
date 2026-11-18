@@ -98,7 +98,7 @@ test("disposable Auth, profiles and saved opportunities across two browser ident
     const secondSession = await jwtClient.auth.getSession();
     const secondHeaders = { Authorization: `Bearer ${secondSession.data.session!.access_token}` };
     expect((await second.request.get(`${weeklyApi}?runId=${weeklyId}`, { headers: secondHeaders })).status()).toBe(404);
-    expect((await second.request.post(weeklyApi, { headers: secondHeaders })).status()).toBe(403);
+    expect((await second.request.post(weeklyApi, { headers: secondHeaders })).status()).toBe(405);
 
     const opportunityId = randomUUID();
     const title = "Disposable opportunity for a founder";

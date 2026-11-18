@@ -70,10 +70,11 @@ test("dashboard compatibility model is derived from authoritative run and proble
 
 import { normalizeWeeklyProblemsForPersistence, runAuthoritativeWeeklyGenerationForUser, type AuthoritativeWeeklyGenerationRepository } from "../lib/weekly-intelligence-service.ts";
 
-test("manual route and scheduler share the authoritative Weekly service", () => {
-  const manualRoute = read("app/api/weekly-intelligence/route.ts");
+test("the scheduler calls the authoritative Weekly service and report HTTP is read-only", () => {
+  const reportRoute = read("app/api/weekly-intelligence/route.ts");
   const scheduler = read("app/api/cron/route.ts");
-  assert.match(manualRoute, /runAuthoritativeWeeklyGenerationForUser/);
+  assert.match(reportRoute, /runAuthoritativeWeeklyGenerationForUser/);
+  assert.doesNotMatch(reportRoute, /export async function POST/);
   assert.match(scheduler, /runWeeklyGenerationForUser/);
   assert.doesNotMatch(scheduler, /generate-weekly-report/);
   assert.doesNotMatch(scheduler, /weekly_reports/);
@@ -168,10 +169,8 @@ test("weekly route protects completed reports from replacement or failed marking
   assert.match(route, /\.neq\("status", "completed"\)/);
 });
 
-test("weekly diagnostics distinguish button and schedule entry paths without unsafe content", () => {
-  const manualRoute = read("app/api/weekly-intelligence/route.ts");
+test("weekly scheduler diagnostics exclude unsafe content", () => {
   const scheduler = read("app/api/cron/route.ts");
-  assert.match(manualRoute, /entryPath: "weekly_button"/);
   assert.match(scheduler, /entryPath: "weekly_schedule"/);
   assert.match(scheduler, /Could not generate weekly intelligence/);
   assert.doesNotMatch(scheduler, /error instanceof Error \? error\.message/);

@@ -86,20 +86,50 @@ const publicMethods = [
 for (const method of publicMethods) {
   test(`${method.family} publishes, persists consented feedback and closes`, async ({ page }) => {
     test.setTimeout(60_000);
-    const { admin, owner, stranger, versionId, external } = await fixture(page, method.family);
-    const resource = `${app}/api/validation/${method.endpoint}/${versionId}`;
-    const post = (action: string, data: unknown) => page.request.post(`${resource}/${action}`, { headers: owner.headers, data, maxRedirects: 0 });
-    const save = await post("save", { revision: 0, content: method.content });
-    expect(save.status(), await save.text()).toBe(200);
-    const publish = await post("publish", { revision: 1 });
+    const { admin, owner, stranger, subjectId, versionId, external } = await fixture(page, method.family);
+    await page.goto(`${app}/login`);
+    await page.getByPlaceholder("Email address").fill(owner.email);
+    await page.getByPlaceholder("Password", { exact: true }).fill(owner.password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page).toHaveURL(`${app}/dashboard`);
+    const workspace = `${app}/validation/${subjectId}`;
+    await page.goto(workspace);
+    const field = {
+      landing: "Headline", prototype: "Prototype name",
+      external_mvp: "External MVP URL", commercial_intent: "Offer title",
+    }[method.table];
+    const authoredValue = method.table === "external_mvp" ? externalMvp.url : method.title;
+    const input = () => page.getByLabel(field);
+    if (method.table === "landing") {
+      await page.getByLabel("CTA label").fill(landing.cta);
+      await page.getByLabel("Description", { exact: true }).fill(landing.description);
+      await page.getByLabel("Benefits (up to five, one per line)").fill(landing.benefits[0]);
+    }
+    await input().fill(method.table === "prototype" || method.table === "commercial_intent"
+      ? `${authoredValue} updated` : authoredValue);
+    const savedValue = await input().inputValue();
+    const saveResponse = page.waitForResponse((response) => response.url().endsWith(`/${versionId}/save`));
+    await page.getByRole("button", { name: method.table === "landing" ? "Save draft" : "Save revision", exact: true }).click();
+    expect((await saveResponse).status()).toBe(200);
+    await page.reload();
+    await expect(input()).toHaveValue(savedValue);
+    if (method.table === "commercial_intent") await page.getByRole("button", { name: "Preview", exact: true }).click();
+    const publicationResponse = page.waitForResponse((response) => response.url().endsWith(`/${versionId}/publish`));
+    await page.getByRole("button", { name: method.table === "landing" ? "Publish" : "Publish private link", exact: true }).click();
+    const publish = await publicationResponse;
     expect(publish.status(), await publish.text()).toBe(200);
     const { data: published } = await publish.json();
+    // Keep the participant on a separate browser session from the study owner.
+    await page.evaluate(() => localStorage.clear());
+    await page.context().clearCookies();
+    const resource = `${app}/api/validation/${method.endpoint}/${versionId}`;
+    const post = (action: string, data: unknown) => page.request.post(`${resource}/${action}`, { headers: owner.headers, data, maxRedirects: 0 });
     expect(published.publicPath).toMatch(/^\/validation\/[a-z-]+\/[A-Za-z0-9_-]+$/);
     const denied = await page.request.get(resource, { headers: stranger.headers, maxRedirects: 0 });
     expect(denied.status()).toBe(404);
 
     await page.goto(`${app}${published.publicPath}`);
-    await expect(page.getByRole("heading", { name: method.title })).toBeVisible();
+    await expect(page.getByRole("heading", { name: method.table === "prototype" || method.table === "commercial_intent" ? savedValue : method.title })).toBeVisible();
     const count = () => admin.from(`validation_${method.table}_submissions`)
       .select("id,publication_id,owner_id").eq("owner_id", owner.id);
     expect(await count()).toMatchObject({ error: null, data: [] });

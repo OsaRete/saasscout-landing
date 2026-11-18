@@ -129,8 +129,8 @@ test("current source counts and final-run coverage labels are unambiguous", () =
   assert.equal(weeklyCoverageLabel({ total_sources_analyzed: 9 }), "Legacy / unknown");
 });
 
-test("completed reuse copy is explicit and avoids a reload that implies new work", () => {
+test("Weekly opens the latest completed report and has no generation control", () => {
   const page = readFileSync("app/weekly/page.tsx", "utf8");
-  assert.match(page, /already up to date\. You're viewing the completed report for this week; no new analysis was required/);
-  assert.match(page, /weekly_current_period_reused" \|\| result\.reused\) return/);
+  assert.match(page, /runsData\.find\(\(run\) => run.status === "completed"\)/);
+  assert.doesNotMatch(page, /Refresh Weekly Intelligence|method: "POST"/);
 });

@@ -91,43 +91,6 @@ function getScoreLabel(score: number | null) {
 }
 
 
-type WeeklyApiResponse = {
-  success?: boolean;
-  error?: string;
-  code?: string;
-  stage?: string;
-  weeklyExecutionId?: string;
-  status?: string;
-  executionMode?: WeeklyRun["execution_mode"];
-  providerState?: WeeklyRun["external_provider_state"];
-  reused?: boolean;
-};
-
-function getWeeklyRunMessage(result: WeeklyApiResponse, responseOk: boolean) {
-  const diagnosticSuffix = result.weeklyExecutionId ? ` Diagnostic ID: ${result.weeklyExecutionId}.` : "";
-
-  if (responseOk && result.code === "weekly_current_period_reused") {
-    return `Weekly Intelligence is already up to date. You're viewing the completed report for this week; no new analysis was required.${diagnosticSuffix}`;
-  }
-
-  if (responseOk && result.code === "weekly_source_degraded") {
-    return `Weekly Intelligence generated with degraded source coverage.${diagnosticSuffix}`;
-  }
-
-  if (!responseOk && (result.code === "weekly_authentication_failed" || result.code === "weekly_capability_denied")) {
-    return `${result.error || "Weekly Intelligence is not available for this account."}${diagnosticSuffix}`;
-  }
-
-  if (!responseOk) {
-    return `Could not generate weekly intelligence.${diagnosticSuffix}`;
-  }
-
-  if (result.executionMode === "data_moat_fallback") return `Live market sources were temporarily unavailable, so SaaSScout generated this report from your existing Data Moat.${diagnosticSuffix}`;
-  if (result.executionMode === "insufficient_context") return `SaaSScout did not have enough reliable fresh or historical evidence to generate a trustworthy report this week.${diagnosticSuffix}`;
-  if (result.providerState === "degraded") return `Weekly Intelligence was updated with partial live-market coverage and your Data Moat.${diagnosticSuffix}`;
-  return `Weekly Intelligence was updated using fresh market evidence.${diagnosticSuffix}`;
-}
-
 function modeLabel(mode: WeeklyRun["execution_mode"]) {
   return ({ fresh_market: "Fresh market", mixed: "Fresh + Data Moat", data_moat_fallback: "Data Moat fallback", insufficient_context: "Insufficient context" } as const)[mode || "insufficient_context"];
 }
@@ -150,7 +113,6 @@ export default function WeeklyPage() {
 
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
-  const [generating, setGenerating] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -175,60 +137,12 @@ export default function WeeklyPage() {
       });
       const projection = await response.json();
       if (!response.ok) { setMessage(projection.error || "Could not load weekly intelligence."); setLoadingData(false); return; }
-      const runsData = projection.runs || [];
+      const runsData: WeeklyRun[] = projection.runs || [];
       setRuns(runsData); setProblems(projection.problems || []); setSources(projection.externalSources || []);
-      setSelectedRunId(runsData[0]?.id || null); setLoadingData(false);
+      setSelectedRunId(runsData.find((run) => run.status === "completed")?.id ?? runsData[0]?.id ?? null); setLoadingData(false);
     }
     void loadWeeklyData();
   }, [router]);
-
-  async function handleRunWeeklyIntelligence() {
-    try {
-      setGenerating(true);
-      setMessage("");
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        setMessage("Please sign in again to run Weekly Intelligence.");
-        return;
-      }
-
-      const response = await fetch("/api/weekly-intelligence", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      const rawText = await response.text();
-
-      let result: WeeklyApiResponse;
-
-      try {
-        result = JSON.parse(rawText);
-      } catch {
-        setMessage("The API returned an invalid response.");
-        return;
-      }
-
-      if (!response.ok) {
-        setMessage(getWeeklyRunMessage(result, false));
-        return;
-      }
-
-      setMessage(getWeeklyRunMessage(result, true));
-      if (result.code === "weekly_current_period_reused" || result.reused) return;
-      window.location.reload();
-    } catch (error) {
-      console.error(error);
-      setMessage("Something went wrong running weekly intelligence.");
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   const selectedRun = useMemo(() => {
     return runs.find((run) => run.id === selectedRunId) || null;
@@ -308,13 +222,6 @@ export default function WeeklyPage() {
             </div>
 
             <div className="flex flex-col gap-3">
-              {isOwner && <button
-                onClick={handleRunWeeklyIntelligence}
-                disabled={generating}
-                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {generating ? "Refreshing..." : "Refresh Weekly Intelligence"}
-              </button>}
               {isOwner && <Link href="/admin/users" className="text-violet-300">Manage users</Link>}
 
               <div className="rounded-2xl border border-violet-500/30 bg-black/20 px-5 py-4">

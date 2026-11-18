@@ -16,9 +16,9 @@ test("anonymous survey commits once after lost response, then owner revokes it",
   const external: string[] = [];
   page.on("request", (request) => {
     const origin = new URL(request.url()).origin;
-    if (origin !== app) external.push(origin);
+    if (origin !== app && origin !== backend) external.push(origin);
   });
-  await page.route("**/*", (route) => new URL(route.request().url()).origin === app ? route.continue() : route.abort());
+  await page.route("**/*", (route) => [app, backend].includes(new URL(route.request().url()).origin) ? route.continue() : route.abort());
 
   async function founder() {
     const email = `survey-${randomUUID()}@example.test`;
@@ -28,7 +28,7 @@ test("anonymous survey commits once after lost response, then owner revokes it",
     const client = createClient(backend, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, options);
     const login = await client.auth.signInWithPassword({ email, password });
     expect(login.error).toBeNull();
-    return { id: created.data.user!.id, headers: { Authorization: `Bearer ${login.data.session!.access_token}` } };
+    return { id: created.data.user!.id, email, password, headers: { Authorization: `Bearer ${login.data.session!.access_token}` } };
   }
   const owner = await founder();
   const other = await founder();
@@ -58,21 +58,47 @@ test("anonymous survey commits once after lost response, then owner revokes it",
     });
   }
   const title = "Disposable reporting research";
-  const plan = await rpc("validation_create_survey_plan", {
-    p_experiment_version_id: experiment.version.id, p_title: title, p_purpose: "Understand reporting",
-    p_questions: [
-      { questionRef: "question_short", prompt: "What happened?", type: "short_text", required: true },
-      { questionRef: "question_long", prompt: "Describe it", type: "long_text", required: true },
-      { questionRef: "question_number", prompt: "How many hours?", type: "number", min: 1, max: 10, required: true },
-      { questionRef: "question_single", prompt: "How often?", type: "single_choice", options: ["Weekly", "Monthly"], required: true },
-      { questionRef: "question_multi", prompt: "What tools?", type: "multiple_choice", options: ["Spreadsheet", "Email"], required: true },
-    ],
-  });
-  const publication = await page.request.post(`${app}/api/validation/survey-publications`, {
-    headers: owner.headers, data: { surveyPlanVersionId: plan.id }, maxRedirects: 0,
-  });
+  await page.goto(`${app}/login`);
+  await page.getByPlaceholder("Email address").fill(owner.email);
+  await page.getByPlaceholder("Password", { exact: true }).fill(owner.password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(`${app}/dashboard`);
+  await page.goto(`${app}/validation`);
+  await expect(page.getByRole("heading", { name: "Validation Hub" })).toBeVisible();
+  const picker = page.getByRole("region", { name: "Choose a validation method" });
+  await expect(picker.getByRole("button", { name: /^Choose / })).toHaveCount(6);
+  await expect(picker.getByRole("button", { name: /^Choose /, disabled: true })).toHaveCount(0);
+  await page.goto(`${app}/validation/${subject.id}`);
+  await page.getByLabel("Participant-facing title").fill(title);
+  await page.getByLabel("Research purpose").fill("Understand reporting");
+  const questions = [
+    { prompt: "What happened?", type: "short_text" },
+    { prompt: "Describe it", type: "long_text" },
+    { prompt: "How many hours?", type: "number" },
+    { prompt: "How often?", type: "single_choice", options: ["Weekly", "Monthly"] },
+    { prompt: "What tools?", type: "multiple_choice", options: ["Spreadsheet", "Email"] },
+  ];
+  for (const [i, question] of questions.entries()) {
+    await page.getByRole("button", { name: "Add question" }).click();
+    await page.getByLabel(`Question ${i + 1}`, { exact: true }).fill(question.prompt);
+    await page.getByLabel(`Question ${i + 1} type`).selectOption(question.type);
+    for (const [j, option] of (question.options || []).entries()) {
+      await page.getByLabel(`Question ${i + 1} option ${j + 1}`).fill(option);
+    }
+    await page.getByRole("checkbox", { name: "Required", exact: true }).nth(i).check();
+  }
+  const save = page.waitForResponse((response) => response.url().endsWith("/api/validation/survey-plans"));
+  await page.getByRole("button", { name: "Save immutable plan" }).click();
+  expect((await save).status()).toBe(200);
+  await page.reload();
+  await expect(page.getByText(title, { exact: true })).toBeVisible();
+  const publicationResponse = page.waitForResponse((response) => response.url().endsWith("/api/validation/survey-publications"));
+  await page.getByRole("button", { name: "Publish public link" }).click();
+  const publication = await publicationResponse;
   expect(publication.status(), await publication.text()).toBe(200);
   const { data: published } = await publication.json();
+  await page.evaluate(() => localStorage.clear());
+  await page.context().clearCookies();
   expect(published.publicPath).toMatch(/^\/validation\/survey\/[A-Za-z0-9_-]+$/);
   const revokeUrl = `${app}/api/validation/survey-publications/${published.id}/revoke`;
   expect((await page.request.post(revokeUrl, { headers: other.headers, maxRedirects: 0 })).status()).toBe(404);

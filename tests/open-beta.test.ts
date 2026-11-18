@@ -70,14 +70,3 @@ test('exhausted, repeated or unavailable Discovery admission never enters paid w
     assert.ok(response.status>=400);assert.equal(dispatched,false);
   }
 });
-test('Weekly manual generation requires owner before profile/provider work',async()=>{
-  let touched=false;
-  const loaded= validationTestModule('app/api/weekly-intelligence/route.ts',(specifier)=>{
-    if(specifier==='@/lib/auth/owner-administrator') return {requireOwnerAdministrator:async()=>{throw new Error('Non-owner rejected');}};
-    if(specifier==='@/lib/knowledge/evolution') return {runKnowledgeEvolutionWeeklyDiagnostics(){throw new Error('Diagnostics trap');}};
-    if(specifier==='openai') return class {constructor(){touched=true;throw new Error('Provider trap');}};
-    return undefined;
-  }) as {POST(r:Request):Promise<Response>};
-  assert.ok((await loaded.POST(new Request('https://app.test/api/weekly-intelligence',{method:'POST'}))).status>=400);
-  assert.equal(touched,false);
-});

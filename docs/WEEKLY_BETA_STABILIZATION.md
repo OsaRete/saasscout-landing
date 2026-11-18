@@ -2,7 +2,7 @@
 
 ## Final architecture
 
-`vercel.json` keeps Monday 08:00 UTC as the authority. Cron and the authenticated Beta refresh button both call `runWeeklyGenerationForUser`, which claims/reuses the owner-period run before aggregation, collection, persistence, synthesis, child replacement, and completion. Completed reuse returns before every downstream side effect.
+`vercel.json` keeps Monday 08:00 UTC as the authority. The authorized scheduler calls `runWeeklyGenerationForUser`, which claims/reuses the owner-period run before aggregation, collection, persistence, synthesis, child replacement, and completion. Completed reuse returns before every downstream side effect.
 
 The versioned server contract is `weekly-execution@1`. Historical records remain unchanged; new completed runs persist mode, provider state, persisted external count, and degradation on the parent.
 
@@ -59,9 +59,9 @@ Fallback does not promote confidence merely because live collection failed. It n
 
 Historical parent counts retain their legacy meaning and are not rewritten.
 
-## Button/cron parity and UI
+## Scheduled generation and report access
 
-The button is a Beta verification surface, renamed “Refresh Weekly Intelligence.” It is not an alternate architecture. The UI exposes last update, automatic schedule, mode, live coverage, durable external count, problem count, fallback/insufficient messages, and reuse. A cron recipient failure is caught per user and does not abort later recipients. Safe cron/application diagnostics use execution IDs, run/period IDs, states, and aggregate counts only.
+The Weekly page opens the latest completed report when available and keeps past reports accessible. The report API is read-only for every user, including the founder. The UI exposes last update, automatic schedule, mode, live coverage, durable external count, problem count, and fallback or insufficient-context messages. A cron recipient failure is caught per user and does not abort later recipients. Safe cron/application diagnostics use execution IDs, run/period IDs, states, and aggregate counts only.
 
 ## Production read-only SQL
 

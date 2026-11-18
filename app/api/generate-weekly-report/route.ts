@@ -9,7 +9,7 @@ export async function POST() {
       success: false,
       deprecated: true,
       error:
-        "generate-weekly-report is deprecated. Use the authenticated /api/weekly-intelligence pipeline.",
+        "Weekly Intelligence is generated on schedule. Use GET /api/weekly-intelligence to read reports.",
       authoritative_endpoint: "/api/weekly-intelligence",
     },
     { status: 410 },
