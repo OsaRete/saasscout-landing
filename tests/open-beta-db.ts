@@ -62,6 +62,18 @@ if (phase==='upgrade') {
   const before = sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`);
   sql(`BEGIN;\n${readFileSync('supabase/migrations/20261119000000_global_provider_spending.sql','utf8')}\nCOMMIT;`);
   assert.equal(sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`), before, 'Upgrade preserves historical Scan evidence and identity');
+  const opportunity = sql(`INSERT INTO public.opportunities(user_id,title)
+    VALUES('${owner.id}','Historical saved opportunity') RETURNING id;`).split('\n')[0];
+  const saved = sql(`INSERT INTO public.saved_ideas(user_id,opportunity_id)
+    VALUES('${owner.id}','${opportunity}') RETURNING id;`).split('\n')[0];
+  const savedBefore = sql(`SELECT row_to_json(s) FROM public.saved_ideas s WHERE id='${saved}';`);
+  sql(readFileSync('supabase/migrations/20261121000000_saved_ideas_owner_opportunity_unique.sql','utf8'));
+  assert.equal(sql(`SELECT row_to_json(s) FROM public.saved_ideas s WHERE id='${saved}';`), savedBefore,
+    'Unique index preserves the historical saved row');
+  sql(`INSERT INTO public.saved_ideas(user_id,opportunity_id) VALUES('${owner.id}','${opportunity}')
+    ON CONFLICT (user_id,opportunity_id) DO NOTHING;`);
+  assert.equal(sql(`SELECT count(*) FROM public.saved_ideas
+    WHERE user_id='${owner.id}' AND opportunity_id='${opportunity}';`), '1');
 }
 for(let i=0;i<40;i++) {
   if (!(await a.client.rpc('application_beta_access')).error) break;

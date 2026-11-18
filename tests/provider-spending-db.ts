@@ -38,6 +38,14 @@ assert.equal(await reserve(args(owner)),false);
 // Missing-policy negative control is asserted from its returned boolean, not just lack of error.
 assert.match(sql(`BEGIN; DELETE FROM public.application_spending_policy; SELECT public.application_reserve_provider('${ordinary}','discovery','missing-policy','openrouter',1); ROLLBACK;`),/\nf\n/);
 checks.push('disabled/missing policy fails closed');
+// Exercise the proposed simulation values without changing migration defaults.
+sql(`UPDATE public.application_spending_policy SET enabled=true,total_requests=5000,
+  openrouter_requests=1000,serpapi_requests=4000,x_requests=0,search_requests=4000,
+  user_ai_requests=40,user_search_requests=160,max_concurrent=32,weekly_max_executions=2;`);
+assert.equal(await reserve(args(owner, 'x')), false, 'Candidate policy disables X for an owner');
+assert.equal(await reserve(args(ordinary, 'openrouter')), true, 'Candidate policy admits AI');
+assert.equal(await reserve(args(ordinary, 'serpapi')), true, 'Candidate policy admits search');
+checks.push('candidate request policy admits OpenRouter and SerpAPI reservations while denying X');
 generous();
 const before=count();
 sql(`UPDATE public.application_spending_policy SET total_requests=${before+1};`);
