@@ -507,6 +507,7 @@ export function CustomerInterviewWorkspace({
                     {session.status === "in_progress" && (
                       <InterviewObservationForm
                         sessionId={session.id}
+                        plan={plans.find((plan) => plan.id === session.interview_plan_version_id)}
                         onDone={onChange}
                       />
                     )}

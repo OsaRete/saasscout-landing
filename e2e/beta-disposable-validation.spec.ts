@@ -37,32 +37,35 @@ async function fixture(page: Page, family: string) {
   await page.route("**/*", (route) =>
     [app, backend].includes(new URL(route.request().url()).origin) ? route.continue() : route.abort(),
   );
-  async function rpc(name: string, args: Record<string, unknown>) {
-    const { data, error } = await admin.rpc(name, { p_owner_id: owner.id, ...args });
-    expect(error).toBeNull();
-    return data;
-  }
-  const subject = await rpc("validation_create_subject", {
-    p_creation_origin: "user_entered", p_label: "Disposable validation study", p_context_snapshot: {},
-  });
-  const hypothesis = await rpc("validation_create_hypothesis", {
-    p_subject_id: subject.id, p_target_segment: "Operators", p_problem_claim: "Reporting is slow",
-    p_expected_observable_behavior: "Manual reconciliation", p_commercial_assumption: null,
-    p_support_criteria: ["Repeats weekly"], p_contradiction_criteria: ["Automatic"],
-    p_inconclusive_criteria: ["Unknown"], p_scope_included: [], p_scope_excluded: [],
-  });
-  const experiment = await rpc("validation_create_experiment", {
-    p_subject_id: subject.id, p_hypothesis_version_id: hypothesis.version.id, p_family: family,
-    p_target_audience: ["Operators"], p_collection_method: "Private acceptance fixture", p_design_snapshot: {},
-    p_screening_criteria: [], p_consent_privacy_mode: family === "customer_interview" ? "anonymous_notes" : "identified_with_explicit_consent",
-  });
-  const versionId: string = experiment.version.id;
-  for (const [from, to] of [["draft", "ready"], ["ready", "running"]]) {
-    await rpc("validation_transition_experiment_version", {
-      p_version_id: versionId, p_expected_lifecycle: from, p_target_lifecycle: to,
+  async function study(ownerId: string) {
+    async function rpc(name: string, args: Record<string, unknown>) {
+      const { data, error } = await admin.rpc(name, { p_owner_id: ownerId, ...args });
+      expect(error).toBeNull();
+      return data;
+    }
+    const subject = await rpc("validation_create_subject", {
+      p_creation_origin: "user_entered", p_label: "Disposable validation study", p_context_snapshot: {},
     });
+    const hypothesis = await rpc("validation_create_hypothesis", {
+      p_subject_id: subject.id, p_target_segment: "Operators", p_problem_claim: "Reporting is slow",
+      p_expected_observable_behavior: "Manual reconciliation", p_commercial_assumption: null,
+      p_support_criteria: ["Repeats weekly"], p_contradiction_criteria: ["Automatic"],
+      p_inconclusive_criteria: ["Unknown"], p_scope_included: [], p_scope_excluded: [],
+    });
+    const experiment = await rpc("validation_create_experiment", {
+      p_subject_id: subject.id, p_hypothesis_version_id: hypothesis.version.id, p_family: family,
+      p_target_audience: ["Operators"], p_collection_method: "Private acceptance fixture", p_design_snapshot: {},
+      p_screening_criteria: [], p_consent_privacy_mode: family === "customer_interview" ? "anonymous_notes" : "identified_with_explicit_consent",
+    });
+    const versionId: string = experiment.version.id;
+    for (const [from, to] of [["draft", "ready"], ["ready", "running"]]) {
+      await rpc("validation_transition_experiment_version", {
+        p_version_id: versionId, p_expected_lifecycle: from, p_target_lifecycle: to,
+      });
+    }
+    return { subjectId: subject.id as string, versionId };
   }
-  return { admin, owner, stranger, subjectId: subject.id as string, versionId, external };
+  return { admin, owner, stranger, ...await study(owner.id), external, study };
 }
 
 const landing = {
@@ -214,7 +217,7 @@ for (const method of publicMethods) {
 
 test("interview plan, private observations and explicit polarity persist across reload", async ({ page }) => {
   test.setTimeout(75_000);
-  const { admin, owner, stranger, subjectId, versionId, external } = await fixture(page, "customer_interview");
+  const { admin, owner, stranger, subjectId, versionId, external, study } = await fixture(page, "customer_interview");
   await page.goto(`${app}/login`);
   await page.getByPlaceholder("Email address").fill(owner.email);
   await page.getByPlaceholder("Password", { exact: true }).fill(owner.password);
@@ -236,6 +239,7 @@ test("interview plan, private observations and explicit polarity persist across 
   ]) {
     await page.getByLabel(/Private observation content/).fill(content);
     await page.getByLabel("Optional classification").selectOption(polarity);
+    if (polarity === "supporting") await page.getByLabel("Planned question (optional)").selectOption("1");
     await page.getByRole("button", { name: "Record immutable observation" }).click();
     await expect(page.getByText("Observation recorded. The form is ready for new evidence.")).toBeVisible();
   }
@@ -247,9 +251,27 @@ test("interview plan, private observations and explicit polarity persist across 
   expect(await admin.from("validation_interview_plan_versions").select("questions")
     .eq("id", session.data!.interview_plan_version_id).single())
     .toMatchObject({ error: null, data: { questions: [{ prompt: "How did you complete last week's report?" }] } });
-  const observations = await admin.from("validation_evidence_observations").select("id").eq("interview_session_id", session.data!.id);
+  const observations = await admin.from("validation_evidence_observations").select("id,observation_content").eq("interview_session_id", session.data!.id);
   expect(observations.error).toBeNull();
   expect(observations.data).toHaveLength(3);
+  const attribution = { planVersionId: session.data!.interview_plan_version_id, position: 1 };
+  expect(observations.data!.filter((row) => row.observation_content.questionAttribution))
+    .toEqual([expect.objectContaining({ observation_content: expect.objectContaining({ questionAttribution: attribution }) })]);
+  expect(observations.data!.filter((row) => !Object.hasOwn(row.observation_content, "questionAttribution"))).toHaveLength(2);
+  const endpoint = `${app}/api/validation/interview-observations`;
+  const data = { interviewSessionId: session.data!.id, category: "other", content: "Fixture rejection probe",
+    observedAt: new Date().toISOString(), ingestionKey: randomUUID() };
+  const foreignStudy = await study(stranger.id);
+  const foreignPlan = await admin.rpc("validation_create_interview_plan", {
+    p_owner_id: stranger.id, p_experiment_version_id: foreignStudy.versionId,
+    p_questions: [{ prompt: "What happened in a different interview?" }],
+  });
+  expect(foreignPlan.error).toBeNull();
+  for (const questionAttribution of [{ ...attribution, position: 2 }, { ...attribution, planVersionId: foreignPlan.data.id }]) {
+    expect((await page.request.post(endpoint, { headers: owner.headers, data: { ...data, questionAttribution } })).status()).toBe(400);
+  }
+  expect((await page.request.post(endpoint, { headers: stranger.headers, data: { ...data, questionAttribution: attribution } })).status()).toBe(404);
+
   const classifications = await admin.from("validation_evidence_classifications").select("id,observation_id,polarity,supersedes_classification_id")
     .in("observation_id", observations.data!.map((row) => row.id));
   expect(classifications.error).toBeNull();
@@ -269,6 +291,7 @@ test("interview plan, private observations and explicit polarity persist across 
   })]));
   await page.reload();
   await expect(page.getByText("How did you complete last week's report?")).toBeVisible();
+  await expect(page.getByText(/Planned question 1/)).toBeVisible();
   const restricted = await page.request.get(`${app}/api/validation/subjects/${subjectId}`, { headers: stranger.headers });
   expect(restricted.status()).toBe(404);
   expect(external).toEqual([]);

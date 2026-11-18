@@ -2,7 +2,7 @@
 
 Baseline `4a4f036888e376341c565edd88d63f7d704336db` includes PRs #245, #246 and #247. The mission and repository contracts supply the acceptance specification. The pre-implementation [admission audit](BETA_ADMISSION_SPENDING_AUDIT.md) describes historical gaps. The merged access, spending and public collection contracts supersede its implementation status.
 
-This is a partial acceptance record. The closure starts at `63f299d7dd98824efe9d633f5778c1dda958021c`, which passed ten disposable browser journeys. Record the checkout SHA with `git rev-parse HEAD` before running the commands below. PASS applies to the indicated layer and assertions. NOT VERIFIED identifies missing evidence for an assertion or required integration. BLOCKED indicates an external dependency that prevented execution. Release decision is **NO-GO FOR MERGE** while critical browser-to-database and workflow cases remain open.
+This is a partial acceptance record. The closure starts at `63f299d7dd98824efe9d633f5778c1dda958021c`, which passed ten disposable browser journeys. Record the checkout SHA with `git rev-parse HEAD` before running the commands below. PASS applies to the indicated layer and assertions. NOT VERIFIED identifies missing evidence for an assertion or required integration. BLOCKED indicates an external dependency that prevented execution. Draft PR #248 contains the acceptance work. Merge assessment requires the focused attribution verification and final-head checks.
 
 ## Reproduction
 
@@ -87,7 +87,7 @@ VALIDATION_CHROMIUM_PATH=/usr/bin/chromium npx playwright test \
 | Spending ceilings and safety | PASS | Existing fresh and upgrade DB groups cover total, OpenRouter, SerpAPI, X, combined search, per-user ceilings including owner, final-unit race, unfinished reservations including previous-month rows, UTC rollover, disabled/missing policy, dispatch uniqueness and guarded SerpAPI mock. Focused SDK test asserts one HTTP attempt on retryable failure and production constructors use guarded transport. |
 | Interviews, private observations | PASS | Seeded subject and hypothesis, then Chromium creates the plan, participant and session, records supporting, contradicting and mixed observations, and completes the session. PostgreSQL verifies lineage and explicit polarity. Foreign HTTP read denies. |
 | Interview correction and question plan | PASS | Real HTTP appends a correction linked to the original classification, and PostgreSQL retains both rows. The session points to the exact immutable plan with its authored question. |
-| Per-question observation attribution | NOT VERIFIED | Current observations link to an interview session and its versioned plan. The evidence schema and command expose no individual question reference. Implementing per-question lineage would require a product and schema change. |
+| Per-question observation attribution | PASS | Chromium selects an optional question on the session’s immutable plan. Private HTTP and PostgreSQL preserve its plan ID and one-based position, reject out-of-range and foreign-plan references, and preserve unattributed rows and append-only classification history. Run the focused launcher with `--interview`. |
 | Surveys, DB integrity | PASS | Concurrent final units at publication and aggregate scope, identical retry at capacity, definitive reject/conflict accounting, cumulative consumption across replacement, per-network resolution and submission, trusted roles and lifecycle closure. |
 | Surveys, integrated participant | PASS | The plan is seeded via real RPCs. Authenticated HTTP publishes it, rejects foreign revocation and accepts owner revocation. Anonymous Chromium exercises required fields and all five answer types, loses the committed response, retries the identical payload and verifies one submission and five answers in PostgreSQL. The revoked link is unavailable and history is retained. |
 | Remaining Survey integration | NOT VERIFIED | Owner drafting through browser UI, changed-payload conflict, malformed/definitive response correction and pause through the same integrated path. |
@@ -171,20 +171,35 @@ build can create an immutable artifact, and alias promotion separately changes
 which artifact serves the production domain. Holding builds or disconnecting
 Git leaves existing immutable deployments and aliases in place.
 
-Publication is blocked pending current owner evidence. In Vercel, open the
-owner team, select the SaaSScout project, and open **Settings → Git**. Verify
-the linked repository, Production Branch and **Ignored Build Step**. To enforce
-a hold that also prevents automatic deployment records, the owner can disconnect
-the Git integration during the publication window and confirm no other linked
-project or GitHub deploy workflow handles this repository. The owner should
-provide confirmation for the exact acceptance branch and Draft PR window.
-This task made no setting change.
+The owner authorized keeping Git connected for Draft PR #248 and reported
+**Don't build anything** with command `exit 0`, protection for All Deployments,
+and no Deploy Hooks. GitHub reported a successful Vercel status and linked
+a deployment record on the first draft head. The connector exposes neither
+its build logs nor alias history. The linked Vercel dashboard could not be
+accessed from the task environment, so actual ignored-build execution and
+alias state still need owner verification. No Vercel settings were changed.
+
 
 ## Spending and release boundaries
 
 Provider requests exercised by the contract/DB tests use injected transports. The browser launcher supplies dummy paid-provider values. Explicit OpenRouter and SerpAPI mocks run at the transport boundary after durable dispatch claims. Unknown requests, including optional X, hit the egress trap. Browser contexts deny external origins. The browser compares mock invocations with committed dispatch rows for Scan and Discovery. The candidate policy is a disposable fixture only. Request units do not cap dollars, input tokens, output tokens or billed credits. Pricing, balances, financial exposure and acceptable losses remain operational decisions.
 
 No production SQL, paid-provider call, production or shared Preview test, feature-flag change, deployment, merge or activation is part of the acceptance commands.
+
+## Interview attribution follow-up
+
+The additive `20261122000000_validation_interview_question_attribution.sql`
+migration validates an optional reference in existing private observation
+content at insert time. It performs no data update. The focused disposable
+command builds TypeScript, runs the interview Chromium journey against the
+fresh migration chain, then reapplies the trigger in a rolled-back upgrade
+simulation and checks the previously unattributed rows byte-for-byte by JSON
+value. Earlier unchanged journeys retain their accepted 11-scenario evidence.
+
+```bash
+node scripts/beta-membership-disposable.mjs fresh
+BETA_ACCEPTANCE_CHROMIUM=/usr/bin/chromium node scripts/beta-acceptance-browser.mjs --interview
+```
 
 ## Changed files
 

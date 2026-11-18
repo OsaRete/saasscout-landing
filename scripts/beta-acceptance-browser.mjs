@@ -93,7 +93,7 @@ END;
 $$;
 CREATE TRIGGER beta_fixture_reject_discovery BEFORE INSERT ON public.opportunity_discoveries
 FOR EACH ROW EXECUTE FUNCTION public.beta_fixture_reject_discovery();`);
-async function runBrowser(specs, overrides = {}) {
+async function runBrowser(specs, overrides = {}, filters = []) {
   const scenarioEnv = { ...env, ...overrides };
   const app = spawn(process.execPath, [
     "--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/next/dist/bin/next",
@@ -108,7 +108,7 @@ async function runBrowser(specs, overrides = {}) {
       await delay(500);
     }
     assert.ok(ready, "Disposable acceptance server failed to start");
-    run(["node_modules/@playwright/test/cli.js", "test", ...specs,
+    run(["node_modules/@playwright/test/cli.js", "test", ...specs, ...filters,
       "--project=chromium", "--workers=1", "--retries=0", "--reporter=line"], scenarioEnv);
   } finally {
     app.kill();
@@ -121,31 +121,50 @@ const qualifiedEvidenceCounts = () => sql(`SELECT
   (SELECT count(*) FROM public.validation_qualified_evidence_snapshots);`);
 const qualifiedBefore = qualifiedEvidenceCounts();
 try {
-  await runBrowser(["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts",
-    "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
-    "e2e/beta-disposable-validation.spec.ts"]);
+  if (process.argv.includes("--interview")) {
+    await runBrowser(["e2e/beta-disposable-validation.spec.ts"], {}, ["--grep", "interview plan"]);
+    const migration = readFileSync("supabase/migrations/20261122000000_validation_interview_question_attribution.sql", "utf8");
+    sql(`BEGIN;
+CREATE TEMP TABLE attribution_before AS SELECT * FROM public.validation_evidence_observations
+  WHERE NOT (observation_content ? 'questionAttribution');
+DROP TRIGGER validation_check_interview_question_attribution ON public.validation_evidence_observations;
+DROP FUNCTION public.validation_check_interview_question_attribution();
+${migration}
+DO $$ BEGIN
+  IF (SELECT count(*) FROM attribution_before) < 2 OR EXISTS (
+    SELECT to_jsonb(old_row) FROM attribution_before old_row
+    EXCEPT SELECT to_jsonb(new_row) FROM public.validation_evidence_observations new_row
+  ) THEN RAISE EXCEPTION 'Attribution upgrade changed historical observations'; END IF;
+END $$;
+ROLLBACK;`);
+    console.log("Interview attribution upgrade preserved existing unattributed observations.");
+  } else {
+    await runBrowser(["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts",
+      "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
+      "e2e/beta-disposable-validation.spec.ts"]);
 
-  const weeklyEmail = `weekly-${connection.fixture_id}-${randomBytes(4).toString("hex")}@example.test`;
-  const weeklyPassword = randomBytes(24).toString("base64url");
-  const admin = createClient(connection.API_URL, connection.SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { data, error } = await admin.auth.admin.createUser({
-    email: weeklyEmail, password: weeklyPassword, email_confirm: true,
-  });
-  assert.equal(error, null, "Disposable Weekly founder setup failed");
-  const weeklyUserId = data.user?.id;
-  assert.match(weeklyUserId, /^[0-9a-f-]{36}$/);
-  sql(`INSERT INTO public.application_user_access
-    (user_id,access_role,is_active,unlimited_scans,owner_administrator)
-    VALUES ('${weeklyUserId}','beta_member',false,false,true);
-    UPDATE public.user_profiles SET weekly_intelligence_enabled=(user_id='${weeklyUserId}');`);
-  await runBrowser(["e2e/beta-disposable-weekly.spec.ts"], {
-    CRON_SECRET: randomBytes(32).toString("hex"),
-    BETA_ACCEPTANCE_WEEKLY_USER_ID: weeklyUserId,
-    BETA_ACCEPTANCE_WEEKLY_EMAIL: weeklyEmail,
-    BETA_ACCEPTANCE_WEEKLY_PASSWORD: weeklyPassword,
-  });
+    const weeklyEmail = `weekly-${connection.fixture_id}-${randomBytes(4).toString("hex")}@example.test`;
+    const weeklyPassword = randomBytes(24).toString("base64url");
+    const admin = createClient(connection.API_URL, connection.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await admin.auth.admin.createUser({
+      email: weeklyEmail, password: weeklyPassword, email_confirm: true,
+    });
+    assert.equal(error, null, "Disposable Weekly founder setup failed");
+    const weeklyUserId = data.user?.id;
+    assert.match(weeklyUserId, /^[0-9a-f-]{36}$/);
+    sql(`INSERT INTO public.application_user_access
+      (user_id,access_role,is_active,unlimited_scans,owner_administrator)
+      VALUES ('${weeklyUserId}','beta_member',false,false,true);
+      UPDATE public.user_profiles SET weekly_intelligence_enabled=(user_id='${weeklyUserId}');`);
+    await runBrowser(["e2e/beta-disposable-weekly.spec.ts"], {
+      CRON_SECRET: randomBytes(32).toString("hex"),
+      BETA_ACCEPTANCE_WEEKLY_USER_ID: weeklyUserId,
+      BETA_ACCEPTANCE_WEEKLY_EMAIL: weeklyEmail,
+      BETA_ACCEPTANCE_WEEKLY_PASSWORD: weeklyPassword,
+    });
+  }
 } finally {
   sql(`UPDATE public.application_beta_release SET open_free_beta = false;
 UPDATE public.application_spending_policy SET enabled=false;

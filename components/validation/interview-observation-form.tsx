@@ -22,11 +22,14 @@ const observationErrorMessage = (cause: unknown) => {
 
 export function InterviewObservationForm({
   sessionId,
+  plan,
   onDone,
 }: {
   sessionId: string;
+  plan?: { id: string; questions: Array<{ prompt: string }> };
   onDone: () => void | Promise<void>;
 }) {
+  const [questionPosition, setQuestionPosition] = useState("");
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("other");
   const [kind, setKind] = useState("summary");
@@ -63,6 +66,9 @@ export function InterviewObservationForm({
             statementKind: kind,
             content,
             ingestionKey: command.ingestionKey,
+            questionAttribution: plan && questionPosition
+              ? { planVersionId: plan.id, position: Number(questionPosition) }
+              : undefined,
           }),
         },
       );
@@ -80,6 +86,7 @@ export function InterviewObservationForm({
       await onDone();
       pendingCommand.current = null;
       setContent("");
+      setQuestionPosition("");
       setCategory("other");
       setKind("summary");
       setPolarity("");
@@ -137,6 +144,17 @@ export function InterviewObservationForm({
           <option value="inconclusive">Inconclusive</option>
         </SelectInput>
       </div>
+      {plan && (
+        <Field label="Planned question (optional)">
+          <SelectInput value={questionPosition} disabled={saving}
+            onChange={(event) => setQuestionPosition(event.target.value)}>
+            <option value="">General observation</option>
+            {plan.questions.map((question, index) => (
+              <option key={index + 1} value={index + 1}>{index + 1}. {question.prompt}</option>
+            ))}
+          </SelectInput>
+        </Field>
+      )}
       <Field
         label="Private observation content"
         helper="Immutable source evidence. Nothing is inferred from the working notes above."
