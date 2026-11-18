@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createScanArtifactFixtureDependencies } from "../scan-artifact-fixture.ts";
 
 let discoveryRuns = 0;
+let scanFailureAttempts = 0;
 const fixture = createScanArtifactFixtureDependencies();
 export async function mockAcceptanceProvider(url, init) {
   if (url.origin === "https://serpapi.com" && url.pathname === "/search.json" &&
@@ -60,7 +61,9 @@ export async function mockAcceptanceProvider(url, init) {
     }
   }
   if (stage === "problem" && prompt.includes("Fixture provider failure")) {
-    if (prompt.includes("Simulate connection loss")) throw new TypeError("Disposable connection lost after dispatch");
+    if (prompt.includes("Simulate connection loss") && ++scanFailureAttempts === 2) {
+      throw new TypeError("Disposable connection lost after dispatch");
+    }
     return Response.json({ error: { message: "Disposable upstream failure" } }, { status: 502 });
   }
   const input = { allowedEvidenceIds: [evidenceId] };

@@ -123,7 +123,7 @@ for (const method of publicMethods) {
           .find((value) => value.name.startsWith(method.table === "landing" ? "vl_" : "vp_"));
         expect(cookie).toBeDefined();
         const tampered = await route.fetch({ headers: {
-          ...await route.request().allHeaders(), cookie: `${cookie!.name}=${cookie!.value.slice(0, -1)}z`,
+          ...await route.request().allHeaders(), cookie: `${cookie!.name}=${cookie!.value.slice(0, -1)}${cookie!.value.endsWith("0") ? "1" : "0"}`,
         }, maxRedirects: 0 });
         expect(tampered.status()).toBe(400);
         expect(await count()).toMatchObject({ error: null, data: [] });
