@@ -3,13 +3,12 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
-import { requireOwnerAdministrator } from "@/lib/auth/owner-administrator";
 import { requireBetaMember } from "@/lib/auth/beta-membership";
-import { buildWeeklyIntelligencePrompt, getWeeklyIntelligencePeriod, WEEKLY_EXECUTION_CONTRACT_VERSION, WEEKLY_MODEL_ENVELOPE_LIMITS, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
+import { buildWeeklyIntelligencePrompt, WEEKLY_EXECUTION_CONTRACT_VERSION, WEEKLY_MODEL_ENVELOPE_LIMITS, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
 import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
-import { createWeeklyExecutionId, getWeeklyDiagnostic, runAuthoritativeWeeklyGenerationForUser, WeeklyDiagnosticError, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
+import { runAuthoritativeWeeklyGenerationForUser, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
 import { collectWeeklyExternalEvidence, createWeeklySerpApiProvider, normalizeWeeklyExternalHistoryRows, type WeeklyExternalEvidence } from "@/lib/weekly-external-evidence";
 import { extractWeeklyOpenRouterResponse, parseWeeklyModelResponse } from "@/lib/weekly-model-output";
@@ -39,10 +38,6 @@ function getSupabaseAdminClient() {
 
 function isKnowledgeEvolutionDiagnosticsEnabled() {
   return process.env.KNOWLEDGE_EVOLUTION_DIAGNOSTICS === "1";
-}
-
-function sanitizeWeeklyError() {
-  return "Could not generate weekly intelligence.";
 }
 
 function logWeeklyDiagnostic(event: string, payload: Record<string, unknown>) {
@@ -227,17 +222,6 @@ async function loadPriorWeeklyMonitoringRecords(userId: string, period: WeeklyPe
   });
 }
 
-async function getUserProfile(userId: string) {
-  const { data, error } = await getSupabaseAdminClient()
-    .from("user_profiles")
-    .select("plan,weekly_intelligence_enabled")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
-}
-
 async function getProblemsForRun(runId: string) {
   const { data, error } = await getSupabaseAdminClient()
     .from("weekly_detected_problems")
@@ -269,7 +253,7 @@ function safeAggregationDiagnosticPayload(payload: unknown) {
 }
 
 async function analyzeUserScopedWeeklySignals(input: {
-  period: ReturnType<typeof getWeeklyIntelligencePeriod>;
+  period: WeeklyPeriod;
   userEvidence: WeeklyEvidenceSource[];
   priorUserContext: WeeklyEvidenceSource[];
   sharedContext: WeeklySharedSource[];
@@ -295,56 +279,6 @@ async function analyzeUserScopedWeeklySignals(input: {
     modelOutput: parsed.output,
     responseMetadata: { responseContentPresent: true, responseContentLength: content.length, finishReason, responseFormatRequested: true, parserStrategy: parsed.parserStrategy, parseAttemptCount: parsed.parseAttemptCount, promptCharacterCount: prompt.length + 53, promptApproxTokenCount: Math.ceil((prompt.length + 53) / 4), maxOutputTokens: WEEKLY_MODEL_ENVELOPE_LIMITS.maxOutputTokens, requestedProblemCount: WEEKLY_MODEL_ENVELOPE_LIMITS.problems },
   };
-}
-
-export async function POST(req: Request) {
-  const weeklyExecutionId = createWeeklyExecutionId();
-  try {
-    logWeeklyDiagnostic("received", { weeklyExecutionId, entryPath: "button" });
-    const { user } = await requireOwnerAdministrator(req);
-    logWeeklyDiagnostic("authenticated", { weeklyExecutionId, entryPath: "button", userId: user.id });
-
-    let profile;
-    try {
-      profile = await getUserProfile(user.id);
-    } catch (error) {
-      throw new WeeklyDiagnosticError("weekly_profile_unavailable", "capability_checked", "Weekly profile lookup failed.", { cause: error, weeklyExecutionId });
-    }
-
-    if (!profile) {
-      throw new WeeklyDiagnosticError("weekly_profile_unavailable", "capability_checked", "Weekly profile is unavailable.", { weeklyExecutionId });
-    }
-
-    if (profile.weekly_intelligence_enabled === false) {
-      return NextResponse.json({ success: false, error: "Weekly Intelligence is not enabled for this plan.", code: "weekly_capability_denied", stage: "capability_checked", weeklyExecutionId }, { status: 403 });
-    }
-    logWeeklyDiagnostic("capability_checked", { weeklyExecutionId, entryPath: "button", userId: user.id, weeklyEnabled: true });
-
-    let period;
-    try {
-      period = getWeeklyIntelligencePeriod();
-    } catch (error) {
-      throw new WeeklyDiagnosticError("weekly_period_resolution_failed", "period_resolved", "Weekly period resolution failed.", { cause: error, weeklyExecutionId });
-    }
-    logWeeklyDiagnostic("period_resolved", { weeklyExecutionId, entryPath: "button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}` });
-
-    const result = await runWeeklyGenerationForUser(user.id, period, { weeklyExecutionId, entryPath: "button" });
-    logWeeklyDiagnostic("button_generation_result", { weeklyExecutionId, entryPath: "weekly_button", userId: user.id, periodKey: `${period.period_start}/${period.period_end}`, status: result.status, executionMode: result.executionMode, providerState: result.providerState, sourceDegraded: result.sourceCounts.sourceDegraded, generatedProblems: result.problems.length, externalSourcesPersisted: result.sourceCounts.externalSourcesPersisted, code: result.code, stage: result.stage });
-    const statusCode = result.status === "processing" ? 202 : 200;
-    return NextResponse.json(result, { status: statusCode });
-  } catch (error) {
-    const diagnostic = error instanceof AuthError
-      ? { code: "weekly_authentication_failed" as const, stage: "authenticated" as const, weeklyExecutionId, validationReason: undefined }
-      : getWeeklyDiagnostic(error, "response_completed", weeklyExecutionId);
-    console.error("Weekly intelligence error", { weeklyExecutionId, code: diagnostic.code, stage: diagnostic.stage, validationReason: diagnostic.validationReason, errorName: error instanceof Error ? error.name : "UnknownError" });
-
-    if (error instanceof AuthError) {
-      return NextResponse.json({ success: false, error: "Please sign in again to run Weekly Intelligence.", code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId }, { status: error.status });
-    }
-
-    const status = diagnostic.code === "weekly_capability_denied" ? 403 : 500;
-    return NextResponse.json({ success: false, error: sanitizeWeeklyError(), code: diagnostic.code, stage: diagnostic.stage, weeklyExecutionId, ...(diagnostic.validationReason ? { validationReason: diagnostic.validationReason } : {}) }, { status });
-  }
 }
 
 const SAFE_WEEKLY_RUN_FIELDS = "id,status,total_sources_analyzed,summary,period_start,period_end,created_at,execution_contract_version,execution_mode,external_provider_state,external_sources_persisted,source_degraded";

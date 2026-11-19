@@ -39,6 +39,11 @@ export async function mockAcceptanceProvider(url, init) {
     return completion(JSON.stringify({ summary: discoveryRuns === 4 ? "Disposable Discovery write rejection" : "Disposable Discovery result", problems }));
   }
   if (body.model === "openai/gpt-4.1-mini" && system === "Return valid JSON only. Never fabricate user evidence." &&
+      prompt?.includes("Weekly transport-loss fixture evidence")) {
+    appendFileSync(process.env.BETA_ACCEPTANCE_PROVIDER_LOG, "weekly-transport-loss\n");
+    throw new TypeError("Disposable Weekly transport loss");
+  }
+  if (body.model === "openai/gpt-4.1-mini" && system === "Return valid JSON only. Never fabricate user evidence." &&
       prompt?.includes("Weekly closure fixture evidence")) {
     const corrective = prompt.includes("Corrective regeneration instruction:");
     appendFileSync(process.env.BETA_ACCEPTANCE_PROVIDER_LOG, corrective ? "weekly-corrective\n" : "weekly-initial\n");

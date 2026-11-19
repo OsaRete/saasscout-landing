@@ -81,7 +81,7 @@ test("unavailable membership fails closed; missing/invalid identity never asks f
   assert.deepEqual(h.calls, ["auth"]);
 });
 
-for (const route of ["discover-opportunities", "collect-sources", "admin/users", "scan/acceptance", "scan/workflow", "weekly-intelligence", "saved-ideas", "validation/subjects"]) {
+for (const route of ["discover-opportunities", "collect-sources", "admin/users", "scan/acceptance", "scan/workflow", "saved-ideas", "validation/subjects"]) {
   test(`direct ${route} request stops at membership before body/provider/privileged work`, async (t) => {
     const h = harness(t);
     if (route.startsWith("validation/")) {
@@ -101,6 +101,48 @@ for (const route of ["discover-opportunities", "collect-sources", "admin/users",
     assert.deepEqual(h.calls, ["auth", "application_beta_access"]);
   });
 }
+
+test("direct weekly-intelligence reads require membership and expose no POST handler", async (t) => {
+  const h = harness(t);
+  const route = h.load("app/api/weekly-intelligence/route.ts") as {
+    GET(request: Request): Promise<Response>;
+    POST?: unknown;
+  };
+  assert.equal(route.POST, undefined, "Next.js rejects unsupported methods with HTTP 405");
+  const response = await route.GET(new Request("http://local.test/api/weekly-intelligence", {
+    headers: { Authorization: "Bearer password" },
+  }));
+  assert.equal(response.status, 403);
+  assert.deepEqual(h.calls, ["auth", "application_beta_access"]);
+});
+
+test("retired manual Weekly generation returns HTTP 410", async () => {
+  const { POST } = validationTestModule("app/api/generate-weekly-report/route.ts") as {
+    POST(): Promise<Response>;
+  };
+  assert.equal((await POST()).status, 410);
+});
+
+test("Weekly cron rejects unauthorized requests before privileged or provider work", async (t) => {
+  const previous = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "synthetic-cron-secret";
+  t.after(() => {
+    if (previous === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previous;
+  });
+  const privilegedWork = t.mock.fn(() => { throw new Error("Unauthorized cron entered privileged work"); });
+  const { GET } = validationTestModule("app/api/cron/route.ts", (specifier) => {
+    if (specifier === "@supabase/supabase-js") return { createClient: privilegedWork };
+    if (specifier === "../weekly-intelligence/route") return { runWeeklyGenerationForUser: privilegedWork };
+    return undefined;
+  }) as { GET(request: Request): Promise<Response> };
+  const url = "http://local.test/api/cron";
+  assert.equal((await GET(new Request(url))).status, 401);
+  assert.equal((await GET(new Request(url, {
+    headers: { Authorization: "Bearer wrong-secret" },
+  }))).status, 401);
+  assert.equal(privilegedWork.mock.callCount(), 0);
+});
 
 test("scheduled membership uses the same persisted predicate and denies revoked users", async () => {
   const { requireBetaMember } = validationTestModule("lib/auth/beta-membership.ts") as {

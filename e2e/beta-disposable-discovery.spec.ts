@@ -32,8 +32,21 @@ test("Discovery persists zero-result runs, rejects ambiguous replay and charges 
   await page.goto(`${app}/login`);
   await page.getByPlaceholder("Email address").fill(email);
   await page.getByPlaceholder("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "SaaSScout Intelligence Control Center" })).toBeVisible();
+  const signInTimeout = 15_000;
+  const [signIn] = await Promise.all([
+    page.waitForResponse((response) =>
+      response.request().method() === "POST" &&
+      response.url() === `${backend}/auth/v1/token?grant_type=password`,
+    { timeout: signInTimeout }),
+    page.getByRole("button", { name: "Sign in", exact: true }).click(),
+  ]);
+  expect(signIn.status(), "Disposable password sign-in should succeed").toBe(200);
+  await expect(page, "Sign-in should navigate to the authenticated dashboard").toHaveURL(
+    `${app}/dashboard`, { timeout: signInTimeout },
+  );
+  await expect(page.getByRole("heading", { name: "SaaSScout Intelligence Control Center", exact: true }),
+    "Dashboard should finish checking Beta access",
+  ).toBeVisible({ timeout: signInTimeout });
   await page.goto(`${app}/discover`);
 
   let lostKey: string | undefined;

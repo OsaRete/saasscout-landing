@@ -139,9 +139,11 @@ END $$;
 ROLLBACK;`);
     console.log("Interview attribution upgrade preserved existing unattributed observations.");
   } else {
-    await runBrowser(["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-scan.spec.ts",
-      "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-discovery.spec.ts",
-      "e2e/beta-disposable-validation.spec.ts"]);
+    const specs = ["e2e/beta-disposable-account.spec.ts", "e2e/beta-disposable-survey.spec.ts", "e2e/beta-disposable-validation.spec.ts"];
+    if (!process.argv.includes("--launch-readiness")) {
+      specs.push("e2e/beta-disposable-scan.spec.ts", "e2e/beta-disposable-discovery.spec.ts");
+    }
+    await runBrowser(specs);
 
     const weeklyEmail = `weekly-${connection.fixture_id}-${randomBytes(4).toString("hex")}@example.test`;
     const weeklyPassword = randomBytes(24).toString("base64url");

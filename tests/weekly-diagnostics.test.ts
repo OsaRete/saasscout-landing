@@ -207,15 +207,11 @@ test("invalid evidence references are diagnosed but never retried", async () => 
   assert.equal(modelCalls, 1);
 });
 
-test("safe diagnostics contract is wired through button, cron, UI, and Vercel schedule", () => {
-  const buttonRoute = readFileSync("app/api/weekly-intelligence/route.ts", "utf8");
+test("safe diagnostics contract is wired through cron and the Vercel schedule", () => {
   const cronRoute = readFileSync("app/api/cron/route.ts", "utf8");
-  const weeklyPage = readFileSync("app/weekly/page.tsx", "utf8");
   const vercel = JSON.parse(readFileSync("vercel.json", "utf8"));
 
-  assert.match(buttonRoute, /runWeeklyGenerationForUser\(user\.id, period, \{ weeklyExecutionId, entryPath: "button" \}\)/);
   assert.match(cronRoute, /runWeeklyGenerationForUser\(user\.user_id, period, \{ weeklyExecutionId, entryPath: "cron" \}\)/);
-  assert.match(weeklyPage, /getWeeklyRunMessage/);
   assert.equal(vercel.crons[0].path, "/api/cron");
   assert.equal(vercel.crons[0].schedule, "0 8 * * 1");
 });
