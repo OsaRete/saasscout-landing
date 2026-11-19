@@ -5,7 +5,11 @@ import { expect, test } from "@playwright/test";
 
 const app = "http://127.0.0.1:3100";
 const backend = "http://127.0.0.1:56321";
-test.use({ launchOptions: { executablePath: process.env.BETA_ACCEPTANCE_CHROMIUM }, serviceWorkers: "block" });
+test.use({
+  launchOptions: { executablePath: process.env.BETA_ACCEPTANCE_CHROMIUM },
+  serviceWorkers: "block",
+  timezoneId: "UTC",
+});
 
 test("configured cron persists an insufficient-context report and the founder can browse completed history", async ({ page }) => {
   test.skip(process.env.BETA_ACCEPTANCE_BROWSER !== "1" || !process.env.BETA_ACCEPTANCE_WEEKLY_USER_ID,
