@@ -1,4 +1,5 @@
 "use client";
+import { PublicationExpiration } from "./publication-expiration";
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -266,6 +267,9 @@ export function LandingWorkspace({
               running. Save, mark ready and start the experiment using the
               controls above.
             </p>
+            {data.publication && (
+              <PublicationExpiration expiresAt={data.publication.expiresAt} />
+            )}
             {!capabilities.publicLandingParticipation && (
               <p className="mb-3 text-sm text-amber-200">
                 Public participation is disabled for this release.

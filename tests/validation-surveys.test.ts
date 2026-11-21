@@ -238,7 +238,8 @@ test("public UX and workspace preserve approved V6 boundaries", () => {
     "required={q.required}",
     "disabled={busy || stopped || waiting}",
     "Thank you",
-    "Do not include sensitive personal information",
+    "SURVEY_NOTICE",
+    "SURVEY_CONSENT_LABEL",
     "crypto.randomUUID",
     "Survey unavailable",
   ])
@@ -424,7 +425,7 @@ test("submission lifecycle locking is deterministic and has no V3 reverse-order 
 
 test("public projection fails closed for non-running experiments without exposing lifecycle", () => {
   assert.match(server, /from\("validation_experiment_versions"\)/);
-  assert.match(server, /eq\("family","survey"\)\.eq\("lifecycle","running"\)/);
+  assert.match(server, /eq\("family",\s*"survey"\)\s*\.eq\("lifecycle",\s*"running"\)/);
   assert.match(server, /This survey is closed or unavailable\./);
   const publicProjection = server.slice(
     server.indexOf("async resolve"),

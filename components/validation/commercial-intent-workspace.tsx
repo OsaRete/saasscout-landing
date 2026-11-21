@@ -1,4 +1,5 @@
 "use client";
+import { PublicationExpiration } from "./publication-expiration";
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -374,11 +375,14 @@ export function CommercialIntentWorkspace({
       <div className="space-y-3 rounded-xl border border-cyan-400/20 p-4">
         <p>
           {data.publication
-            ? `Published · revision ${data.publication.revision} · collection ${lifecycle === "running" ? "open" : "closed"}`
+            ? `Published · revision ${data.publication.revision} · experiment ${lifecycle === "running" ? "running" : "closed"}`
             : data.publicationState === "unpublished"
               ? "Unpublished · no active participant link"
               : "Draft · preview before publication"}
         </p>
+        {data.publication && (
+          <PublicationExpiration expiresAt={data.publication.expiresAt} />
+        )}
         <p className="text-xs text-slate-400">
           Save, preview, mark ready and start the experiment above, then
           publish. Editing leaves the current publication unchanged. Anyone with

@@ -1,4 +1,5 @@
 "use client";
+import { PublicationExpiration } from "./publication-expiration";
 import { useValidationCapabilities } from "./release-capabilities";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -30,6 +31,7 @@ type Pub = {
   id: string;
   survey_plan_version_id: string;
   state: "published" | "revoked";
+  expires_at: string;
 };
 type Submission = { id: string; survey_plan_version_id: string };
 type Answer = {
@@ -464,6 +466,7 @@ export function SurveyWorkspace({
         <p className="mt-2 text-sm text-slate-400">
           {publication ? "Published" : "Unpublished or closed"}
         </p>
+        {publication && <PublicationExpiration expiresAt={publication.expires_at} />}
         <div className="mt-3 flex gap-2">
           {capabilities.publicSurveyParticipation &&
             current &&
