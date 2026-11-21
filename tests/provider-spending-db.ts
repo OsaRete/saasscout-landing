@@ -32,6 +32,35 @@ const reserve=(a:ReturnType<typeof args>,slots=1)=>rpc('application_reserve_prov
 const count=()=>Number(sql('select count(*) from public.application_provider_reservations;'));
 const generous=()=>sql('UPDATE public.application_spending_policy SET enabled=true,total_requests=10000,openrouter_requests=10000,serpapi_requests=10000,x_requests=10000,search_requests=10000,user_ai_requests=10000,user_search_requests=10000,max_concurrent=10000,weekly_max_executions=2;');
 const checks:string[]=[];
+const dispatch=(a: ReturnType<typeof args>)=>rpc('application_dispatch_provider',{...a,p_slot:1});
+const finish=(a: ReturnType<typeof args>)=>rpc('application_finish_provider',{...a,p_slot:1});
+const priorMonth="(date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')-interval '1 second'";
+
+if (manifest.phase==='upgrade') {
+  generous();
+  const pending=args(ordinary,'openrouter','scan');
+  const unresolved=args(owner,'serpapi','weekly');
+  assert.equal(await reserve(pending,2),true);
+  assert.equal(await reserve(unresolved),true);
+  assert.equal(await dispatch(unresolved),true);
+  sql(`UPDATE public.application_provider_reservations SET reserved_at=${priorMonth},
+    dispatched_at=CASE WHEN dispatched_at IS NOT NULL THEN ${priorMonth} END`);
+  const ledger=()=>sql('SELECT jsonb_agg(to_jsonb(r) ORDER BY request_id,slot) FROM public.application_provider_reservations r;');
+  const beforeUpgrade=ledger();
+  sql('UPDATE public.application_spending_policy SET max_concurrent=1;');
+  assert.equal(await reserve(args()),false,'Old admission counts abandoned rows against concurrency');
+  sql(readFileSync('supabase/migrations/20261124000000_provider_dispatch_concurrency.sql','utf8'));
+  assert.equal(ledger(),beforeUpgrade,'Upgrade preserves prior-month pending and dispatched rows byte-for-byte');
+  const next=args();
+  assert.equal(await reserve(next),true);
+  assert.equal(await dispatch(next),false,'Prior-month unresolved dispatch still occupies the only slot');
+  assert.equal(await finish(pending),false,'An undispatched row cannot be finished');
+  assert.equal(await finish(unresolved),true,'A legitimate terminal transition releases the slot');
+  assert.equal(await dispatch(pending),false,'Prior-month pending work cannot dispatch even with room');
+  assert.equal(await dispatch(next),true,'Prior-month pending rows do not occupy live slots');
+  assert.equal(await finish(next),true);
+  checks.push('populated upgrade preserves the ledger and prior-month dispatch semantics');
+}
 
 sql('UPDATE public.application_spending_policy SET enabled=false;');
 assert.equal(await reserve(args(owner)),false);
@@ -48,7 +77,8 @@ assert.equal(await reserve(args(ordinary, 'serpapi')), true, 'Candidate policy a
 checks.push('candidate request policy admits OpenRouter and SerpAPI reservations while denying X');
 generous();
 const before=count();
-sql(`UPDATE public.application_spending_policy SET total_requests=${before+1};`);
+const currentCount=()=>Number(sql("select count(*) from public.application_provider_reservations where reserved_at >= date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';"));
+sql(`UPDATE public.application_spending_policy SET total_requests=${currentCount()+1};`);
 const last=await Promise.all(Array.from({length:12},(_,i)=>reserve(args(i%2?owner:ordinary,i%3?'openrouter':'serpapi',i%2?'weekly':'discovery'))));
 assert.equal(last.filter(Boolean).length,1);assert.equal(count(),before+1);
 assert.equal(await reserve(args(owner)),false);checks.push('cross-user/workflow/provider last-unit race; owner has no global exemption');
@@ -58,6 +88,11 @@ assert.equal(same.filter(Boolean).length,1);
 const dispatches=await Promise.all(Array.from({length:12},()=>rpc('application_dispatch_provider',{...duplicate,p_slot:1})));
 assert.equal(dispatches.filter(Boolean).length,1);checks.push('durable same-key reservation and dispatch races');
 const lowered=args(owner);assert.equal(await reserve(lowered),true);
+assert.equal(await rpc('application_dispatch_provider',{...lowered,p_slot:null}),false);
+assert.equal(await dispatch({...lowered,p_user_id:randomUUID()}),false);
+sql('UPDATE public.application_spending_policy SET enabled=false;');
+assert.equal(await dispatch(lowered),false,'An existing reservation cannot bypass the kill switch');
+generous();
 sql('UPDATE public.application_spending_policy SET openrouter_requests=0;');
 assert.equal(await rpc('application_dispatch_provider',{...lowered,p_slot:1}),false,'Lowered limits also stop existing reservations');
 generous();
@@ -67,10 +102,25 @@ sql(`UPDATE public.application_provider_reservations SET reserved_at=(date_trunc
 assert.equal(await reserve(old),false,'Old identity cannot reserve again in a new month');
 assert.equal(await rpc('application_dispatch_provider',{...old,p_slot:1}),false,'Old reservations cannot finance next-month dispatch');
 checks.push('lowered policy and UTC rollover cannot revive old reserved dispatch');
-const active=Number(sql('select count(*) from public.application_provider_reservations where finished_at is null;'));
+const live=()=>Number(sql('select count(*) from public.application_provider_reservations where dispatched_at is not null and finished_at is null;'));
+const active=live();
 sql(`UPDATE public.application_spending_policy SET max_concurrent=${active+1};`);
-assert.equal((await Promise.all(Array.from({length:10},()=>reserve(args())))).filter(Boolean).length,1);
-assert.equal(await reserve(args(owner)),false);checks.push('global concurrency includes reserved and uncertain operations');
+const candidates=[args(ordinary,'openrouter','discovery'),args(owner,'serpapi','weekly')];
+for (const candidate of candidates) assert.equal(await reserve(candidate),true);
+const claims=await Promise.all(candidates.map(dispatch));
+assert.equal(claims.filter(Boolean).length,1,'Exactly one claim takes the final live slot');
+assert.equal(live(),active+1);
+assert.equal(await dispatch(candidates[claims.indexOf(true)]),false,'Duplicate claim cannot dispatch');
+assert.equal(await finish(candidates[claims.indexOf(true)]),true);
+assert.equal(await dispatch(candidates[claims.indexOf(false)]),true,'Terminal completion frees the live slot');
+assert.equal(await finish(candidates[claims.indexOf(false)]),true);
+assert.equal(live(),active);
+const snapshot=args();
+assert.equal(await reserve(snapshot),true);
+assert.match(sql(`BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT public.application_dispatch_provider('${ordinary}','discovery','${snapshot.p_request_id}','openrouter',1); ROLLBACK;`),/\nf\n/);
+assert.equal(await dispatch(snapshot),true,'The same valid claim succeeds at the RPC isolation level');
+assert.equal(await finish(snapshot),true);
+checks.push('shared last-slot dispatch race, duplicate denial and terminal release');
 generous();
 for(const [column,provider] of [['openrouter_requests','openrouter'],['search_requests','serpapi'],['serpapi_requests','serpapi'],['x_requests','x'],['user_ai_requests','openrouter'],['user_search_requests','serpapi']] as const) {
  sql(`UPDATE public.application_spending_policy SET ${column}=0;`);
@@ -92,6 +142,11 @@ generous();
 const ambiguous={userId:owner,workflow:'collect-sources' as const,requestId:randomUUID()};
 await withProviderBudget(ambiguous,()=>assert.rejects(dispatchProviderFetch(search,{},async()=>{throw new Error('ambiguous');})),client);
 assert.equal(sql(`select count(*) from public.application_provider_reservations where request_id='${ambiguous.requestId}:1' and dispatched_at is not null and finished_at is null;`),'1');
+sql(`UPDATE public.application_spending_policy SET max_concurrent=${live()};`);
+const blocked={...identity,requestId:randomUUID()};
+await withProviderBudget(blocked,()=>assert.rejects(dispatchProviderFetch(search,{},transport)),client);
+assert.equal(outgoing,1,'A live-capacity denial never reaches out to the provider');
+assert.equal(sql(`select count(*) from public.application_provider_reservations where request_id='${blocked.requestId}:1' and dispatched_at is null;`),'1');
 checks.push('ambiguous dispatch retains charged active row');
 // Budget denial must not change ordinary admission/history counters, nor create a pending Scan.
 const scanBefore=sql(`select scans_used from public.user_profiles where user_id='${ordinary}';`);
@@ -109,14 +164,20 @@ assert.equal(sql(`select scans_used from public.user_profiles where user_id='${o
 assert.equal(sql(`select count(*) from public.scan where user_id='${ordinary}';`),rowsBefore);
 generous();
 const beforeScanReserve=count();
-sql(`UPDATE public.application_spending_policy SET total_requests=${Number(sql("select count(*) from public.application_provider_reservations where reserved_at >= date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';"))+1};`);
+sql(`UPDATE public.application_spending_policy SET total_requests=${currentCount()+1};`);
 assert.equal((await rpc('accept_scan_request_v2',scanArgs))[0].rejection_code,'global_budget_unavailable','One remaining unit cannot finance a two-call Scan');
 assert.equal(count(),beforeScanReserve,'No partial Scan reservation');
 assert.equal(sql(`select scans_used from public.user_profiles where user_id='${fresh}';`),'0');
 generous();
+const liveBeforeScan=live();
+sql(`UPDATE public.application_spending_policy SET max_concurrent=${liveBeforeScan};`);
+const monthlyBeforeScan=currentCount();
 const admitted=(await rpc('accept_scan_request_v2',scanArgs))[0];assert.equal(admitted.accepted,true);
-assert.equal(sql(`select count(*) from public.application_provider_reservations where workflow='scan' and request_id='${admitted.scan_id}';`),'2');
+assert.equal(sql(`select count(*) from public.application_provider_reservations where workflow='scan' and request_id='${admitted.scan_id}' and dispatched_at is null;`),'2');
+assert.equal(live(),liveBeforeScan,'Abandoned/pre-dispatch Scan work occupies no live capacity');
+assert.equal(currentCount(),monthlyBeforeScan+2,'Both unused Scan units remain charged');
 assert.equal((await rpc('accept_scan_request_v2',scanArgs))[0].scan_id,admitted.scan_id);
+generous();
 checks.push('Scan atomic two-slot reservation, no quota/pending row on denial, duplicate reuse');
 // Weekly retry exhaustion is cumulative per durable period; failed/stale reclaims each increment.
 const weekly={p_user_id:owner,p_period_start:'2026-11-09T00:00:00Z',p_period_end:'2026-11-16T00:00:00Z',p_timezone:'UTC',p_stale_before:'2026-11-01T00:00:00Z'};
@@ -133,6 +194,8 @@ sql(`update public.weekly_intelligence_runs set status='completed' where id='${f
 assert.equal((await rpc('claim_weekly_intelligence_run',weekly))[0].claim_status,'completed');
 checks.push('Weekly failed/stale cumulative ceiling, concurrent reclaim, processing and completed reuse with budgets disabled');
 assert.equal(sql("select has_function_privilege('authenticated','public.application_reserve_provider(uuid,text,text,text,integer)','execute');"),'f');
+assert.equal(sql("select has_function_privilege('authenticated','public.application_dispatch_provider(uuid,text,text,text,integer)','execute');"),'f');
+assert.equal(sql("select has_function_privilege('anon','public.application_dispatch_provider(uuid,text,text,text,integer)','execute');"),'f');
 assert.equal(sql("select has_table_privilege('service_role','public.application_spending_policy','update');"),'f');
 assert.equal(sql("select has_table_privilege('authenticated','public.application_provider_reservations','select');"),'f');
 assert.equal(sql("select has_table_privilege('service_role','public.application_provider_reservations','update');"),'f');

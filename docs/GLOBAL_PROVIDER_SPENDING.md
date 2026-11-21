@@ -89,17 +89,18 @@ Transport sequence numbers distinguish initial/replacement/corrective attempts.
   includes the still-disabled Validation clients. HTTP/transport errors never
   gain an unmetered retry. Retired endpoints remain retired.
 
-Concurrency includes **all unfinished reservations across months**, including
-reserved-but-unused Scan calls. Only a fully read successful HTTP response
-settles its concurrency slot; its monthly usage remains charged. HTTP errors,
-timeouts, body failures, crashes and uncertain claims retain both charge and
-slot. There is no lease expiry, auto-refund, automatic replay or ledger cleanup.
-This deliberately favors bounded spend over availability. A partially failed
-Scan can strand its unused second slot; provider incidents can stop all new work.
-That is a visible operational stop, not permission to clear history. Previously
-reserved work cannot dispatch in a new UTC month; old unresolved work continues
-to occupy concurrency. Recovery requires owner investigation/forward repair,
-not a timestamp lease or an automatic retry job.
+Live concurrency includes **dispatched, unfinished reservations across all
+months**. Unused Scan slots retain their monthly charge. The dispatch RPC
+counts live work under the same singleton lock it holds through the irreversible
+claim. Reserve and dispatch require Read Committed, the PostgREST default, so a
+waiting claim sees the preceding transaction's ledger writes. Previously
+reserved work can only dispatch in its reservation's UTC month.
+
+Only a fully read successful HTTP response settles the slot through the
+existing transport. HTTP errors, timeouts, body failures, crashes and uncertain
+claims retain both charge and slot, including across month boundaries. Provider
+incidents can still stop new dispatches. Any manual recovery requires verified
+cessation and a separately reviewed forward operation.
 
 ## Required owner configuration
 
@@ -116,7 +117,7 @@ unlimited. No limits are enabled by this migration.
 | `search_requests` | Combined monthly SerpAPI/X searches | 400 |
 | `user_ai_requests` | Monthly AI reservations per user, including owner/Weekly | 15 |
 | `user_search_requests` | Monthly searches per user, including owner/Weekly | 60 |
-| `max_concurrent` | All unfinished reservations project-wide | 8 |
+| `max_concurrent` | Dispatched, unfinished reservations project-wide | 8 |
 | `weekly_max_executions` | Cumulative executions per user-period, including initial | 2 |
 | `enabled` | Global dispatch permission | false until separately approved |
 
@@ -163,9 +164,8 @@ select date_trunc('month',reserved_at at time zone 'UTC') as utc_month,
        count(*) filter(where dispatched_at is not null) as claimed,
        count(*) filter(where finished_at is not null) as settled
 from public.application_provider_reservations group by 1,2 order by 1 desc,2;
-select workflow,provider,count(*) as active,
-       count(*) filter(where dispatched_at is null) as unused_reserved,
-       count(*) filter(where dispatched_at is not null) as unresolved_dispatched
+select workflow,provider,count(*) filter(where dispatched_at is not null) as active,
+       count(*) filter(where dispatched_at is null) as unused_reserved
 from public.application_provider_reservations where finished_at is null
  group by 1,2;
 select user_id,provider,count(*) from public.application_provider_reservations
@@ -192,6 +192,27 @@ three service-only RPCs, one Weekly counter column, and replaces only existing
 Scan admission and Weekly claim bodies. It seeds no user, budget or activation.
 Install transactionally through the reviewed process; verify owners/ACLs and
 refresh PostgREST schema cache. Do not use blind migration push/history repair.
+
+### P1-1 dispatch-concurrency rollout
+
+Production rollout is **NO-GO** until the operator verifies that older
+deployments with active provider credentials cannot bypass the guarded
+dispatcher, or contains them. Check immutable URLs, aliases, protection bypasses
+and scheduled ingress. Ready status and Standard Protection alone leave
+effective reachability unknown.
+
+After exact-head review and CI, verify the active artifact's claim-before-fetch
+boundary, the installed spending predecessor, RPC owners/grants and the
+PostgREST Read Committed default. Hold paid ingress and cron through the
+cutover and let outstanding requests drain where possible. Retain all uncertain
+claims. Apply `20261124000000_provider_dispatch_concurrency.sql` as one
+transaction. It replaces two RPC bodies and preserves signatures, grants and
+ledger data. The guarded dispatcher at `2a43b8031f8216b8eec4d0eb801fd9fbd00f9633`
+uses the same RPCs before and after the migration, so this fix requires no
+application deployment. Verify the installed bodies, service-only privileges
+and no-paid-call denial behavior before restoring ingress. A guarded
+application rollback can use the same RPCs. For a database regression, hold
+ingress and use a reviewed forward repair that preserves the ledger.
 
 Before any approved cutover, follow OPEN_FREE_BETA's coordinated maintenance and
 rollback plan: contain all older service-role deployments/aliases, suspend cron,
