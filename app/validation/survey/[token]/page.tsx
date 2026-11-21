@@ -7,5 +7,5 @@ export default async function SurveyPage(props: {
   if (!validationOperationAllowed("survey.resolve", "GET"))
     return <ValidationUnavailable />;
   const { token } = await props.params;
-  return <PublicSurvey token={token} />;
+  return <PublicSurvey key={token} token={token} />;
 }

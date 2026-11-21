@@ -25,7 +25,7 @@ export type CommercialIntentDashboard = {
     revision: number;
     content: CommercialIntentContent;
   } | null;
-  publication: { id: string; revision: number; publishedAt: string } | null;
+  publication: { id: string; revision: number; publishedAt: string; expiresAt: string } | null;
   metrics: {
     views: number;
     submissions: number;

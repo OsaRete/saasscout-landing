@@ -1,6 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
 import { usePublicSubmission } from "@/components/validation/use-public-submission";
+import {
+  SURVEY_CONSENT_LABEL,
+  SURVEY_NOTICE,
+  SURVEY_NOTICE_VERSION,
+} from "@/lib/validation/survey-participation";
+
 type Question = {
   questionRef: string;
   prompt: string;
@@ -14,7 +20,6 @@ type Question = {
 type Survey = {
   title: string;
   purpose: string;
-  notice: string;
   questions: Question[];
 };
 export default function PublicSurvey({ token }: { token: string }) {
@@ -23,6 +28,7 @@ export default function PublicSurvey({ token }: { token: string }) {
       Record<string, string | string[] | number>
     >({}),
     [status, setStatus] = useState<"loading" | "ready" | "closed">("loading");
+  const [consent, setConsent] = useState(false);
   const {
     submit: send,
     busy,
@@ -51,9 +57,12 @@ export default function PublicSurvey({ token }: { token: string }) {
   }
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!consent) return;
     await send(
       `/api/public/surveys/${encodeURIComponent(token)}/responses`,
       () => ({
+        consent,
+        consentNoticeVersion: SURVEY_NOTICE_VERSION,
         idempotencyKey: crypto.randomUUID(),
         answers: survey!.questions
           .filter(
@@ -102,10 +111,6 @@ export default function PublicSurvey({ token }: { token: string }) {
           {survey!.title}
         </h1>
         <p className="mt-3 leading-7 text-slate-600">{survey!.purpose}</p>
-        <p className="mt-5 rounded-xl bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-          {survey!.notice ||
-            "This survey is collecting research responses for idea validation. Do not include sensitive personal information."}
-        </p>
       </header>
       <form onSubmit={submit} className="mt-8 space-y-8">
         {survey!.questions.map((q, i) => (
@@ -129,6 +134,32 @@ export default function PublicSurvey({ token }: { token: string }) {
             />
           </fieldset>
         ))}
+        <div className="space-y-3 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+          <p id="survey-participation-notice">
+            {SURVEY_NOTICE}{" "}
+            <a
+              href="/privacy"
+              referrerPolicy="no-referrer"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-violet-700 underline"
+            >
+              Privacy Policy (opens in a new tab)
+            </a>
+          </p>
+          <label className="flex min-h-11 items-start gap-3 py-2 font-medium text-slate-900">
+            <input
+              type="checkbox"
+              required
+              checked={consent}
+              disabled={busy || held || stopped}
+              onChange={(event) => setConsent(event.target.checked)}
+              aria-describedby="survey-participation-notice"
+              className="mt-1 size-4 shrink-0 accent-violet-700"
+            />
+            {SURVEY_CONSENT_LABEL}
+          </label>
+        </div>
         {held && !stopped && (
           <p className="text-sm text-amber-900">
             Your response is held unchanged for a safe retry.

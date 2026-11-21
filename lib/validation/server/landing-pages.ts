@@ -18,7 +18,7 @@ export const landingHash = (s: string) =>
   createHash("sha256").update(s).digest("hex");
 export type LandingDashboard = {
   page: { id: string; revision: number; content: LandingContent } | null;
-  publication: { id: string; revision: number; publishedAt: string } | null;
+  publication: { id: string; revision: number; publishedAt: string; expiresAt: string } | null;
   metrics: {
     views: number;
     visitors: number;

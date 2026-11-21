@@ -579,13 +579,25 @@ test("public survey success exposes only participant-safe fields and derives sub
     JSON.stringify(resolved),
     /PRIVATE_SENTINEL|owner_id|hypothesis_id|token_hash/,
   );
+  assert.equal(mock.writes.shift()?.name, "validation_admit_public_survey_resolution");
+  for (const consent of [undefined, false, "true", 1, true]) {
+    await assert.rejects(
+      () => service.submit(token, { consent, consentNoticeVersion: consent === true ? "obsolete" : "survey-participation-v1" }),
+      (e: unknown) => (e as { status: number; submissionRejected: boolean }).status === 400 &&
+        (e as { submissionRejected: boolean }).submissionRejected === true,
+    );
+  }
+  assert.equal(mock.writes.length, 0);
   const accepted = await service.submit(token, {
+    consent: true,
+    consentNoticeVersion: "survey-participation-v1",
     idempotencyKey: "command-key-123456",
     answers: [{ questionRef: "question_1", value: "A real response" }],
   });
   assert.deepEqual(accepted, { accepted: true, duplicate: false });
   assert.equal(mock.writes[0].name, "validation_submit_public_survey");
   assert.equal(mock.writes[0].args.p_token_hash, tokenHash);
+  assert.equal(mock.writes[0].args.p_consent_notice_version, "survey-participation-v1");
   assert.equal(
     mock.writes[0].args.p_network_hash,
     createHash("sha256").update(`${token}:unknown`).digest("hex"),
@@ -621,7 +633,7 @@ test("public token cannot resolve a different-owner or non-survey experiment", a
       () => new SurveyService(mock.db).resolve(token),
       (e: unknown) => (e as { status: number }).status === 404,
     );
-    assert.equal(mock.writes.length, 0);
+    assert.deepEqual(mock.writes.map(({ name }) => name), ["validation_admit_public_survey_resolution"]);
   }
 });
 test("internal resource helpers deny before reads when private mode is disabled", async () => {

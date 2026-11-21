@@ -23,7 +23,7 @@ export type ExternalMvpDashboard = {
     revision: number;
     content: ExternalMvpContent;
   } | null;
-  publication: { id: string; revision: number; publishedAt: string } | null;
+  publication: { id: string; revision: number; publishedAt: string; expiresAt: string } | null;
   metrics: {
     submissions: number;
     contacts: number;

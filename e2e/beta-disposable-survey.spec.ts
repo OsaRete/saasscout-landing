@@ -103,7 +103,7 @@ test("anonymous survey commits once after lost response, then owner revokes it",
   const revokeUrl = `${app}/api/validation/survey-publications/${published.id}/revoke`;
   expect((await page.request.post(revokeUrl, { headers: other.headers, maxRedirects: 0 })).status()).toBe(404);
 
-  const submissions = () => admin.from("validation_survey_submissions").select("id,owner_id,experiment_version_id").eq("publication_id", published.id);
+  const submissions = () => admin.from("validation_survey_submissions").select("id,owner_id,experiment_version_id,consent_notice_version,submitted_at").eq("publication_id", published.id);
   let submittedBody: string | null = null;
   let committedStatus: number | undefined;
   await page.route("**/api/public/surveys/*/responses", async (route) => {
@@ -128,13 +128,25 @@ test("anonymous survey commits once after lost response, then owner revokes it",
   await page.getByRole("spinbutton").fill("2");
   await page.getByRole("radio", { name: "Weekly" }).check();
   await page.getByRole("checkbox", { name: "Spreadsheet" }).check();
+  const consent = page.getByRole("checkbox", { name: "I agree to share my answers with the survey creator for this research.", exact: true });
+  await expect(consent).not.toBeChecked();
+  await submit.click();
+  await expect(consent).toBeFocused();
+  expect(submittedBody).toBeNull();
+  await consent.check();
   await submit.click();
   const retry = page.getByRole("button", { name: "Retry same response" });
   await expect(retry).toBeVisible();
   expect(committedStatus).toBe(200);
   const beforeRetry = await submissions();
   expect(beforeRetry).toMatchObject({ error: null, data: [{ owner_id: owner.id, experiment_version_id: experiment.version.id }] });
+  expect(beforeRetry.data![0].consent_notice_version).toBe("survey-participation-v1");
+  expect(beforeRetry.data![0].submitted_at).toEqual(expect.any(String));
+  const retried = page.waitForResponse((response) => response.url().endsWith("/responses") && response.request().method() === "POST");
   await retry.click();
+  const retryResponse = await retried;
+  expect(retryResponse.status()).toBe(200);
+  expect(await retryResponse.json()).toMatchObject({ data: { accepted: true, duplicate: true } });
   await expect(page.getByText("Your research response was submitted successfully.")).toBeVisible();
   expect(await submissions()).toMatchObject({ error: null, data: beforeRetry.data });
   const answers = await admin.from("validation_survey_answers").select("id").eq("submission_id", beforeRetry.data![0].id);

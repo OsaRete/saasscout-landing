@@ -23,7 +23,7 @@ export type PrototypeDashboard = {
     content: PrototypeContent;
     removed: boolean;
   } | null;
-  publication: { id: string; revision: number; publishedAt: string } | null;
+  publication: { id: string; revision: number; publishedAt: string; expiresAt: string } | null;
   metrics: {
     events: number;
     browsers: number;

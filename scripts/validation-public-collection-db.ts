@@ -50,6 +50,8 @@ assert.equal(
   ),
   "t",
 );
+const participationMigration =
+  "20261123000000_validation_public_participation.sql";
 if (process.argv.includes("--prepare")) {
   await sql(
     readFileSync(
@@ -73,11 +75,13 @@ if (process.argv.includes("--prepare")) {
       file === "20261120000000_validation_public_collection_bounds.sql"
     )
       continue;
+    // Exercise the original collection contract before the consent/lifecycle upgrade.
+    if (file === participationMigration) continue;
     // Match membership psql / CLI execution: the migration must own any required transaction.
     await sql(readFileSync(new URL(file, directory), "utf8"));
   }
   console.log(
-    "PASS complete application migration chain on disposable PostgreSQL (synthetic Auth schema)",
+    "PASS pre-participation migration chain on disposable PostgreSQL (synthetic Auth schema)",
   );
 }
 const migrationApplied =
@@ -566,6 +570,208 @@ assert.equal(
 console.log(
   "PASS retired legacy Survey entry fails closed for old application artifacts",
 );
+// Upgrade a populated catalog with open links, then prove the cutoff covers
+// each public operation before verifying normal collection with fresh links.
+const surveyPlan = await sql(
+  `select id from validation_survey_plan_versions where experiment_version_id='${versions.survey}'`,
+);
+const oldSurvey = createHash("sha256")
+  .update("legacy survey publication")
+  .digest("hex");
+const newSurvey = createHash("sha256")
+  .update("active survey publication")
+  .digest("hex");
+const publishSurvey = (token: string) =>
+  `select validation_publish_survey('${owner}','${surveyPlan}','${token}')`;
+await sql(`set role service_role;${publishSurvey(oldSurvey)}`);
+
+const publicationCases = [
+  {
+    method: "landing",
+    version: versions.landing,
+    revision: 1,
+    actions: ["resolve", "view", "submit"],
+    args: ",null,null,null,false,null",
+  },
+  {
+    method: "prototype",
+    version: versions.prototype,
+    revision: 1,
+    actions: ["resolve", "event", "submit"],
+    args: ",null,null,null,false,null",
+  },
+];
+for (const method of ["external_mvp", "commercial_intent"]) {
+  const family = method;
+  const version = JSON.parse(
+    await sql(
+      `select validation_create_experiment('${owner}','${subject}','${hypothesis}','${family}','["operators"]','Research','{}','[]','anonymous_notes')`,
+    ),
+  ).version.id;
+  const template =
+    method === "external_mvp"
+      ? "externalMvpTemplate"
+      : "commercialIntentTemplate";
+  const methodModule = validationTestModule(
+    `lib/validation/${method.replaceAll("_", "-")}.ts`,
+  );
+  const content = {
+    ...(methodModule[template] as () => Record<string, unknown>)(),
+    url: method === "external_mvp" ? "https://example.com/try" : undefined,
+    questions: ["What happened?"],
+  };
+  await sql(
+    `set role service_role;select validation_transition_experiment_version('${owner}','${version}','draft','ready');select validation_transition_experiment_version('${owner}','${version}','ready','running');select validation_${method}_owner('${owner}','${version}','save',${lit(content)},0)`,
+  );
+  publicationCases.push({
+    method,
+    version,
+    revision: 1,
+    actions:
+      method === "external_mvp"
+        ? ["resolve", "submit"]
+        : ["resolve", "view", "submit"],
+    args: ",null,null,false,'" + "9".repeat(64) + "'",
+  });
+}
+const publicationCommand = (
+  row: (typeof publicationCases)[number],
+  action: string,
+  token?: string,
+) =>
+  `select validation_${row.method}_owner('${owner}','${row.version}','${action}',null,${row.revision}${token ? "," + lit(token) : ""})`;
+const tokenFor = (method: string, version: string) =>
+  createHash("sha256")
+    .update(method + version)
+    .digest("hex");
+for (const row of publicationCases)
+  await sql(
+    `set role service_role;${publicationCommand(row, "publish", tokenFor(row.method, "legacy"))}`,
+  );
+
+const beforeUpgrade = await history();
+await sql(
+  readFileSync(
+    new URL(
+      `../supabase/migrations/${participationMigration}`,
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+assert.equal(
+  await sql(
+    "select count(*) from validation_survey_submissions where consent_notice_version is not null",
+  ),
+  "0",
+);
+assert.deepEqual(
+  JSON.parse(await history())
+    .map((entry: { kind: string; row: Record<string, unknown> }) => {
+      delete entry.row.consent_notice_version;
+      return entry;
+    })
+    .sort((a: unknown, b: unknown) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b)),
+    ),
+  JSON.parse(beforeUpgrade).sort((a: unknown, b: unknown) =>
+    JSON.stringify(a).localeCompare(JSON.stringify(b)),
+  ),
+);
+
+const assertClosed = async (statement: string) => {
+  await assert.rejects(
+    sql(`set role service_role;${statement}`),
+    /survey unavailable|no_data_found|no data found/,
+  );
+};
+const admitSurvey = (token: string) =>
+  `select validation_admit_public_survey_resolution('${token}','${"9".repeat(64)}')`;
+const surveySubmit = (token: string, consent: string) =>
+  call(
+    "survey",
+    "submissions",
+    "participation-test-key",
+    "9".repeat(64),
+    "",
+    token,
+  ).slice(0, -1) + `,${consent})`;
+await assertClosed(admitSurvey(oldSurvey));
+await assertClosed(surveySubmit(oldSurvey, "'survey-participation-v1'"));
+for (const row of publicationCases) {
+  for (const action of row.actions)
+    await assertClosed(
+      `select validation_${row.method}_public('${tokenFor(row.method, "legacy")}','${action}'${row.args})`,
+    );
+  const activeToken = tokenFor(row.method, "active");
+  const active = JSON.parse(
+    await sql(
+      `set role service_role;${publicationCommand(row, "publish", activeToken)}`,
+    ),
+  ).publication;
+  assert.ok(
+    new Date(active.expiresAt).getTime() >
+      new Date(active.publishedAt).getTime(),
+  );
+  assert.ok(
+    JSON.parse(
+      await sql(
+        `set role service_role;select validation_${row.method}_public('${activeToken}','resolve'${row.args})`,
+      ),
+    ),
+  );
+}
+const survey = JSON.parse(
+  await sql(`set role service_role;${publishSurvey(newSurvey)}`),
+);
+assert.equal(
+  JSON.parse(await sql(`set role service_role;${admitSurvey(newSurvey)}`))
+    .admitted,
+  true,
+);
+assert.deepEqual(
+  JSON.parse(
+    await sql(`set role service_role;${surveySubmit(newSurvey, "null")}`),
+  ),
+  { rejected: true },
+);
+// Earlier tests deliberately fill the counter. Restore the synthetic retained count.
+await sql(
+  `update validation_collection_usage set submissions=(select count(*) from validation_survey_submissions where experiment_version_id='${versions.survey}') where method='survey' and experiment_version_id='${versions.survey}'`,
+);
+const valid = surveySubmit(newSurvey, "'survey-participation-v1'");
+const accepted = JSON.parse(await sql(`set role service_role;${valid}`));
+assert.equal(accepted.duplicate, false);
+const receipt = `select consent_notice_version,submitted_at from validation_survey_submissions where id='${accepted.submissionId}'`;
+const originalReceipt = await sql(receipt);
+assert.match(originalReceipt, /^survey-participation-v1\|\d{4}-/);
+assert.deepEqual(JSON.parse(await sql(`set role service_role;${valid}`)), {
+  ...accepted,
+  duplicate: true,
+});
+assert.equal(await sql(receipt), originalReceipt);
+for (const role of ["anon", "authenticated"])
+  assert.equal(
+    await sql(
+      `select has_function_privilege('${role}','validation_submit_public_survey(text,text,text,jsonb,text,text)','EXECUTE')`,
+    ),
+    "f",
+  );
+assert.equal(
+  await sql(
+    "select has_function_privilege('service_role','validation_submit_public_survey(text,text,text,jsonb,text)','EXECUTE')",
+  ),
+  "f",
+);
+await sql(
+  `set role service_role;select validation_revoke_survey('${owner}','${survey.id}')`,
+);
+await assertClosed(admitSurvey(newSurvey));
+await assertClosed(valid);
+console.log(
+  "PASS all five legacy deadlines, fresh resolution, Survey consent receipt and replay, revocation and RPC grants",
+);
+
 // Run the existing method SQL contracts in rolled-back transactions on this same catalog.
 for (const suite of [
   "validation-landing-pages.sql",

@@ -1,4 +1,5 @@
 "use client";
+import { PublicationExpiration } from "./publication-expiration";
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -490,9 +491,12 @@ export function PrototypeWorkspace({
       <div className="space-y-3 rounded-xl border border-cyan-400/20 bg-cyan-400/[.04] p-4">
         <p className="text-sm">
           {data.publication
-            ? `Participant link active · published revision ${data.publication.revision}`
+            ? `Participant link · published revision ${data.publication.revision}`
             : "No active participant link"}
         </p>
+        {data.publication && (
+          <PublicationExpiration expiresAt={data.publication.expiresAt} />
+        )}
         <p className="text-xs text-slate-400">
           Save, mark ready, then start the experiment above before publishing.
           Published content stays unchanged until you publish a replacement.

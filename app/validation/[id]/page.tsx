@@ -123,6 +123,7 @@ type Workspace = {
     experiment_id: string;
     survey_plan_version_id: string;
     state: "published" | "revoked";
+    expires_at: string;
   }>;
   survey_submissions: Array<{
     id: string;

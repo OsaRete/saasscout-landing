@@ -34,6 +34,8 @@ for (const method of ["survey", "external-mvp", "commercial-intent"]) {
   test(`${method}: correction, lost committed response, repeated clicks, malformed response and rate-limit retry`, async ({
     page,
   }) => {
+    if (method === "survey")
+      await page.setViewportSize({ width: 390, height: 844 });
     await page.clock.install();
     const requests: string[] = [];
     const records = new Map<string, string>();
@@ -52,6 +54,11 @@ for (const method of ["survey", "external-mvp", "commercial-intent"]) {
       }
       const body = request.postData()!;
       requests.push(body);
+      if (method === "survey")
+        expect(JSON.parse(body)).toMatchObject({
+          consent: true,
+          consentNoticeVersion: "survey-participation-v1",
+        });
       if (requests.length === 1) {
         await route.fulfill({
           status: 400,
@@ -95,6 +102,19 @@ for (const method of ["survey", "external-mvp", "commercial-intent"]) {
       await page.getByRole("checkbox").check();
     }
     const button = page.locator("form button").last();
+    if (method === "survey") {
+      const consent = page.getByRole("checkbox", {
+        name: /agree to share my answers/,
+      });
+      await expect(consent).not.toBeChecked();
+      await expect(
+        page.getByRole("link", { name: /Privacy Policy/ }),
+      ).toHaveAttribute("href", "/privacy");
+      await button.click();
+      await expect(consent).toBeFocused();
+      expect(requests).toHaveLength(0);
+      await consent.check();
+    }
     await button.click();
     await expect(page.getByRole("main").getByRole("alert")).toHaveText(
       "Please correct your response and submit again.",
@@ -165,6 +185,10 @@ for (const method of ["survey", "external-mvp", "commercial-intent"]) {
           .getByRole("combobox")
           .selectOption(method === "external-mvp" ? "no" : "not_now");
         await page.getByRole("checkbox").check();
+      } else {
+        await page
+          .getByRole("checkbox", { name: /agree to share my answers/ })
+          .check();
       }
       const button = page.locator("form button").last();
       await button.click();
