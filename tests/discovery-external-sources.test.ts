@@ -245,3 +245,30 @@ it("stops after an unsuccessful SerpAPI dispatch and retains earlier evidence", 
   assert.equal(result.limitedSearchCoverage, true);
   assert.deepEqual(result.sources.map((source) => source.url), ["https://example.test/source"]);
 });
+
+for (const failure of ["transport loss", "invalid JSON"] as const) {
+  it(`retains SerpAPI sources after optional X ${failure} without retrying X`, async () => {
+    process.env.SERPAPI_API_KEY = "mock";
+    process.env.X_BEARER_TOKEN = "mock";
+    const origins: string[] = [];
+
+    mock.method(globalThis, "fetch", async (input: string | URL) => {
+      const { origin } = new URL(input);
+      origins.push(origin);
+      if (origin === "https://serpapi.com") {
+        return Response.json({ organic_results: [{
+          title: "Synthetic result",
+          link: "https://example.test/source",
+        }] });
+      }
+      if (failure === "transport loss") throw new TypeError("Synthetic transport loss");
+      return new Response("Invalid JSON");
+    });
+    mock.method(console, "error", () => {});
+
+    const { sources } = await admittedSources(10);
+
+    assert.deepEqual(sources.map((source) => source.url), ["https://example.test/source"]);
+    assert.deepEqual(origins, [...Array(4).fill("https://serpapi.com"), "https://api.x.com"]);
+  });
+}
