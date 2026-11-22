@@ -109,7 +109,7 @@ test("Scan logs only metadata when problem model JSON is malformed", async (t) =
   const log = t.mock.method(console, "info", () => {});
   const privateOutput = "malformed Scan response with private fixture text";
   const input: ProblemIntelligenceServiceInput = {
-    intent: { market: "Agencies" },
+    intent: { market: "Agencies", audience: "Agency operators", region: "" },
     evidence: [],
     allowedEvidenceIds: [],
     client: { create: (async () => ({
