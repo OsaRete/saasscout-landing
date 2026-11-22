@@ -85,3 +85,11 @@ test("evaluateDiscoveryPersistenceQuality leaves fallback behavior available by 
   assert.equal(result.safeDiagnostics.selected, false);
   assert.equal(result.issues.some((issue) => issue.code === "too_many_fallback_fields"), true);
 });
+
+test("evaluateDiscoveryPersistenceQuality rejects a fallback evidence claim by itself", () => {
+  const result = evaluateDiscoveryPersistenceQuality([row()], {
+    fallbackFieldsByRow: [{ rowIndex: 0, fields: ["source_evidence"] }],
+  });
+
+  assert.deepEqual(result.issues.map(({ code }) => code), ["source_evidence_missing"]);
+});

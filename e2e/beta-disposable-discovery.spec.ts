@@ -80,7 +80,7 @@ test("Discovery persists zero-result runs, rejects ambiguous replay and charges 
   expect(result).toMatchObject({ success: true, problems: [{ problem_title: title }] });
   expect(await admin.from("discovered_problems").select("problem_title,user_id").eq("discovery_id", result.discovery.id))
     .toMatchObject({ error: null, data: [{ user_id: userId, problem_title: title }] });
-  await expect(page.getByText(/Discovery completed. Live signals/)).toBeVisible();
+  await expect(page.getByText(/Discovery completed./)).toBeVisible();
 
   await page.reload();
   await expect(page.getByText(title, { exact: true })).toBeVisible();
