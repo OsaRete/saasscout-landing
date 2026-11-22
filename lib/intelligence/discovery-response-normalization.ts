@@ -1,3 +1,5 @@
+import type { DiscoverySource } from "../knowledge/discovery-data-moat-sources.ts";
+
 export type DiscoveredProblem = {
   problem_title: string;
   problem_summary: string;
@@ -26,12 +28,30 @@ export function clampScore(value: unknown, fallback = 7, min = 1, max = 10) {
   return Math.min(max, Math.max(min, score));
 }
 
-export function normalizeProblems(rawProblems: DiscoveredProblem[]) {
+export const LEGACY_DISCOVERY_EVIDENCE_PLACEHOLDER =
+  "External and internal signals suggest repeated workflow friction.";
+
+export const INSUFFICIENT_DISCOVERY_EVIDENCE = "insufficient_evidence";
+
+function resolveSourceEvidence(value: unknown, sources: readonly DiscoverySource[]) {
+  const excerpt = typeof value === "string" ? value.trim() : "";
+  if (!excerpt || excerpt === LEGACY_DISCOVERY_EVIDENCE_PLACEHOLDER) return "";
+
+  const source = sources.find(({ snippet }) => snippet?.includes(excerpt));
+  if (!source) return "";
+
+  const kind = source.source_type === "data_moat" ? "Internal source" : "External source";
+  return `${kind}: ${source.title}${source.url ? ` (${source.url})` : ""}
+“${excerpt}”`;
+}
+
+export function normalizeProblems(
+  rawProblems: DiscoveredProblem[],
+  sources: readonly DiscoverySource[],
+) {
   return rawProblems.slice(0, 8).map((item, index) => ({
     problem_title: item.problem_title || `Market Problem ${index + 1}`,
-    problem_summary:
-      item.problem_summary ||
-      "A repeated market problem was detected from external and internal signals.",
+    problem_summary: item.problem_summary || "",
     affected_niches:
       item.affected_niches ||
       "Small businesses | Solo founders | Service providers",
@@ -50,8 +70,6 @@ export function normalizeProblems(rawProblems: DiscoveredProblem[]) {
     build_difficulty: ["Easy", "Medium", "Hard"].includes(item.build_difficulty)
       ? item.build_difficulty
       : "Medium",
-    source_evidence:
-      item.source_evidence ||
-      "External and internal signals suggest repeated workflow friction.",
+    source_evidence: resolveSourceEvidence(item.source_evidence, sources),
   }));
 }

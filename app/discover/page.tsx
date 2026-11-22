@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import {
+  INSUFFICIENT_DISCOVERY_EVIDENCE,
+  LEGACY_DISCOVERY_EVIDENCE_PLACEHOLDER,
+} from "../../lib/intelligence/discovery-response-normalization";
 import { supabase } from "../supabase";
 import { Button, EmptyState, LoadingState, Notice } from "../../components/ui";
 
@@ -79,6 +83,13 @@ type FounderMatch = {
   time_match: number;
   created_at: string;
 };
+
+const insufficientEvidenceMessage = "Insufficient evidence. Discovery found no usable market or internal sources, so no opportunities were generated.";
+
+function displaySourceEvidence(value: string | null, sourceCount?: number) {
+  const evidence = value?.trim();
+  return sourceCount !== 0 && evidence !== LEGACY_DISCOVERY_EVIDENCE_PLACEHOLDER ? evidence : "";
+}
 
 function splitByPipe(value: string | null) {
   return String(value || "")
@@ -339,15 +350,18 @@ export default function DiscoverPage() {
         return;
       }
 
+      if (result.outcome === INSUFFICIENT_DISCOVERY_EVIDENCE) {
+        setMessage(insufficientEvidenceMessage);
+        return;
+      }
+
       await loadDiscoveryData();
 
       if (result.discovery?.id) {
         setSelectedDiscoveryId(result.discovery.id);
       }
 
-      setMessage(
-        "Discovery completed. Live signals were analyzed and the data moat was updated."
-      );
+      setMessage("Discovery completed.");
     } catch (error) {
       console.error(error);
       setMessage("Something went wrong analyzing market signals.");
@@ -448,7 +462,7 @@ Suggested solutions:
 ${problem.suggested_solutions || ""}
 
 Source evidence:
-${problem.source_evidence || ""}`);
+${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_sources_analyzed) || ""}`);
 
     router.push(
       `/scan?market=${marketParam}&evidence=${evidenceParam}&discoveryId=${problem.discovery_id}&problemId=${problem.id}&problemTitle=${encodeURIComponent(
@@ -560,7 +574,7 @@ ${problem.source_evidence || ""}`);
 
           {message && (
             <Notice
-              tone={message.toLowerCase().includes("could not") || message.toLowerCase().includes("wrong") || message.toLowerCase().includes("expired") ? "error" : "success"}
+              tone={message === insufficientEvidenceMessage ? "info" : message.toLowerCase().includes("could not") || message.toLowerCase().includes("wrong") || message.toLowerCase().includes("expired") ? "error" : "success"}
               className="mt-6"
             >
               {message}
@@ -638,7 +652,7 @@ ${problem.source_evidence || ""}`);
                   <h2 className="text-2xl font-bold">Discovery Summary</h2>
                   <p className="mt-4 max-w-4xl leading-relaxed text-gray-400">
                     {selectedDiscovery.summary ||
-                      "SaaSScout searched live signals, compared them with the data moat, and detected monetizable problems."}
+                      "No Discovery summary is available."}
                   </p>
                 </section>
 
@@ -649,6 +663,7 @@ ${problem.source_evidence || ""}`);
                     const intelligence = getProblemIntelligence(problem.problem_title);
                     const founderMatch = getFounderMatch(problem.id);
 
+                    const sourceEvidence = displaySourceEvidence(problem.source_evidence, selectedDiscovery.total_sources_analyzed);
                     const opportunityScore = getOpportunityScore(problem, intelligence);
                     const founderFitScore = Number(founderMatch?.founder_fit_score || 0);
 
@@ -692,7 +707,7 @@ ${problem.source_evidence || ""}`);
                                 {opportunityScore.toFixed(1)}
                               </h4>
                               <p className="mt-2 text-sm text-cyan-100/80">
-                                {getScoreLabel(opportunityScore)}
+                                {sourceEvidence ? getScoreLabel(opportunityScore) : "Unverified interpretation"}
                               </p>
                             </div>
 
@@ -768,8 +783,8 @@ ${problem.source_evidence || ""}`);
 
                           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                             <h4 className="font-semibold">Evidence</h4>
-                            <p className="mt-4 text-sm leading-relaxed text-gray-300">
-                              {problem.source_evidence || "No evidence available."}
+                            <p className="mt-4 whitespace-pre-line break-words text-sm leading-relaxed text-gray-300">
+                              {sourceEvidence || "No traceable source evidence is available for this opportunity."}
                             </p>
 
                             <button

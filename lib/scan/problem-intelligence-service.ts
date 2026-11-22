@@ -151,8 +151,6 @@ export async function generateProblemIntelligenceModelOutput(
       model,
       finishReason: choice?.finish_reason ?? "unknown",
       contentLength: content.length,
-      startsWith: content.slice(0, 100),
-      endsWith: content.slice(-100),
     });
 
     return content;
@@ -161,10 +159,6 @@ export async function generateProblemIntelligenceModelOutput(
       event: "scan_model_provider_error",
       model,
       errorName: error instanceof Error ? error.name : typeof error,
-      errorMessage:
-        error instanceof Error
-          ? error.message
-          : "Unknown provider error",
     });
 
     throw new ProblemIntelligenceServiceError(

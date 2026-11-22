@@ -34,7 +34,7 @@ export async function mockAcceptanceProvider(url, init) {
       pain_score: 8, revenue_score: 7, urgency_score: 7, trend_score: 7,
       buying_signal_score: 7, frequency_score: 8, source_quality_score: 8, opportunity_score: 82,
       problem_cluster: "Client Operations", build_difficulty: "Medium",
-      source_evidence: "Disposable reporting source describes manually copying spreadsheet data every week.",
+      source_evidence: "Operators report manually copying spreadsheet data every week.",
     }] : [];
     return completion(JSON.stringify({ summary: discoveryRuns === 4 ? "Disposable Discovery write rejection" : "Disposable Discovery result", problems }));
   }

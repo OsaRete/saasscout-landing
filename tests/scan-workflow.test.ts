@@ -6,6 +6,7 @@ const TEST_SCAN_WORKFLOW_AUTHORIZATION: ScanWorkflowAuthorizationContext = Objec
 import { validateAnalyzeEvidenceOutput } from "../lib/scan/output-validation.ts";
 import { validateSolutionIntelligenceOutput } from "../lib/scan/solution-intelligence.ts";
 import { SolutionIntelligenceServiceError } from "../lib/scan/solution-intelligence-service.ts";
+import { generateProblemIntelligenceModelOutput, validateProblemIntelligenceModelOutput, SCAN_MODEL_ID, type ProblemIntelligenceServiceInput } from "../lib/scan/problem-intelligence-service.ts";
 import { ingestScanEvidence } from "../lib/scan/evidence-ingestion.ts";
 import { computeScanQualityDiagnostics } from "../lib/scan/quality-diagnostics.ts";
 import { calibrateAnalyzeEvidenceConfidence } from "../lib/scan/score-calibration.ts";
@@ -102,4 +103,27 @@ test("solution grounding failure preserves a specific safe diagnostic reason", a
     assert.equal(JSON.stringify(log).includes("Evidence long enough"), false);
     return true;
   });
+});
+
+test("Scan logs only metadata when problem model JSON is malformed", async (t) => {
+  const log = t.mock.method(console, "info", () => {});
+  const privateOutput = "malformed Scan response with private fixture text";
+  const input: ProblemIntelligenceServiceInput = {
+    intent: { market: "Agencies", audience: "Agency operators", region: "" },
+    evidence: [],
+    allowedEvidenceIds: [],
+    client: { create: (async () => ({
+      choices: [{ finish_reason: "stop", message: { content: privateOutput } }],
+    })) as unknown as NonNullable<ProblemIntelligenceServiceInput["client"]>["create"] },
+  };
+  const output = await generateProblemIntelligenceModelOutput(input);
+  assert.throws(() => validateProblemIntelligenceModelOutput(input, output), { code: "model_invalid_json" });
+  assert.deepEqual(log.mock.calls.map(({ arguments: args }) => args), [
+    ["Scan model generation diagnostics", {
+      event: "scan_model_generation_diagnostics",
+      model: SCAN_MODEL_ID,
+      finishReason: "stop",
+      contentLength: privateOutput.length,
+    }],
+  ]);
 });

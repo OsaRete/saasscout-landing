@@ -4,9 +4,20 @@ import { describe, it } from "node:test";
 import {
   cleanJsonResponse,
   clampScore,
-  normalizeProblems,
+  normalizeProblems as normalizeDiscoveryProblems,
   type DiscoveredProblem,
 } from "../lib/intelligence/discovery-response-normalization.ts";
+
+const snippet = "Multiple sources mention manual onboarding friction.";
+const sources = [{
+  title: "Onboarding report",
+  url: "https://example.test/onboarding",
+  snippet,
+  source_type: "google_search" as const,
+  source_rank: 1,
+}];
+const normalizeProblems = (problems: Parameters<typeof normalizeDiscoveryProblems>[0]) =>
+  normalizeDiscoveryProblems(problems, sources);
 
 const completeProblem = (overrides: Partial<DiscoveredProblem> = {}): DiscoveredProblem => ({
   problem_title: "Manual onboarding is slow",
@@ -23,7 +34,7 @@ const completeProblem = (overrides: Partial<DiscoveredProblem> = {}): Discovered
   opportunity_score: 82,
   problem_cluster: "Client Operations",
   build_difficulty: "Medium",
-  source_evidence: "Multiple sources mention manual onboarding friction.",
+  source_evidence: snippet,
   ...overrides,
 });
 
@@ -56,7 +67,7 @@ describe("normalizeProblems", () => {
     assert.equal(normalizeProblems(problems).length, 8);
   });
 
-  it("applies default title, summary, affected niches, suggested solutions and source evidence when fields are missing", () => {
+  it("keeps display defaults without asserting missing evidence or a missing summary", () => {
     const [problem] = normalizeProblems([
       completeProblem({
         problem_title: "",
@@ -68,19 +79,23 @@ describe("normalizeProblems", () => {
     ]);
 
     assert.equal(problem.problem_title, "Market Problem 1");
-    assert.equal(
-      problem.problem_summary,
-      "A repeated market problem was detected from external and internal signals."
-    );
+    assert.equal(problem.problem_summary, "");
     assert.equal(problem.affected_niches, "Small businesses | Solo founders | Service providers");
     assert.equal(
       problem.suggested_solutions,
       "Workflow automation tool | Lightweight operating system | AI assistant"
     );
-    assert.equal(
-      problem.source_evidence,
-      "External and internal signals suggest repeated workflow friction."
-    );
+    assert.equal(problem.source_evidence, "");
+  });
+
+  it("uses the collected source for attribution and withholds unmatched model text", () => {
+    const [grounded, unmatched] = normalizeProblems([
+      completeProblem(),
+      completeProblem({ source_evidence: "Three executives confirmed this last Tuesday." }),
+    ]);
+    assert.equal(grounded.source_evidence, `External source: Onboarding report (https://example.test/onboarding)
+“${snippet}”`);
+    assert.equal(unmatched.source_evidence, "");
   });
 
   it("clamps all 1-10 score fields", () => {

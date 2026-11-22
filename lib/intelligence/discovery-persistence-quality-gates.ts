@@ -127,7 +127,7 @@ export function evaluateDiscoveryPersistenceQuality(
     const normalizedTitle = normalizeText(title);
     const summary = row.problem_summary?.trim() || "";
     const evidence = row.source_evidence?.trim() || "";
-    const fallbackFieldCount = fallbackFieldsByRow.get(rowIndex)?.length || 0;
+    const fallbackFields = fallbackFieldsByRow.get(rowIndex) || [];
 
     if (title.length < MIN_TITLE_LENGTH || wordCount(title) < MIN_TITLE_WORDS) {
       issues.push(issue(rowIndex, "title_too_short", "problem_title", "Problem title is too short for assisted persistence."));
@@ -151,12 +151,12 @@ export function evaluateDiscoveryPersistenceQuality(
     if (row.pain_score <= 1 && row.revenue_score <= 1 && row.urgency_score <= 1) {
       issues.push(issue(rowIndex, "all_primary_scores_minimum", "pain_score", "Pain, revenue, and urgency scores are all minimum values."));
     }
-    if (!evidence) {
+    if (!evidence || fallbackFields.includes("source_evidence")) {
       issues.push(issue(rowIndex, "source_evidence_missing", "source_evidence", "Source evidence is missing."));
     } else if (evidence.length > MAX_SOURCE_EVIDENCE_LENGTH) {
       issues.push(issue(rowIndex, "source_evidence_too_long", "source_evidence", "Source evidence is too long for safe persistence."));
     }
-    if (fallbackFieldCount > MAX_FALLBACK_FIELDS_PER_ROW) {
+    if (fallbackFields.length > MAX_FALLBACK_FIELDS_PER_ROW) {
       issues.push(issue(rowIndex, "too_many_fallback_fields", undefined, "Too many persistence fields came from fallbacks."));
     }
     if (!VALID_BUILD_DIFFICULTIES.has(row.build_difficulty)) {
