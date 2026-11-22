@@ -39,6 +39,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: "Unauthorized", code: "weekly_schedule_unauthorized", stage: "received", invocationId }, { status: 401 });
     }
 
+    if (process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED !== "true") {
+      return NextResponse.json({ success: true, code: "weekly_schedule_disabled", invocationId });
+    }
+
     const period = getWeeklyIntelligencePeriod();
     console.info("Weekly intelligence diagnostic", { event: "schedule_started", invocationId, entryPath: "weekly_schedule", periodKey: `${period.period_start}/${period.period_end}`, timezone: period.timezone });
     let eligibleUsers;

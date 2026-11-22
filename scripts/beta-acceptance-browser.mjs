@@ -161,6 +161,7 @@ ROLLBACK;`);
       VALUES ('${weeklyUserId}','beta_member',false,false,true);
       UPDATE public.user_profiles SET weekly_intelligence_enabled=(user_id='${weeklyUserId}');`);
     await runBrowser(["e2e/beta-disposable-weekly.spec.ts"], {
+      WEEKLY_SCHEDULED_GENERATION_ENABLED: "true",
       CRON_SECRET: randomBytes(32).toString("hex"),
       BETA_ACCEPTANCE_WEEKLY_USER_ID: weeklyUserId,
       BETA_ACCEPTANCE_WEEKLY_EMAIL: weeklyEmail,

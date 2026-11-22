@@ -144,6 +144,43 @@ test("Weekly cron rejects unauthorized requests before privileged or provider wo
   assert.equal(privilegedWork.mock.callCount(), 0);
 });
 
+test("Weekly cron requires a separate explicit opt-in before selecting recipients", async (t) => {
+  const previousSecret = process.env.CRON_SECRET;
+  const previousEnabled = process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED;
+  process.env.CRON_SECRET = "synthetic-cron-secret";
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousSecret;
+    if (previousEnabled === undefined) delete process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED;
+    else process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED = previousEnabled;
+  });
+  const generate = t.mock.fn(() => { throw new Error("Empty recipient list generated work"); });
+  const selectRecipients = t.mock.fn(async () => ({ data: [], error: null }));
+  const { GET } = validationTestModule("app/api/cron/route.ts", (specifier) => {
+    if (specifier === "@supabase/supabase-js") {
+      return { createClient: () => ({ from: () => ({ select: () => ({ eq: selectRecipients }) }) }) };
+    }
+    if (specifier === "../weekly-intelligence/route") return { runWeeklyGenerationForUser: generate };
+    return undefined;
+  }) as { GET(request: Request): Promise<Response> };
+  const invoke = () => GET(new Request("http://local.test/api/cron", {
+    headers: { Authorization: "Bearer synthetic-cron-secret" },
+  }));
+
+  delete process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED;
+  assert.equal((await (await invoke()).json()).code, "weekly_schedule_disabled");
+  process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED = "1";
+  assert.equal((await (await invoke()).json()).code, "weekly_schedule_disabled");
+  assert.equal(selectRecipients.mock.callCount(), 0);
+
+  process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED = "true";
+  const active = await invoke();
+  assert.equal(active.status, 200);
+  assert.equal((await active.json()).configured_recipient_count, 0);
+  assert.equal(selectRecipients.mock.callCount(), 1);
+  assert.equal(generate.mock.callCount(), 0);
+});
+
 test("scheduled membership uses the same persisted predicate and denies revoked users", async () => {
   const { requireBetaMember } = validationTestModule("lib/auth/beta-membership.ts") as {
     requireBetaMember(id: string, client: unknown): Promise<void>;

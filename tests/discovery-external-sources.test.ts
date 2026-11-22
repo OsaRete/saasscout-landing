@@ -246,7 +246,7 @@ it("stops after an unsuccessful SerpAPI dispatch and retains earlier evidence", 
   assert.deepEqual(result.sources.map((source) => source.url), ["https://example.test/source"]);
 });
 
-for (const failure of ["transport loss", "invalid JSON"] as const) {
+for (const failure of ["transport loss", "invalid JSON", "unsuccessful HTTP response"] as const) {
   it(`retains SerpAPI sources after optional X ${failure} without retrying X`, async () => {
     process.env.SERPAPI_API_KEY = "mock";
     process.env.X_BEARER_TOKEN = "mock";
@@ -262,12 +262,14 @@ for (const failure of ["transport loss", "invalid JSON"] as const) {
         }] });
       }
       if (failure === "transport loss") throw new TypeError("Synthetic transport loss");
+      if (failure === "unsuccessful HTTP response") return Response.json({}, { status: 503 });
       return new Response("Invalid JSON");
     });
     mock.method(console, "error", () => {});
 
-    const { sources } = await admittedSources(10);
+    const { sources, limitedSearchCoverage } = await admittedSources(10);
 
+    assert.equal(limitedSearchCoverage, true);
     assert.deepEqual(sources.map((source) => source.url), ["https://example.test/source"]);
     assert.deepEqual(origins, [...Array(4).fill("https://serpapi.com"), "https://api.x.com"]);
   });
