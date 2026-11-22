@@ -85,7 +85,10 @@ Transport sequence numbers distinguish initial/replacement/corrective attempts.
   retries are not reconstructed. Each claim's run ID/counter scopes its search
   and model attempts. The existing one corrective generation remains separate
   paid work and never recollects sources. Ordinary users remain read-only;
-  scheduled generation and recipient access checks are unchanged.
+  scheduled generation also requires a valid cron bearer and the deployment's
+  `WEEKLY_SCHEDULED_GENERATION_ENABLED=true`. Keep this flag unset and
+  `weekly_max_executions=0` for a Discovery/Scan-only spending approval. The
+  deployment flag guards new builds. Contain historical artifacts separately.
 - **SDKs:** the installed OpenAI SDK defaults to two retries; every inventoried
   constructor now explicitly uses `maxRetries: 0` and the guarded fetch. This
   includes the still-disabled Validation clients. HTTP/transport errors never

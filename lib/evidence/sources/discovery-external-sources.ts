@@ -180,12 +180,8 @@ async function searchXSignals() {
     }
   );
 
+  if (!response.ok) throw new Error("X search returned an unsuccessful response.");
   const data = await response.json();
-
-  if (!response.ok) {
-    console.error("X API error:", data);
-    return [];
-  }
 
   return ((data?.data || []) as XTweet[])
     .filter(isUsefulTweet)
@@ -229,7 +225,9 @@ export async function collectExternalSources(sourcesLimit: number) {
   }
 
   // Preserve other evidence if the optional, metered X search fails.
+  let xSearchFailed = false;
   const xResults = await searchXSignals().catch((error: unknown) => {
+    xSearchFailed = true;
     if (!(error instanceof ProviderBudgetError)) {
       console.error("Discovery X search failed.");
     }
@@ -259,7 +257,7 @@ export async function collectExternalSources(sourcesLimit: number) {
 
   return {
     sources: Array.from(unique.values()).slice(0, sourcesLimit),
-    limitedSearchCoverage: completedSearches < DISCOVERY_QUERIES.length,
+    limitedSearchCoverage: completedSearches < DISCOVERY_QUERIES.length || xSearchFailed,
   };
 }
 
