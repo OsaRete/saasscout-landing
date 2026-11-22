@@ -1,4 +1,4 @@
-const workspaceRoutes = ["/admin", "/dashboard", "/scan", "/scans", "/discover", "/results", "/saved", "/weekly", "/validation", "/opportunity", "/sources", "/founder-profile"];
+const workspaceRoutes = ["/admin", "/dashboard", "/scan", "/scans", "/discover", "/results", "/saved", "/weekly", "/validation", "/contact-a-professional", "/opportunity", "/sources", "/founder-profile"];
 
 export function isPublicValidationPath(pathname: string): boolean {
   return ["survey", "commercial-intent", "external-mvp", "landing", "prototype"]
