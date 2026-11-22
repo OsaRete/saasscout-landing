@@ -35,7 +35,7 @@ const snippet = "Operators copy spreadsheet data every week.";
 const privateOutput = "synthetic private model output";
 const userId = "owner-fixture";
 
-function fixture(t: TestContext, mode: "empty" | "missing" | "grounded" | "invalid") {
+function fixture(t: TestContext, mode: "empty" | "missing" | "grounded" | "invalid", searchAllowance = 4) {
   t.mock.method(console, "warn", () => {});
   t.mock.method(console, "info", () => {});
   const log = t.mock.method(console, "error", () => {});
@@ -45,11 +45,13 @@ function fixture(t: TestContext, mode: "empty" | "missing" | "grounded" | "inval
   process.env.OPENROUTER_API_KEY = "fixture-key";
   delete process.env.X_BEARER_TOKEN;
   let modelCalls = 0;
+  let searchCalls = 0;
   const writes: string[] = [];
 
   t.mock.method(globalThis, "fetch", async (input: string | URL, init?: RequestInit) => {
     const url = new URL(input);
     if (url.hostname === "serpapi.com") {
+      assert.ok(++searchCalls <= searchAllowance);
       return Response.json({ organic_results: mode === "empty" ? [] : [{
         title: "Reporting source",
         link: "https://example.test/reporting",
@@ -84,22 +86,28 @@ function fixture(t: TestContext, mode: "empty" | "missing" | "grounded" | "inval
 
   return {
     run: () => withProviderBudget({ userId, workflow: "discovery", requestId: "request-fixture" },
-      () => discoverOpportunitiesWorkflow(userId), { rpc: async () => ({ data: true, error: null }) }),
+      () => discoverOpportunitiesWorkflow(userId), { rpc: async (name, args) => ({
+        data: name !== "application_reserve_provider" || args.p_provider !== "serpapi" || searchCalls < searchAllowance,
+        error: null,
+      }) }),
     modelCalls: () => modelCalls,
     writes,
     log,
   };
 }
 
-test("empty accepted source sets return an explicit outcome without model dispatch or saved opportunities", async (t) => {
-  const mock = fixture(t, "empty");
-  assert.deepEqual(await mock.run(), {
-    success: true, outcome: "insufficient_evidence", discovery: null, problems: [],
-    external_sources_analyzed: 0, data_moat_sources_used: 0,
+for (const searchAllowance of [4, 0]) {
+  test(`no evidence with ${searchAllowance} available searches skips the model and opportunity writes`, async (t) => {
+    const mock = fixture(t, "empty", searchAllowance);
+    assert.deepEqual(await mock.run(), {
+      success: true, outcome: "insufficient_evidence", discovery: null, problems: [],
+      limited_search_coverage: searchAllowance === 0,
+      external_sources_analyzed: 0, data_moat_sources_used: 0,
+    });
+    assert.equal(mock.modelCalls(), 0);
+    assert.deepEqual(mock.writes, ["operational_events", "operational_events"]);
   });
-  assert.equal(mock.modelCalls(), 0);
-  assert.deepEqual(mock.writes, ["operational_events", "operational_events"]);
-});
+}
 
 test("missing model source evidence persists an interpretation without promoting it into knowledge", async (t) => {
   const mock = fixture(t, "missing");
@@ -112,8 +120,9 @@ test("missing model source evidence persists an interpretation without promoting
 });
 
 test("matched source evidence is attributed and eligible for the existing intelligence write", async (t) => {
-  const mock = fixture(t, "grounded");
+  const mock = fixture(t, "grounded", 2);
   const result = await mock.run();
+  assert.equal(result.limited_search_coverage, true);
   assert.equal(result.problems[0].source_evidence, `External source: Reporting source (https://example.test/reporting)
 “${snippet}”`);
   assert.ok(mock.writes.includes("problem_intelligence"));

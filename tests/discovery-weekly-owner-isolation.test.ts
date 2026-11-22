@@ -117,7 +117,7 @@ function harness(t: TestContext, failedTable?: string) {
         }] }) } }] };
       } } };
     };
-    if (specifier.endsWith("/discovery-external-sources")) return { collectExternalSources: async () => [] };
+    if (specifier.endsWith("/discovery-external-sources")) return { collectExternalSources: async () => ({ sources: [], limitedSearchCoverage: true }) };
     if (specifier.endsWith("/discover-opportunities-shadow-runner")) return { runDiscoverOpportunitiesSnapshotRetrievalShadow: async () => null };
     if (specifier.endsWith("/discover-opportunities-adapter")) return {
       buildDiscoverOpportunitiesSnapshotInput(input: unknown) { snapshots.push(input); return input; },

@@ -84,6 +84,7 @@ type FounderMatch = {
   created_at: string;
 };
 
+const limitedCoverageMessage = "Live search coverage was limited for this run.";
 const insufficientEvidenceMessage = "Insufficient evidence. Discovery found no usable market or internal sources, so no opportunities were generated.";
 
 function displaySourceEvidence(value: string | null, sourceCount?: number) {
@@ -351,7 +352,9 @@ export default function DiscoverPage() {
       }
 
       if (result.outcome === INSUFFICIENT_DISCOVERY_EVIDENCE) {
-        setMessage(insufficientEvidenceMessage);
+        setMessage(result.limited_search_coverage
+          ? `${insufficientEvidenceMessage} ${limitedCoverageMessage}`
+          : insufficientEvidenceMessage);
         return;
       }
 
@@ -361,7 +364,9 @@ export default function DiscoverPage() {
         setSelectedDiscoveryId(result.discovery.id);
       }
 
-      setMessage("Discovery completed.");
+      setMessage(result.limited_search_coverage
+        ? `Discovery completed. ${limitedCoverageMessage}`
+        : "Discovery completed.");
     } catch (error) {
       console.error(error);
       setMessage("Something went wrong analyzing market signals.");
@@ -563,18 +568,18 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
                 disabled={analyzing}
                 className="mt-6 flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-6 py-4 text-sm font-bold text-white shadow-xl shadow-cyan-500/20 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {analyzing ? "Searching live signals..." : "Run Discovery"}
+                {analyzing ? "Analyzing available signals..." : "Run Discovery"}
               </button>
 
               <p className="mt-3 text-xs leading-relaxed text-gray-500">
-                This run searches live sources and updates the data moat.
+                Discovery uses available live and internal sources. Live search depends on available capacity.
               </p>
             </div>
           </div>
 
           {message && (
             <Notice
-              tone={message === insufficientEvidenceMessage ? "info" : message.toLowerCase().includes("could not") || message.toLowerCase().includes("wrong") || message.toLowerCase().includes("expired") ? "error" : "success"}
+              tone={(message.startsWith(insufficientEvidenceMessage) || message.includes(limitedCoverageMessage)) ? "info" : message.toLowerCase().includes("could not") || message.toLowerCase().includes("wrong") || message.toLowerCase().includes("expired") ? "error" : "success"}
               className="mt-6"
             >
               {message}
@@ -609,7 +614,7 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
             icon="✦"
             title="No discoveries yet"
             description="Run your first discovery to search live market signals and feed the data moat."
-            primaryAction={<Button onClick={handleAnalyzeMarket} disabled={analyzing}>{analyzing ? "Searching live signals..." : "Run Discovery"}</Button>}
+            primaryAction={<Button onClick={handleAnalyzeMarket} disabled={analyzing}>{analyzing ? "Analyzing available signals..." : "Run Discovery"}</Button>}
             className="mt-10"
           />
         ) : (

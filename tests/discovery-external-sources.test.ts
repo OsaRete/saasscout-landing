@@ -14,8 +14,10 @@ const originalSerpApiKey = process.env.SERPAPI_API_KEY;
 const originalXBearerToken = process.env.X_BEARER_TOKEN;
 
 afterEach(() => {
-  process.env.SERPAPI_API_KEY = originalSerpApiKey;
-  process.env.X_BEARER_TOKEN = originalXBearerToken;
+  if (originalSerpApiKey === undefined) delete process.env.SERPAPI_API_KEY;
+  else process.env.SERPAPI_API_KEY = originalSerpApiKey;
+  if (originalXBearerToken === undefined) delete process.env.X_BEARER_TOKEN;
+  else process.env.X_BEARER_TOKEN = originalXBearerToken;
   mock.restoreAll();
 });
 
@@ -78,11 +80,11 @@ describe("collectExternalSources", () => {
       );
     });
 
-    const sources = await admittedSources(2);
+    const { sources } = await admittedSources(2);
 
     assert.equal(
       requestedUrls.filter((url) => url.startsWith("https://serpapi.com/search.json")).length,
-      6
+      4
     );
     assert.equal(
       requestedUrls.some((url) => url.startsWith("https://api.x.com/2/tweets/search/recent")),
@@ -138,7 +140,7 @@ describe("collectExternalSources", () => {
 
     const errorLog = mock.method(console, "error", () => {});
 
-    const sources = await admittedSources(3);
+    const { sources } = await admittedSources(3);
 
     assert.equal(errorLog.mock.callCount(), 1);
     assert.equal(sources.some((source) => source.source_type === "x"), false);
@@ -155,9 +157,91 @@ it("optional X budget denial never dispatches X and retains metered Google sourc
     requests++;
     return new Response(JSON.stringify({organic_results:[{title:"Manual workflow",link:"https://example.test/manual",snippet:"Synthetic source"}]}));
   });
-  const sources = await withProviderBudget({userId:"synthetic",workflow:"discovery",requestId:"x-disabled"},
+  const { sources } = await withProviderBudget({userId:"synthetic",workflow:"discovery",requestId:"x-disabled"},
     () => collectExternalSources(2),
     {rpc:async (_name,args)=>({data:args.p_provider!=="x",error:null})});
-  assert.equal(requests,6);
+  assert.equal(requests, 4);
   assert.equal(sources.length,1);
+});
+
+const prioritizedQueries = [
+  '"too much manual work" business',
+  '"using spreadsheets to manage" business',
+  '"need a better way to manage clients"',
+  '"no good tool for" business',
+];
+
+for (const allowance of [4, 2, 0]) {
+  it(`uses prioritized sequential searches with ${allowance} available units`, async () => {
+    process.env.SERPAPI_API_KEY = "mock";
+    delete process.env.X_BEARER_TOKEN;
+
+    const attemptedReservations: unknown[] = [];
+    const queries: string[] = [];
+    let activeRequest: unknown = null;
+
+    mock.method(globalThis, "fetch", async (input: string | URL) => {
+      const url = new URL(input);
+      assert.equal(url.origin, "https://serpapi.com");
+      assert.notEqual(activeRequest, null);
+      queries.push(url.searchParams.get("q")!);
+      return Response.json({ organic_results: [{
+        title: "Synthetic search result",
+        link: `https://example.test/source/${queries.length}`,
+      }] });
+    });
+
+    const result = await withProviderBudget(
+      { userId: "synthetic-user", workflow: "discovery", requestId: "budget-test" },
+      () => collectExternalSources(10),
+      { rpc: async (name, args) => {
+        assert.equal(args.p_provider, "serpapi");
+        if (name === "application_reserve_provider") {
+          assert.equal(activeRequest, null, "previous dispatch must finish before the next reservation");
+          assert.equal(args.p_slots, 1);
+          attemptedReservations.push(args.p_request_id);
+          return { data: attemptedReservations.length <= allowance, error: null };
+        }
+        assert.equal(args.p_slot, 1);
+        if (name === "application_dispatch_provider") {
+          assert.equal(activeRequest, null);
+          activeRequest = args.p_request_id;
+        } else {
+          assert.equal(name, "application_finish_provider");
+          assert.equal(activeRequest, args.p_request_id);
+          activeRequest = null;
+        }
+        return { data: true, error: null };
+      } },
+    );
+
+    assert.equal(activeRequest, null);
+    assert.deepEqual(attemptedReservations,
+      prioritizedQueries.slice(0, allowance + 1).map((_, index) => `budget-test:${index + 1}`));
+    assert.deepEqual(queries, prioritizedQueries.slice(0, allowance));
+    assert.deepEqual(result.sources.map((source) => source.url),
+      queries.map((_, index) => `https://example.test/source/${index + 1}`));
+    assert.equal(result.limitedSearchCoverage, allowance < prioritizedQueries.length);
+  });
+}
+
+it("stops after an unsuccessful SerpAPI dispatch and retains earlier evidence", async () => {
+  process.env.SERPAPI_API_KEY = "mock";
+  delete process.env.X_BEARER_TOKEN;
+
+  const fetchMock = mock.method(globalThis, "fetch", async (input: string | URL) => {
+    const query = new URL(input).searchParams.get("q");
+    if (query === prioritizedQueries[0]) {
+      return Response.json({ organic_results: [{
+        title: "Synthetic result",
+        link: "https://example.test/source",
+      }] });
+    }
+    return Response.json({ error: "Unavailable" }, { status: 503 });
+  });
+
+  const result = await admittedSources(10);
+  assert.equal(fetchMock.mock.callCount(), 2);
+  assert.equal(result.limitedSearchCoverage, true);
+  assert.deepEqual(result.sources.map((source) => source.url), ["https://example.test/source"]);
 });

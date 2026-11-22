@@ -648,7 +648,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     referenceTimestamp: discoveryExecutionStartedAt,
   });
 
-  const [externalSources, moatSources, userProblemHistory] = await Promise.all([
+  const [{ sources: externalSources, limitedSearchCoverage }, moatSources, userProblemHistory] = await Promise.all([
     collectExternalSources(sourcesLimit),
     collectDataMoatSources(userId),
     loadUserDiscoverProblemHistory(userId),
@@ -668,6 +668,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
       outcome: INSUFFICIENT_DISCOVERY_EVIDENCE,
       discovery: null,
       problems: [],
+      limited_search_coverage: limitedSearchCoverage,
       external_sources_analyzed: 0,
       data_moat_sources_used: 0,
     };
@@ -835,6 +836,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
     success: true,
     discovery: discoveryData,
     problems: insertedProblems || [],
+    limited_search_coverage: limitedSearchCoverage,
     external_sources_analyzed: externalSources.length,
     data_moat_sources_used: moatSources.length,
   };
