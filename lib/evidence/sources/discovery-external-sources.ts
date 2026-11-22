@@ -25,13 +25,12 @@ type SerpApiOrganicResult = {
   position?: number;
 };
 
+// Prioritize direct pain, spreadsheet workarounds, client management, then tool gaps.
 const DISCOVERY_QUERIES = [
   `"too much manual work" business`,
   `"using spreadsheets to manage" business`,
-  `"manual workflow" small business`,
   `"need a better way to manage clients"`,
   `"no good tool for" business`,
-  `"wasting time" "google sheets" business`,
 ];
 
 function getSignalScore(tweet: XTweet) {
@@ -150,11 +149,13 @@ async function searchSerpApi(query: string, resultsPerQuery: number) {
 
   const data = await response.json();
 
-  if (!response.ok) {
+  if (!response.ok || data.error) {
     throw new Error(data.error || "SerpApi request failed.");
   }
 
-  return (data.organic_results || []) as SerpApiOrganicResult[];
+  const results: unknown = data.organic_results ?? [];
+  if (!Array.isArray(results)) throw new Error("Invalid SerpApi results.");
+  return results as SerpApiOrganicResult[];
 }
 
 async function searchXSignals() {
@@ -197,28 +198,32 @@ async function searchXSignals() {
 }
 
 export async function collectExternalSources(sourcesLimit: number) {
-  const resultsPerQuery = Math.max(2, Math.ceil(sourcesLimit / DISCOVERY_QUERIES.length));
-
-  const googleResults = await Promise.allSettled(
-    DISCOVERY_QUERIES.map((query) => searchSerpApi(query, resultsPerQuery))
-  );
-
+  const resultsPerQuery = Math.min(10, Math.max(2, Math.ceil(sourcesLimit / DISCOVERY_QUERIES.length)));
   const sources: Source[] = [];
+  let completedSearches = 0;
 
-  for (const result of googleResults) {
-    if (result.status === "fulfilled") {
-      result.value.forEach((item) => {
-        const text = `${item.title || ""} ${item.snippet || ""}`;
+  for (const query of DISCOVERY_QUERIES) {
+    let results: SerpApiOrganicResult[];
+    try {
+      // Wait for the guarded fetch to finish before claiming another dispatch slot.
+      results = await searchSerpApi(query, resultsPerQuery);
+    } catch {
+      // A failed dispatch may still occupy a slot. Keep the evidence already collected.
+      break;
+    }
 
-        sources.push({
-          title: item.title || "Untitled Google result",
-          url: item.link || null,
-          snippet: item.snippet || null,
-          source_type: "google_search",
-          source_rank: item.position || sources.length + 1,
-          signal_score: 0,
-          category: classifySourceCategory(text),
-        });
+    completedSearches++;
+    for (const item of results) {
+      const text = `${item.title || ""} ${item.snippet || ""}`;
+
+      sources.push({
+        title: item.title || "Untitled Google result",
+        url: item.link || null,
+        snippet: item.snippet || null,
+        source_type: "google_search",
+        source_rank: item.position || sources.length + 1,
+        signal_score: 0,
+        category: classifySourceCategory(text),
       });
     }
   }
@@ -251,6 +256,9 @@ export async function collectExternalSources(sourcesLimit: number) {
     if (!unique.has(key)) unique.set(key, source);
   }
 
-  return Array.from(unique.values()).slice(0, sourcesLimit);
+  return {
+    sources: Array.from(unique.values()).slice(0, sourcesLimit),
+    limitedSearchCoverage: completedSearches < DISCOVERY_QUERIES.length,
+  };
 }
 

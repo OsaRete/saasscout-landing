@@ -60,8 +60,10 @@ Transport sequence numbers distinguish initial/replacement/corrective attempts.
   Pending rows predating this migration have no reservations and fail closed at
   provider dispatch; do not fabricate reservations or replay them automatically.
 - **Discovery:** the existing user/UUID admission remains first. The same durable
-  identity scopes six SerpAPI searches, optional one X request and each initial or
-  replacement AI call. Individual admitted failures stay charged as before,
+  identity scopes up to four prioritized SerpAPI searches run sequentially,
+  optional one X request and each initial or replacement AI call. Discovery stops
+  SerpAPI collection if a search fails or is denied and reports limited live
+  search coverage when fewer searches complete. Individual admitted failures stay charged as before,
   including failure caused by a later provider budget denial. Source failures may
   still degrade collection under the existing contract, but cannot dispatch for
   free. Optional X budget denial yields no X evidence, matching its existing
