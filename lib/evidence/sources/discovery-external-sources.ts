@@ -228,11 +228,12 @@ export async function collectExternalSources(sourcesLimit: number) {
     }
   }
 
-  // X is optional, like an unsuccessful X HTTP response. Budget denial yields
-  // no X evidence and must never fall back to an unmetered transport.
+  // Preserve other evidence if the optional, metered X search fails.
   const xResults = await searchXSignals().catch((error: unknown) => {
-    if (error instanceof ProviderBudgetError) return [];
-    throw error;
+    if (!(error instanceof ProviderBudgetError)) {
+      console.error("Discovery X search failed.");
+    }
+    return [];
   });
 
   xResults.forEach((item, index) => {
