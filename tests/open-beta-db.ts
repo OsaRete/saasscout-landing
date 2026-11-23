@@ -62,6 +62,7 @@ if (phase==='upgrade') {
   const before = sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`);
   sql(`BEGIN;\n${readFileSync('supabase/migrations/20261119000000_global_provider_spending.sql','utf8')}\nCOMMIT;`);
   assert.equal(sql(`SELECT row_to_json(s) FROM public.scan s WHERE id='${historical}';`), before, 'Upgrade preserves historical Scan evidence and identity');
+  sql(readFileSync('supabase/migrations/20261125000000_named_beta_admission.sql','utf8'));
   const opportunity = sql(`INSERT INTO public.opportunities(user_id,title)
     VALUES('${owner.id}','Historical saved opportunity') RETURNING id;`).split('\n')[0];
   const saved = sql(`INSERT INTO public.saved_ideas(user_id,opportunity_id)
@@ -88,6 +89,29 @@ assert.equal((await owner.client.rpc('application_beta_access')).data,true,'Owne
 assert.equal((await admin.rpc('application_owner_administrator',{p_user_id:owner.id})).data,true);
 const retained=await admin.from('application_user_access').select('access_role,is_active,unlimited_scans,reason').eq('user_id',owner.id).single();
 assert.deepEqual(retained.data,{access_role:'internal_tester',is_active:true,unlimited_scans:true,reason:'preserve fixture founder'});
+const api=validationTestModule('app/api/_utils/auth.ts') as {requireUser(r:Request):Promise<{id:string}>};
+process.env.NEXT_PUBLIC_SUPABASE_URL=url;process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=status.ANON_KEY;
+const request=(u:typeof a)=>new Request('http://local.test',{headers:{Authorization:`Bearer ${u.token}`}});
+sql(`INSERT INTO public.application_beta_invitations (user_id, expires_at)
+  VALUES ('${a.id}', now() + interval '1 hour'), ('${b.id}', now() + interval '1 hour');`);
+sql('DELETE FROM public.application_beta_release;');
+await assert.rejects(api.requireUser(request(a)),{status:403});
+sql('INSERT INTO public.application_beta_release(singleton) VALUES(true);');
+assert.equal((await api.requireUser(request(a))).id,a.id,'Named member passes Next.js admission with public Beta closed');
+await assert.rejects(api.requireUser(request(c)),{status:403});
+assert.equal((await admin.rpc('application_owner_administrator',{p_user_id:a.id})).data,false);
+assert.ok((await admin.from('application_beta_invitations').select('user_id')).error);
+assert.ok((await c.client.from('application_beta_invitations').insert({user_id:c.id,expires_at:'infinity'})).error);
+assert.deepEqual((await a.client.from('user_profiles').select('user_id')).data,[{user_id:a.id}]);
+assert.deepEqual((await b.client.from('user_profiles').select('user_id').eq('user_id',a.id)).data,[]);
+assert.deepEqual((await c.client.from('user_profiles').select('user_id')).data,[]);
+assert.equal((await admin.rpc('application_manage_user',{p_actor:owner.id,p_target:a.id,p_action:'suspend'})).error,null);
+await assert.rejects(api.requireUser(request(a)),{status:403});
+assert.equal((await admin.rpc('application_manage_user',{p_actor:owner.id,p_target:a.id,p_action:'reactivate'})).error,null);
+sql(`UPDATE public.application_beta_invitations SET expires_at=now() WHERE user_id='${a.id}';`);
+await assert.rejects(api.requireUser(request(a)),{status:403});
+assert.deepEqual((await a.client.from('user_profiles').select('user_id')).data,[]);
+sql(`UPDATE public.application_beta_invitations SET expires_at=now() WHERE user_id='${b.id}';`);
 // Local-only release enablement. This never accepts a remote database address.
 sql('UPDATE public.application_beta_release SET open_free_beta=true;');
 for (const u of users) assert.equal((await u.client.rpc('application_beta_access')).data,true);
@@ -112,10 +136,6 @@ for(const u of [a,b]) {
   assert.equal((await u.client.from('founder_profiles').upsert({user_id:u.id,technical_skills:'synthetic'})).error,null);
   assert.deepEqual((await u.client.from('founder_profiles').select('user_id').neq('user_id',u.id)).data,[]);
 }
-const api=validationTestModule('app/api/_utils/auth.ts') as {requireUser(r:Request):Promise<{id:string}>};
-process.env.NEXT_PUBLIC_SUPABASE_URL=url;process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=status.ANON_KEY;
-const request=(u:typeof a)=>new Request('http://local.test',{headers:{Authorization:`Bearer ${u.token}`}});
-assert.equal((await api.requireUser(request(a))).id,a.id);
 process.env.SUPABASE_SERVICE_ROLE_KEY=status.SERVICE_ROLE_KEY;
 const adminApi=validationTestModule('app/api/admin/users/route.ts') as {GET(r:Request):Promise<Response>};
 assert.equal((await adminApi.GET(new Request('http://local.test/api/admin/users',{headers:{Authorization:`Bearer ${a.token}`}}))).status,403,'Real ordinary bearer cannot list accounts');

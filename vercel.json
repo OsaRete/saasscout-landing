@@ -1,4 +1,9 @@
 {
+    "git": {
+      "deploymentEnabled": {
+        "codex/named-beta-admission": false
+      }
+    },
     "crons": [
       {
         "path": "/api/cron",
