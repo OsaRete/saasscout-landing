@@ -162,3 +162,39 @@ tests/open-beta-db.ts
 tests/open-beta.test.ts
 tests/scan-server-orchestration.test.ts
 ```
+
+## Named acceptance before public release
+
+Migration `20261125000000_named_beta_admission.sql` adds database-owner-issued,
+expiring admission for a verified Supabase Auth UUID. The existing predicate
+applies it to app routes, PostgREST RLS, and workflow admission. Grants start
+empty. Existing owner, suspension, deletion, entitlement, and public release
+rules continue to apply. The grant gives ordinary access with the account's
+existing quotas. Keep paid dispatch and Weekly generation closed during the
+non-paid acceptance window. Named users with Weekly enabled can become eligible
+if the separate scheduler and spending gates are later opened.
+
+After separate approval for the account and migration, confirm the tester's
+verified identity in Supabase Auth Users, leave `open_free_beta=false`, and run
+the following as database owner using the independently confirmed UUID. Expect
+one returned row. The database grant itself sends no email.
+
+```sql
+insert into public.application_beta_invitations (user_id, expires_at)
+select user_id, statement_timestamp() + interval '24 hours'
+from (values ('<verified-auth-uuid>'::uuid)) as tester(user_id)
+where public.application_account_verified(user_id)
+  and not exists (
+    select 1 from public.application_user_access a
+    where a.user_id=tester.user_id
+      and (a.owner_administrator or a.account_suspended or a.deletion_requested_at is not null)
+  )
+on conflict (user_id) do update set expires_at=excluded.expires_at
+returning user_id, expires_at;
+```
+
+Revoke early with
+`update public.application_beta_invitations set expires_at=statement_timestamp() where user_id='<verified-auth-uuid>'::uuid;`.
+With public Beta closed, the same session loses workspace access on its next
+admission check. Auth and previously created records remain available to their
+respective recovery and retention processes. Revoke test publications separately.
