@@ -81,3 +81,29 @@ test("collector distinguishes healthy, degraded, unavailable, missing configurat
   assert.equal((await collectWeeklyExternalEvidence({ topics: [topic()], providers: [missing], runId: "r", period, collectedAt: period.period_start })).status, "not_configured");
   assert.equal((await collectWeeklyExternalEvidence({ topics: [], providers: [success], runId: "r", period, collectedAt: period.period_start })).metrics.providerAttemptCount, 0);
 });
+
+test("Weekly queues all twelve searches behind two workers", async () => {
+  let active = 0;
+  let peak = 0;
+  const result = await collectWeeklyExternalEvidence({
+    topics: Array.from({ length: 4 }, () => topic()),
+    providers: [{
+      name: "synthetic",
+      configured: () => true,
+      async search() {
+        peak = Math.max(peak, ++active);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        active -= 1;
+        return [raw];
+      },
+    }],
+    runId: "queued",
+    period,
+    collectedAt: period.period_start,
+  });
+
+  assert.equal(peak, 2);
+  assert.equal(result.metrics.providerAttemptCount, 12);
+  assert.equal(result.metrics.providerSuccessCount, 12);
+  assert.equal(result.status, "healthy");
+});
