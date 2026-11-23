@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { mapAuthoritativeWeeklyToDashboard } from "../lib/weekly-intelligence.ts";
+import { getWeeklyIntelligencePeriod, mapAuthoritativeWeeklyToDashboard, rotateWeeklyRecipients } from "../lib/weekly-intelligence.ts";
 
 function read(path: string) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -85,8 +85,21 @@ test("scheduler selects eligible users from server-owned profiles", () => {
   const scheduler = read("app/api/cron/route.ts");
   assert.match(scheduler, /from\("user_profiles"\)/);
   assert.match(scheduler, /weekly_intelligence_enabled/);
+  assert.match(scheduler, /\.order\("user_id"\)/);
+  assert.match(scheduler, /\.gt\("user_id", lastUserId\)/);
+  assert.match(scheduler, /error instanceof AuthError && error.status === 403/);
   assert.match(scheduler, /CRON_SECRET/);
   assert.doesNotMatch(scheduler, /auth\.getUser/);
+});
+
+test("the same UTC period keeps its recipient order and successive weeks rotate priority", () => {
+  const users = ["a", "b", "c", "d"];
+  const periodFor = (day: number) => getWeeklyIntelligencePeriod(new Date(Date.UTC(2026, 10, day)));
+  const first = rotateWeeklyRecipients(users, periodFor(2));
+  assert.deepEqual(rotateWeeklyRecipients(users, periodFor(8)), first);
+  assert.deepEqual(rotateWeeklyRecipients(users, periodFor(9)), [...first.slice(1), first[0]]);
+  assert.equal(new Set([2, 9, 16, 23].map((day) => rotateWeeklyRecipients(users, periodFor(day))[0])).size, users.length);
+  assert.deepEqual(rotateWeeklyRecipients([], periodFor(2)), []);
 });
 
 test("title normalization collapses formatting-only duplicates", () => {

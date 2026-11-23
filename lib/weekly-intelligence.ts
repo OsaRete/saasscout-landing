@@ -250,6 +250,14 @@ export function getWeeklyIntelligencePeriod(now = new Date()): WeeklyPeriod {
   };
 }
 
+/** Rotate the ordered candidate list by one position per UTC week. */
+export function rotateWeeklyRecipients<T>(ordered: readonly T[], period: WeeklyPeriod): T[] {
+  if (!ordered.length) return [];
+  const week = Math.floor(Date.parse(period.period_start) / WEEK_MS);
+  const offset = ((week % ordered.length) + ordered.length) % ordered.length;
+  return [...ordered.slice(offset), ...ordered.slice(0, offset)];
+}
+
 export function isInsideWeeklyPeriod(createdAt: string | null | undefined, period: WeeklyPeriod) {
   if (!createdAt) return false;
   const time = new Date(createdAt).getTime();

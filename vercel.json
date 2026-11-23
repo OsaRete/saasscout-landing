@@ -1,7 +1,8 @@
 {
     "git": {
       "deploymentEnabled": {
-        "codex/named-beta-admission": false
+        "codex/named-beta-admission": false,
+        "codex/closed-beta-readiness": false
       }
     },
     "crons": [
