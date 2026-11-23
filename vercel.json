@@ -2,7 +2,8 @@
     "git": {
       "deploymentEnabled": {
         "codex/named-beta-admission": false,
-        "codex/closed-beta-readiness": false
+        "codex/closed-beta-readiness": false,
+        "codex/weekly-beta-search-queue": false
       }
     },
     "crons": [

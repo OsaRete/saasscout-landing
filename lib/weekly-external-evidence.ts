@@ -7,7 +7,7 @@ import type { WeeklyPeriod } from "./weekly-intelligence.ts";
 
 export const WEEKLY_EXTERNAL_SOURCE_FINGERPRINT_VERSION = "weekly-external-source@1";
 export const WEEKLY_CONTENT_FINGERPRINT_VERSION = "weekly-content-fingerprint@1";
-export const WEEKLY_EXTERNAL_LIMITS = Object.freeze({ maxTopics: 5, queriesPerTopic: 3, maxQueries: 12, resultsPerQuery: 4, maxResults: 40, queryTimeoutMs: 8_000, totalTimeoutMs: 25_000 });
+export const WEEKLY_EXTERNAL_LIMITS = Object.freeze({ maxTopics: 5, queriesPerTopic: 3, maxQueries: 12, maxConcurrentQueries: 2, resultsPerQuery: 4, maxResults: 40, queryTimeoutMs: 8_000, totalTimeoutMs: 25_000 });
 export type WeeklyExternalFreshness = "new" | "resurfaced" | "changed" | "unchanged" | "publication_unknown";
 export type WeeklyExternalOriginClass = "raw_external";
 
@@ -121,22 +121,52 @@ export async function collectWeeklyExternalEvidence(input: { topics: readonly We
   const configured = input.providers.filter((provider) => provider.configured());
   const missing = input.providers.length - configured.length;
   if (!configured.length) return { status: "not_configured", observations: [], metrics: { providerAttemptCount: 0, providerSuccessCount: 0, providerFailureCount: 0, providerNotConfiguredCount: missing, rawExternalResultCount: 0, normalizedExternalResultCount: 0, deduplicatedExternalCount: 0, sourceDegraded: true } };
-  let successes = 0, failures = 0;
+  let successes = 0;
   const raw: Array<{ result: WeeklyExternalProviderResult; topicFingerprint: string }> = [];
-  const jobs = queries.flatMap((query) => configured.map(async (provider) => {
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), WEEKLY_EXTERNAL_LIMITS.queryTimeoutMs);
-    try { const results = await provider.search({ query: query.query, limit: WEEKLY_EXTERNAL_LIMITS.resultsPerQuery, signal: controller.signal }); successes += 1; for (const result of results.slice(0, WEEKLY_EXTERNAL_LIMITS.resultsPerQuery)) raw.push({ result, topicFingerprint: query.monitoringTopicFingerprint }); }
-    catch { failures += 1; } finally { clearTimeout(timer); }
-  }));
-  let totalTimer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([Promise.allSettled(jobs), new Promise<void>((resolve) => { totalTimer = setTimeout(resolve, WEEKLY_EXTERNAL_LIMITS.totalTimeoutMs); })]);
-  if (totalTimer) clearTimeout(totalTimer);
+  const jobs = queries.flatMap((query) => configured.map((provider) => ({ query, provider })));
+  const deadline = new AbortController();
+  let nextJob = 0;
+  let attempts = 0;
+
+  async function collectNext() {
+    while (!deadline.signal.aborted && nextJob < jobs.length) {
+      const { query, provider } = jobs[nextJob++];
+      attempts += 1;
+      const signal = AbortSignal.any([deadline.signal, AbortSignal.timeout(WEEKLY_EXTERNAL_LIMITS.queryTimeoutMs)]);
+      try {
+        const results = await provider.search({ query: query.query, limit: WEEKLY_EXTERNAL_LIMITS.resultsPerQuery, signal });
+        if (deadline.signal.aborted) return;
+        signal.throwIfAborted();
+        successes += 1;
+        for (const result of results.slice(0, WEEKLY_EXTERNAL_LIMITS.resultsPerQuery)) {
+          raw.push({ result, topicFingerprint: query.monitoringTopicFingerprint });
+        }
+      } catch {
+        if (deadline.signal.aborted) return;
+      }
+    }
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      deadline.abort();
+      resolve();
+    }, WEEKLY_EXTERNAL_LIMITS.totalTimeoutMs);
+  });
+  try {
+    const workers = Array.from({ length: Math.min(jobs.length, WEEKLY_EXTERNAL_LIMITS.maxConcurrentQueries) }, collectNext);
+    await Promise.race([Promise.all(workers), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+  const failures = attempts - successes;
   const limited = raw.slice(0, WEEKLY_EXTERNAL_LIMITS.maxResults);
   const normalized = limited.flatMap((entry) => { const item = normalizeWeeklyExternalResult({ ...entry, runId: input.runId, period: input.period, collectedAt: input.collectedAt }); return item ? [item] : []; });
   const observations = deduplicateWeeklyExternalEvidence(normalized);
-  const sourceDegraded = failures > 0 || missing > 0;
+  const sourceDegraded = successes < jobs.length || missing > 0;
   const status = successes === 0 ? "unavailable" : observations.length === 0 ? "no_results" : sourceDegraded ? "degraded" : "healthy";
-  return { status, observations, metrics: { providerAttemptCount: configured.length * queries.length, providerSuccessCount: successes, providerFailureCount: failures, providerNotConfiguredCount: missing, rawExternalResultCount: limited.length, normalizedExternalResultCount: normalized.length, deduplicatedExternalCount: observations.length, sourceDegraded } };
+  return { status, observations, metrics: { providerAttemptCount: attempts, providerSuccessCount: successes, providerFailureCount: failures, providerNotConfiguredCount: missing, rawExternalResultCount: limited.length, normalizedExternalResultCount: normalized.length, deduplicatedExternalCount: observations.length, sourceDegraded } };
 }
 
 export function createWeeklySerpApiProvider(fetcher: typeof fetch = fetch): WeeklyExternalProvider {
