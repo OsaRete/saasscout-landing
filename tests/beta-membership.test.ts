@@ -154,12 +154,37 @@ test("Weekly cron requires a separate explicit opt-in before selecting recipient
     if (previousEnabled === undefined) delete process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED;
     else process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED = previousEnabled;
   });
-  const generate = t.mock.fn(() => { throw new Error("Empty recipient list generated work"); });
-  const selectRecipients = t.mock.fn(async () => ({ data: [], error: null }));
+  const { AuthError } = validationTestModule("app/api/_utils/auth.ts") as {
+    AuthError: new (message: string, status: number) => Error;
+  };
+  const generate = t.mock.fn(async (userId: string) => {
+    if (userId === "a") throw new AuthError("Denied", 403);
+    return { problems: [], sourceCounts: {} };
+  });
+  const selectRecipients = t.mock.fn(async (after?: string) => ({
+    data: after === undefined ? [{ user_id: "a" }] : after === "a" ? [{ user_id: "b" }] : [],
+    error: null,
+  }));
   const { GET } = validationTestModule("app/api/cron/route.ts", (specifier) => {
     if (specifier === "@supabase/supabase-js") {
-      return { createClient: () => ({ from: () => ({ select: () => ({ eq: selectRecipients }) }) }) };
+      return {
+        createClient: () => ({
+          from: () => ({
+            select: () => ({
+              eq: () => ({
+                order: () => ({
+                  limit: () => ({
+                    then: (resolve: (value: unknown) => void) => selectRecipients().then(resolve),
+                    gt: (_column: string, lastUserId: string) => selectRecipients(lastUserId),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      };
     }
+    if (specifier === "../_utils/auth") return { AuthError };
     if (specifier === "../weekly-intelligence/route") return { runWeeklyGenerationForUser: generate };
     return undefined;
   }) as { GET(request: Request): Promise<Response> };
@@ -176,9 +201,13 @@ test("Weekly cron requires a separate explicit opt-in before selecting recipient
   process.env.WEEKLY_SCHEDULED_GENERATION_ENABLED = "true";
   const active = await invoke();
   assert.equal(active.status, 200);
-  assert.equal((await active.json()).configured_recipient_count, 0);
-  assert.equal(selectRecipients.mock.callCount(), 1);
-  assert.equal(generate.mock.callCount(), 0);
+  const result = await active.json();
+  assert.equal(result.configured_recipient_count, 2);
+  assert.equal(result.eligible_recipient_count, 1);
+  assert.equal(result.succeeded_count, 1);
+  assert.equal(result.failed_count, 0);
+  assert.deepEqual(selectRecipients.mock.calls.map((call) => call.arguments[0]), [undefined, "a", "b"]);
+  assert.deepEqual(generate.mock.calls.map((call) => call.arguments[0]).sort(), ["a", "b"]);
 });
 
 test("scheduled membership uses the same persisted predicate and denies revoked users", async () => {
