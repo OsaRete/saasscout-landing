@@ -51,6 +51,8 @@ if (manifest.phase==='upgrade') {
   assert.equal(await reserve(args()),false,'Old admission counts abandoned rows against concurrency');
   sql(readFileSync('supabase/migrations/20261124000000_provider_dispatch_concurrency.sql','utf8'));
   assert.equal(ledger(),beforeUpgrade,'Upgrade preserves prior-month pending and dispatched rows byte-for-byte');
+  sql(readFileSync('supabase/migrations/20261126000000_open_beta_weekly_budget.sql','utf8'));
+  assert.equal(ledger(),beforeUpgrade,'Weekly sublimit migration preserves existing reservations');
   const next=args();
   assert.equal(await reserve(next),true);
   assert.equal(await dispatch(next),false,'Prior-month unresolved dispatch still occupies the only slot');
@@ -61,6 +63,34 @@ if (manifest.phase==='upgrade') {
   assert.equal(await finish(next),true);
   checks.push('populated upgrade preserves the ledger and prior-month dispatch semantics');
 }
+
+generous();
+const weeklyReservations = (provider: 'openrouter' | 'serpapi') => Number(sql(`
+  SELECT count(*) FROM public.application_provider_reservations
+  WHERE workflow='weekly' AND provider='${provider}'
+    AND reserved_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+`));
+assert.equal(await reserve(args(owner, 'openrouter', 'weekly')), false, 'Default public Weekly limit denies reservations');
+sql('UPDATE public.application_beta_release SET open_free_beta=false;');
+assert.equal(await reserve(args(owner, 'openrouter', 'weekly')), true, 'Closed founder acceptance uses the shared budget');
+sql('UPDATE public.application_beta_release SET open_free_beta=true;');
+
+for (const [provider, column] of [
+  ['openrouter', 'weekly_openrouter_requests'],
+  ['serpapi', 'weekly_serpapi_requests'],
+] as const) {
+  const beforeWeekly = weeklyReservations(provider);
+  sql(`UPDATE public.application_spending_policy SET ${column}=${beforeWeekly + 1};`);
+  const attempts = await Promise.all(Array.from({length: 12}, (_, i) =>
+    reserve(args(i % 2 ? owner : ordinary, provider, 'weekly'))
+  ));
+  assert.equal(attempts.filter(Boolean).length, 1, 'Only one owner can reserve the last Weekly unit');
+  assert.equal(weeklyReservations(provider), beforeWeekly + 1);
+  assert.equal(await reserve(args(owner, provider, 'weekly')), false);
+  assert.equal(await reserve(args(ordinary, provider, 'discovery')), true, 'Weekly exhaustion leaves interactive capacity');
+}
+checks.push('public Weekly sublimits serialize across owners and preserve founder and interactive capacity');
+sql('UPDATE public.application_spending_policy SET weekly_openrouter_requests=10000,weekly_serpapi_requests=10000;');
 
 sql('UPDATE public.application_spending_policy SET enabled=false;');
 assert.equal(await reserve(args(owner)),false);

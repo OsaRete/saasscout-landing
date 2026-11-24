@@ -82,7 +82,8 @@ run(["--import", "./tests/support/beta-acceptance-egress.mjs", "node_modules/nex
 sql(`UPDATE public.application_beta_release SET open_free_beta = true;
 UPDATE public.application_spending_policy SET enabled=true,total_requests=5000,
   openrouter_requests=1000,serpapi_requests=4000,x_requests=0,search_requests=4000,
-  user_ai_requests=6,user_search_requests=160,max_concurrent=32,weekly_max_executions=2;
+  user_ai_requests=6,user_search_requests=160,max_concurrent=32,weekly_max_executions=2,
+  weekly_openrouter_requests=10,weekly_serpapi_requests=60;
 CREATE FUNCTION public.beta_fixture_reject_discovery() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.summary = 'Disposable Discovery write rejection' THEN
