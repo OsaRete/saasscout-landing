@@ -132,6 +132,7 @@ export default function DashboardPage() {
         .from("weekly_intelligence_runs")
         .select("id,period_start,period_end,summary,total_sources_analyzed,external_sources_persisted,execution_mode,external_provider_state,execution_contract_version")
         .eq("user_id", user.id)
+        .eq("is_global", false)
         .eq("status", "completed")
         .order("period_start", { ascending: false })
         .limit(1)

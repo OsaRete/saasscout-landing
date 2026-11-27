@@ -26,6 +26,11 @@ class MockQueryBuilder implements PromiseLike<TableResult> {
     return this;
   }
 
+  eq(column: string, value: unknown) {
+    this.operations.push({ table: this.table, method: "eq", args: [column, value] });
+    return this;
+  }
+
   ilike(column: string, pattern: string) {
     this.operations.push({ table: this.table, method: "ilike", args: [column, pattern] });
     return this;
@@ -65,49 +70,58 @@ function createMockClient(results: Record<string, TableResult>) {
   return { client, operations };
 }
 
-test("getProblemEvolutionObservations reads Data Moat tables and adapts rows", async () => {
+const ownerId = "user-1";
+const ownedRun = { run_id: "run-a", weekly_intelligence_runs: { id: "run-a", user_id: ownerId, is_global: false } };
+
+test("Evolution reads only proven owner history and adapts it with lineage", async () => {
   const { client, operations } = createMockClient({
     problem_intelligence: {
       data: [{ id: "pi-1", problem_title: "Manual reporting", avg_pain_score: 8, intelligence_score: 80, prepared_count: 1 }],
     },
     weekly_detected_problems: {
-      data: [{ id: "wdp-1", problem_title: "Manual reporting", pain_score: 7, trend_score: 8, source_evidence: "Operators complain weekly." }],
+      data: [
+        { ...ownedRun, id: "wdp-1", problem_title: "Manual reporting", pain_score: 7, trend_score: 8, source_evidence: "Operators complain weekly." },
+        { ...ownedRun, weekly_intelligence_runs: { ...ownedRun.weekly_intelligence_runs, is_global: true }, id: "global", problem_title: "Global marker" },
+      ],
     },
     weekly_sources: {
-      data: [{ id: "ws-1", problem_cluster: "Manual reporting", source_title: "Reporting thread", signal_score: 9, source_url: "https://example.com" }],
+      data: [{ ...ownedRun, id: "ws-1", problem_cluster: "Manual reporting", source_title: "Reporting thread", signal_score: 9, source_url: "https://example.com" }],
     },
     discovered_problems: {
-      data: [{ id: "dp-1", problem_title: "Manual reporting", opportunity_score: 8, discovery_id: "disc-1", user_id: "user-1" }],
+      data: [
+        { id: "dp-1", problem_title: "Manual reporting", opportunity_score: 8, discovery_id: "disc-1", user_id: ownerId },
+        { id: "dp-2", problem_title: "Foreign marker", user_id: "user-2" },
+      ],
     },
   });
 
   const result = await getProblemEvolutionObservations(client, {
+    ownerId,
     problemTitle: "Manual reporting",
     since: "2026-01-01T00:00:00.000Z",
     limit: 10,
   });
 
-  assert.equal(result.observations.length, 4);
-  assert.equal(result.diagnostics.totalRowsRead, 4);
+  assert.equal(result.observations.length, 3);
+  assert.equal(result.diagnostics.totalRowsRead, 3);
   assert.deepEqual(result.diagnostics.failedTables, []);
-  assert.equal(result.observations[0].provenance?.source_table, "problem_intelligence");
-  assert.equal(result.observations[1].provenance?.source_table, "weekly_detected_problems");
-  assert.equal(result.observations[2].provenance?.source_table, "weekly_sources");
-  assert.equal(result.observations[3].provenance?.source_table, "discovered_problems");
-  assert.equal(result.observations[2].source_quality_score, 9);
+  assert.deepEqual(result.observations.map((item) => item.provenance?.source_table), ["weekly_detected_problems", "weekly_sources", "discovered_problems"]);
+  assert.ok(result.observations.every((item) => item.provenance?.user_id === ownerId));
+  assert.equal(result.observations[1].source_quality_score, 9);
+  assert.ok(operations.every((operation) => operation.table !== "problem_intelligence"));
+  assert.ok(operations.some((operation) => operation.method === "eq" && operation.args[0] === "weekly_intelligence_runs.is_global" && operation.args[1] === false));
   assert.ok(operations.some((operation) => operation.method === "ilike" && operation.args[0] === "problem_title"));
   assert.ok(operations.every((operation) => !["insert", "update", "delete", "upsert"].includes(operation.method)));
 });
 
 test("assessProblemEvolution produces classifier assessment from repository observations", async () => {
   const { client } = createMockClient({
-    problem_intelligence: { data: [{ problem_title: "Lead follow-up", avg_pain_score: 9, evidence_count: 3, source_count: 2 }] },
-    weekly_detected_problems: { data: [{ problem_title: "Lead follow-up", pain_score: 8, source_evidence: "Repeated complaints" }] },
+    weekly_detected_problems: { data: [{ ...ownedRun, problem_title: "Lead follow-up", pain_score: 8, source_evidence: "Repeated complaints" }] },
     weekly_sources: { data: [] },
-    discovered_problems: { data: [] },
+    discovered_problems: { data: [{ user_id: ownerId, problem_title: "Lead follow-up", pain_score: 9, evidence_count: 3, source_count: 2 }] },
   });
 
-  const result = await assessProblemEvolution(client, { includeWeeklySources: true, includeDiscoveredProblems: true });
+  const result = await assessProblemEvolution(client, { ownerId, includeWeeklySources: true, includeDiscoveredProblems: true });
 
   assert.equal(result.assessment.diagnostics.observationCount, 2);
   assert.ok(["recurring", "validated", "new", "unknown"].includes(result.assessment.lifecycleState));
@@ -116,13 +130,12 @@ test("assessProblemEvolution produces classifier assessment from repository obse
 
 test("repository returns partial diagnostics and warnings for partial failures", async () => {
   const { client } = createMockClient({
-    problem_intelligence: { data: [{ problem_title: "Spreadsheet workflows", avg_pain_score: 6 }] },
     weekly_detected_problems: { error: new Error("weekly table unavailable") },
     weekly_sources: { error: new Error("sources unavailable") },
-    discovered_problems: { data: [] },
+    discovered_problems: { data: [{ user_id: ownerId, problem_title: "Spreadsheet workflows", pain_score: 6 }] },
   });
 
-  const result = await getRecentProblemEvolutionAssessments(client);
+  const result = await getRecentProblemEvolutionAssessments(client, { ownerId });
 
   assert.equal(result.assessments.length, 1);
   assert.deepEqual(result.diagnostics.failedTables, ["weekly_detected_problems", "weekly_sources"]);
@@ -131,11 +144,16 @@ test("repository returns partial diagnostics and warnings for partial failures",
 
 test("repository throws only when all source reads fail", async () => {
   const { client } = createMockClient({
-    problem_intelligence: { error: new Error("failed") },
     weekly_detected_problems: { error: new Error("failed") },
     weekly_sources: { error: new Error("failed") },
     discovered_problems: { error: new Error("failed") },
   });
 
-  await assert.rejects(() => getProblemEvolutionObservations(client), /could not read any Data Moat source/);
+  await assert.rejects(() => getProblemEvolutionObservations(client, { ownerId }), /could not read any Data Moat source/);
+});
+
+test("Evolution fails closed when there is no owner", async () => {
+  const { client, operations } = createMockClient({});
+  await assert.rejects(() => getProblemEvolutionObservations(client, { ownerId: "" }), /requires an authenticated owner/);
+  assert.deepEqual(operations, []);
 });

@@ -115,7 +115,7 @@ test("quality contract rejects generic/duplicate problems, unsupported buying cl
 test("unsupported solution gaps remain omitted and history can frame novelty without becoming fresh evidence", () => {
   const report = validateWeeklyModelOutput({ summary: "Grounded.", problems: [qualityProblem({ existing_workaround: null, why_existing_solutions_fail: null })] }, evidence, [], "mixed");
   assert.equal(report.problems[0].why_existing_tools_fail, null);
-  const prompt = buildWeeklyIntelligencePrompt({ period: { period_start: "2026-08-17T00:00:00.000Z", period_end: "2026-08-24T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" }, userEvidence: evidence, priorUserContext: [{ ...evidence[0], id: "history-private" }], sharedContext: [], executionMode: "mixed" });
+  const prompt = buildWeeklyIntelligencePrompt({ period: { period_start: "2026-08-17T00:00:00.000Z", period_end: "2026-08-24T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" }, userEvidence: evidence, priorUserContext: [{ ...evidence[0], id: "history-private" }], executionMode: "mixed" });
   assert.match(prompt, /new angle on a known problem/);
   assert.doesNotMatch(prompt, /"evidenceId":"history-private"/);
 });

@@ -159,7 +159,7 @@ test("claimed generation replaces children exactly once", async () => {
     period: { period_start: "2026-07-13T00:00:00.000Z", period_end: "2026-07-20T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" },
     dependencies: {
       repository: repo,
-      aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "scan-1", title: "Scan", summary: "Evidence", occurredAt: "2026-07-14T00:00:00.000Z" }], sharedContext: [], bySource: {} }),
+      aggregate: async () => ({ items: [{ kind: "scan", source: "completed_scans", id: "scan-1", ownerId: "user-1", title: "Scan", summary: "Evidence", occurredAt: "2026-07-14T00:00:00.000Z" }], bySource: {} }),
       analyze: async () => ({ summary: "ok", problems: [{ problem_title: "Problem", source_evidence: "scan", evidence_references: ["scan-1"] }] }),
     },
   });
@@ -177,8 +177,8 @@ test("migration cleans historical duplicates before unique title-key constraint"
 
 test("weekly route protects completed reports from replacement or failed marking", () => {
   const route = read("app/api/weekly-intelligence/route.ts");
-  assert.match(route, /runRow\?\.status === "completed"/);
-  assert.match(route, /return getProblemsForRun\(runId\)/);
+  assert.match(route, /run\.status === "completed"/);
+  assert.match(route, /return getProblemsForRun\(runId, userId\)/);
   assert.match(route, /\.neq\("status", "completed"\)/);
 });
 

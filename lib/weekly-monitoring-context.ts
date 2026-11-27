@@ -69,10 +69,10 @@ type AggregatedMonitoringInput = Readonly<{
 
 /** Adapts already owner-filtered Data Moat rows; saves/actions only enrich a linked concept. */
 export function buildWeeklyMonitoringRecordsFromDataMoat(aggregation: AggregatedMonitoringInput, authenticatedUserId: string) {
-  const opportunities = new Map(aggregation.items.filter((item) => item.kind === "opportunity").map((item) => [item.id, item]));
-  const problems = new Map(aggregation.items.filter((item) => item.kind === "discover_problem").map((item) => [item.id, item]));
-  return aggregation.items.flatMap<WeeklyMonitoringRecord>((item) => {
-    if (item.ownerId !== authenticatedUserId) return [];
+  const ownedItems = aggregation.items.filter((item) => item.ownerId === authenticatedUserId);
+  const opportunities = new Map(ownedItems.filter((item) => item.kind === "opportunity").map((item) => [item.id, item]));
+  const problems = new Map(ownedItems.filter((item) => item.kind === "discover_problem").map((item) => [item.id, item]));
+  return ownedItems.flatMap<WeeklyMonitoringRecord>((item) => {
     if (item.kind === "scan") return [{ id: item.id, ownerId: authenticatedUserId, kind: "completed_scan", occurredAt: item.occurredAt, title: item.title, market: item.title, problemSummary: item.summary, status: String(item.metadata?.status || "") }];
     if (item.kind === "discover_problem") return [{ id: item.id, ownerId: authenticatedUserId, kind: "accepted_discover_problem", occurredAt: item.occurredAt, title: item.title, problemSummary: item.summary, niche: typeof item.metadata?.problemCluster === "string" ? item.metadata.problemCluster : null, status: String(item.metadata?.status || ""), conceptId: item.id }];
     if (item.kind === "saved_idea") {

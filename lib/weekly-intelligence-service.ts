@@ -15,7 +15,6 @@ import {
   type WeeklyModelValidationReason,
   type WeeklyPeriod,
   type WeeklyReportProblem,
-  type WeeklySharedSource,
 } from "./weekly-intelligence.ts";
 import { buildWeeklyMonitoringRecordsFromDataMoat, selectWeeklyMonitoringTopics, type WeeklyMonitoringRecord } from "./weekly-monitoring-context.ts";
 import { classifyWeeklyExternalEvidence, type WeeklyExternalCollection, type WeeklyExternalEvidence, type WeeklyExternalHistory } from "./weekly-external-evidence.ts";
@@ -51,7 +50,6 @@ export type WeeklyDiagnosticStage =
   | "parent_persisted"
   | "sources_persisted"
   | "problems_persisted"
-  | "data_moat_updated"
   | "completion_transitioned"
   | "response_completed";
 
@@ -169,12 +167,12 @@ export function deriveWeeklyExecutionMode(input: { usableFreshExternalCount: num
 
 export type AuthoritativeWeeklyGenerationRepository = {
   claimRun(input: { userId: string; period: WeeklyPeriod; staleBefore: string }): Promise<WeeklyGenerationClaim>;
-  getProblemsForRun(runId: string): Promise<Record<string, unknown>[]>;
+  getProblemsForRun(runId: string, userId: string): Promise<Record<string, unknown>[]>;
   completeRun(input: { runId: string; userId: string; period: WeeklyPeriod; totalSourcesAnalyzed: number; summary: string; executionMode: WeeklyExecutionMode; providerState: WeeklyExternalCollection["status"]; externalSourcesPersisted: number; sourceDegraded: boolean }): Promise<Record<string, unknown>>;
-  replaceProblems(input: { runId: string; problems: WeeklyReportProblem[] }): Promise<Record<string, unknown>[]>;
-  markRunFailed(input: { runId: string; errorMessage: string }): Promise<void>;
+  replaceProblems(input: { runId: string; userId: string; problems: WeeklyReportProblem[] }): Promise<Record<string, unknown>[]>;
+  markRunFailed(input: { runId: string; userId: string; errorMessage: string }): Promise<void>;
   loadExternalHistory?(input: { userId: string; beforePeriodStart: string }): Promise<WeeklyExternalHistory[]>;
-  persistExternalSources?(input: { runId: string; sources: WeeklyExternalEvidence[] }): Promise<number>;
+  persistExternalSources?(input: { runId: string; userId: string; sources: WeeklyExternalEvidence[] }): Promise<number>;
 };
 
 export type AuthoritativeWeeklyGenerationDependencies = {
@@ -186,7 +184,6 @@ export type AuthoritativeWeeklyGenerationDependencies = {
     period: WeeklyPeriod;
     userEvidence: WeeklyEvidenceSource[];
     priorUserContext: WeeklyEvidenceSource[];
-    sharedContext: WeeklySharedSource[];
     executionMode: WeeklyExecutionMode;
     correctiveInstruction?: string;
   }) => Promise<WeeklyModelOutput | { modelOutput: WeeklyModelOutput; responseMetadata: { responseContentPresent: boolean; responseContentLength: number; finishReason: string; responseFormatRequested: boolean; parserStrategy: WeeklyModelParserStrategy; parseAttemptCount: number; promptCharacterCount?: number; promptApproxTokenCount?: number; maxOutputTokens?: number; requestedProblemCount?: number } }>;
@@ -278,7 +275,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
   await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: claim.status, status: claim.status === "reclaimed" ? "claimed" : claim.status, userId, safeMetadata: { runId, plan: claim.run.plan } });
 
   if (claim.status === "completed") {
-    const problems = await dependencies.repository.getProblemsForRun(runId);
+    const problems = await dependencies.repository.getProblemsForRun(runId, userId);
     await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: "reused", status: "reused", userId, durationMs: Date.now() - workflowStartedAt, safeMetadata: { runId, reused: true, generatedProblems: problems.length, plan: claim.run.plan } });
     return { success: true, status: "completed", run: claim.run, sources_saved: Number(claim.run.external_sources_persisted || 0), sourceCounts: emptySourceCounts(claim.run), problems, code: "weekly_current_period_reused", stage: "response_completed", weeklyExecutionId, executionMode: (claim.run.execution_mode as WeeklyExecutionMode) || null, providerState: (claim.run.external_provider_state as WeeklyExternalCollection["status"]) || null, reused: true };
   }
@@ -290,7 +287,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
 
   try {
     currentStage = "data_moat_sources_loaded";
-    const { aggregation, userEvidence, priorUserContext, sharedContext } = await collectWeeklyEvidenceFromDataMoat({
+    const { aggregation, userEvidence, priorUserContext } = await collectWeeklyEvidenceFromDataMoat({
       userId,
       period,
       aggregate: dependencies.aggregate,
@@ -332,7 +329,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     let persistenceDegraded = false;
     currentStage = "sources_persisted";
     try {
-      persistedExternal = dependencies.repository.persistExternalSources ? await dependencies.repository.persistExternalSources({ runId, sources: external }) : 0;
+      persistedExternal = dependencies.repository.persistExternalSources ? await dependencies.repository.persistExternalSources({ runId, userId, sources: external }) : 0;
       if (external.length > 0 && persistedExternal !== external.length) throw new Error("Persisted external source count mismatch.");
     } catch (error) {
       if (historicalContext.length === 0 && userEvidence.length === 0) throw error;
@@ -347,9 +344,9 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     const evidenceEnvelope = selectWeeklyModelEvidence(availableEvidenceEnvelope);
     const sourceCounts: WeeklySourceCounts = { currentPeriodInternalEvidenceCount: userEvidence.length, eligibleExternalEvidenceCount: externalEvidence.length, historicalContextCount: historicalContext.length, monitoringTopicCount: monitoring.topics.length, externalSourcesCollected: collection.metrics.normalizedExternalResultCount, externalSourcesEligible: usableExternal.length, externalSourcesPersisted: persistedExternal, externalSourcesNew: external.filter((item) => item.freshness === "new" || item.freshness === "publication_unknown").length, externalSourcesChanged: external.filter((item) => item.freshness === "changed").length, externalSourcesResurfaced: external.filter((item) => item.freshness === "resurfaced").length, externalSourcesUnchanged: external.filter((item) => item.freshness === "unchanged").length, totalEvidenceUsed: evidenceEnvelope.length, sourceDegraded: collection.metrics.sourceDegraded || persistenceDegraded };
     logStage("sources_persisted", { persistedExternalCount: persistedExternal });
-    logStage("data_moat_sources_loaded", { currentPeriodInternalEvidenceCount: userEvidence.length, sharedSourceCount: sharedContext.length, priorUserContextCount: priorUserContext.length });
+    logStage("data_moat_sources_loaded", { currentPeriodInternalEvidenceCount: userEvidence.length, priorUserContextCount: priorUserContext.length });
     const emptyEvidence = evidenceEnvelope.length === 0;
-    dependencies.log?.("source_counts", { currentPeriodInternalEvidenceCount: sourceCounts.currentPeriodInternalEvidenceCount, eligibleExternalEvidenceCount: sourceCounts.eligibleExternalEvidenceCount, historicalContextCount: sourceCounts.historicalContextCount, totalEvidenceUsed: sourceCounts.totalEvidenceUsed, sharedSourceCount: sharedContext.length, emptyEvidence });
+    dependencies.log?.("source_counts", { currentPeriodInternalEvidenceCount: sourceCounts.currentPeriodInternalEvidenceCount, eligibleExternalEvidenceCount: sourceCounts.eligibleExternalEvidenceCount, historicalContextCount: sourceCounts.historicalContextCount, totalEvidenceUsed: sourceCounts.totalEvidenceUsed, emptyEvidence });
     const selectedExternalEvidenceCount = evidenceEnvelope.filter((item) => item.type === "external").length;
     dependencies.log?.("model_evidence_selected", { modelEvidenceAvailableCount: availableEvidenceEnvelope.length, modelEvidenceSelectedCount: evidenceEnvelope.length, modelEvidenceOmittedCount: availableEvidenceEnvelope.length - evidenceEnvelope.length, availableExternalEvidenceCount: externalEvidence.length, selectedExternalEvidenceCount, omittedExternalEvidenceCount: externalEvidence.length - selectedExternalEvidenceCount, selectedMonitoringTopicCount: new Set(evidenceEnvelope.filter((item) => item.type === "external").map((item) => item.monitoring_topic)).size, historicalContextSelectedCount: evidenceEnvelope.filter((item) => item.type === "historical_context").length, totalEvidenceUsed: evidenceEnvelope.length });
 
@@ -371,7 +368,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
         logStage("model_generation_started", { attemptNumber, maxAttempts });
         let modelOutput;
         try {
-          modelOutput = await dependencies.analyze({ period, userEvidence: evidenceEnvelope, priorUserContext, sharedContext, executionMode, correctiveInstruction });
+          modelOutput = await dependencies.analyze({ period, userEvidence: evidenceEnvelope, priorUserContext, executionMode, correctiveInstruction });
         } catch (error) {
           throw classifyWeeklyError(error, "model_generation_completed", weeklyExecutionId);
         }
@@ -401,9 +398,8 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     }
     const normalizedProblems = normalizeWeeklyProblemsForPersistence(report.problems);
     currentStage = "problems_persisted";
-    const problems = await dependencies.repository.replaceProblems({ runId, problems: normalizedProblems });
+    const problems = await dependencies.repository.replaceProblems({ runId, userId, problems: normalizedProblems });
     logStage("problems_persisted", { problemsPersisted: problems.length });
-    logStage("data_moat_updated", { generatedProblemCount: problems.length });
     currentStage = "completion_transitioned";
     const completedRun = await dependencies.repository.completeRun({ runId, userId, period, totalSourcesAnalyzed: evidenceEnvelope.length, summary: report.summary, executionMode, providerState: collection.status, externalSourcesPersisted: persistedExternal, sourceDegraded: sourceCounts.sourceDegraded });
     logStage("parent_persisted", { finalStatus: completedRun.status });
@@ -413,7 +409,7 @@ export async function runAuthoritativeWeeklyGenerationForUser({
     return { success: true, status: claim.status, run: completedRun, sources_saved: persistedExternal, sourceCounts, problems, stage: "response_completed", weeklyExecutionId, executionMode, providerState: collection.status, reused: false };
   } catch (error) {
     const diagnostic = classifyWeeklyError(error, currentStage, weeklyExecutionId);
-    await dependencies.repository.markRunFailed({ runId, errorMessage: diagnostic.code });
+    await dependencies.repository.markRunFailed({ runId, userId, errorMessage: diagnostic.code });
     await recordOperationalEvent({ workflow: "weekly_intelligence", eventType: diagnostic.stage, status: "failed", userId, requestId: weeklyExecutionId, durationMs: Date.now() - workflowStartedAt, failureCategory: diagnostic.code, safeMetadata: { runId, plan: claim.run.plan, weeklyExecutionId, entryPath, stage: diagnostic.stage, code: diagnostic.code, validationReason: diagnostic.validationReason } });
     dependencies.log?.("weekly_failed", { weeklyExecutionId, entryPath, userId, periodKey: `${period.period_start}/${period.period_end}`, existingRunId: runId, failureStage: diagnostic.stage, code: diagnostic.code, validationReason: diagnostic.validationReason, durationMs: Date.now() - workflowStartedAt });
     throw diagnostic;

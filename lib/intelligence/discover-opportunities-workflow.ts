@@ -16,7 +16,6 @@ import {
   collectDataMoatSources,
   type DiscoverySource,
 } from "@/lib/knowledge/discovery-data-moat-sources";
-import { updateProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { writeDual, type DualWriteReport } from "@/lib/knowledge/dual-writer";
 import type { ProblemObservationInput } from "@/lib/knowledge/problem-observations";
 import { runKnowledgeEvolutionDiscoveryDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
@@ -493,15 +492,13 @@ Signal score: ${source.signal_score || 0}
   const prompt = `
 You are SaaSScout, an AI SaaS opportunity discovery engine.
 
-You must analyze BOTH:
-1. Fresh external market signals.
-2. Existing internal data moat signals.
+Analyze the available external market signals and owner-scoped internal research.
 
 Fresh external signals:
-${externalText}
+${externalText || "None available."}
 
 Internal data moat:
-${moatText}
+${moatText || "None available."}
 
 Return ${replacementCount > 0 ? replacementCount : "5 to 8"} monetizable SaaS problems.
 
@@ -800,10 +797,6 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
 
         if (problemsError) throw problemsError;
 
-        for (const problem of problemsToInsert) {
-          if (problem.source_evidence) await updateProblemIntelligence(problem);
-        }
-
         return insertedProblems || [];
       },
     },
@@ -826,6 +819,7 @@ export async function discoverOpportunitiesWorkflow(userId: string) {
   if (isKnowledgeEvolutionDiagnosticsEnabled()) {
     await runKnowledgeEvolutionDiscoveryDiagnostics({
       client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient,
+      ownerId: userId,
       problems: problemsToInsert,
     });
   }

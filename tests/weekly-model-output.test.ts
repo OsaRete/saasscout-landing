@@ -46,7 +46,7 @@ test("model evidence selection is bounded, deterministic, topic-fair, and preser
 
 test("production-shaped prompt compacts evidence and keeps metadata and URLs out", () => {
   const selected = selectWeeklyModelEvidence(externalEvidence());
-  const prompt = buildWeeklyIntelligencePrompt({ period: { period_start: "2026-08-17T00:00:00.000Z", period_end: "2026-08-24T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" }, userEvidence: selected, priorUserContext: Array.from({ length: 8 }, (_, index) => ({ type: "scan" as const, id: `history-${index}`, title: "H".repeat(200), summary: "C".repeat(500), created_at: "2026-08-01T00:00:00Z" })), sharedContext: [{ type: "data_moat", id: "db-private-id", title: "Context", summary: "Theme", created_at: null }], executionMode: "fresh_market" });
+  const prompt = buildWeeklyIntelligencePrompt({ period: { period_start: "2026-08-17T00:00:00.000Z", period_end: "2026-08-24T00:00:00.000Z", timezone: "UTC", boundary: "[start,end)" }, userEvidence: selected, priorUserContext: Array.from({ length: 8 }, (_, index) => ({ type: "scan" as const, id: `db-private-id-${index}`, title: "H".repeat(200), summary: "C".repeat(500), created_at: "2026-08-01T00:00:00Z" })), executionMode: "fresh_market" });
   assert.doesNotMatch(prompt, /https?:\/\//);
   assert.doesNotMatch(prompt, /db-private-id/);
   assert.equal((prompt.match(/"evidenceId"/g) || []).length, WEEKLY_MODEL_ENVELOPE_LIMITS.externalEvidence);

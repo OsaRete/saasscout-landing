@@ -1,6 +1,66 @@
 # Beta security: Weekly context isolation in Discovery
 
-## Root cause and demonstrated exposure
+## BETA-01 shared intelligence containment
+
+The legacy `problem_intelligence` catalog accepted Discovery and Weekly output
+derived from private founder context. Its titles and aggregate scores had no
+proven shareable provenance. An admitted browser could read it through
+PostgREST, and server workflows could reuse it as model context or as a score
+source. The local catalog was empty at baseline. The original Discovery-specific
+work below describes an independent Weekly-source finding.
+
+`20261127111139_beta01_shared_intelligence_quarantine.sql` preserves the rows
+and identifiers in `problem_intelligence`, its `opportunity_intelligence`
+score projection, and the deprecated `weekly_reports` and `weekly_niches`
+tables. It revokes privileges from `PUBLIC`, `anon`, `authenticated`, and
+`service_role` on all four tables and removes their shared read policies.
+Current Weekly run and child RLS requires a matching owner and a non-global
+parent. Weekly sources remain server-only. Historical ownerless and global
+runs stay in place. The service-only claim RPC skips them, and the unique
+owner-period index applies to private runs. A `NOT VALID` check prevents new
+ownerless or global parent records without rewriting historical rows.
+
+Discovery uses external market signals and the authenticated founder's existing
+Weekly context, with explicit owner and non-global predicates on the joined
+parent before limits and an ownership check before projection. Both Discovery
+and Weekly stop publishing generated content into the shared catalog. Weekly
+generation, report retrieval, monitoring, and history use owner-scoped inputs.
+Dashboard's latest report and Validation's Weekly provenance lookup apply the
+same scope. The previously catalog-derived score display and conversion tally
+have been retired. Knowledge Evolution diagnostics use owner-scoped queries
+when their existing flags are enabled.
+
+Apply the additive migration before running the updated application. Keep
+admission closed in any future hosted rollout until the migration and application
+are both verified. Preserve the quarantine if an application rollback is
+required. Hosted data was outside this implementation. Older owner-scoped
+outputs may reflect historical inputs, so their provenance cannot be asserted
+retroactively.
+
+### Disposable database verification
+
+Use two separate local Supabase workdirs, with different unused ports and
+`project_id` values beginning with `beta01-privacy-`. Use the repository's
+migration chain through `20261126000000` for `upgrade` and include BETA-01 for
+`fresh`. The runner verifies the disposable Docker container and local service
+addresses before creating synthetic accounts. It copies and applies the
+BETA-01 migration in the upgrade workdir after inserting historical fixtures.
+
+```sh
+node scripts/beta01-privacy-db.mjs upgrade "$upgrade_workdir"
+node scripts/beta01-privacy-db.mjs fresh "$fresh_workdir"
+```
+
+The checks use real local Auth, PostgREST, and PostgreSQL. They verify archived
+rows are preserved during upgrade, archived access is denied even with the
+service role, and owner-scoped records remain available only to their owner.
+The Weekly claim check uses an existing completed owner run without enabling
+provider spending or sending emails. The fresh check also verifies the default
+public admission setting is closed.
+
+## Prior Discovery isolation change
+
+### Root cause and demonstrated exposure
 
 Remote `main` was verified as `9219f0f943e1727ce1df50c459b5f14de336cf35`.
 This fix starts from that commit in a separate worktree and focused branch.
@@ -40,7 +100,7 @@ claim an actual Snapshot database write or production incident. With the fix,
 all four values are false for both owners. No production rows or paid AI calls
 were used.
 
-## Security invariant and implementation
+### Security invariant and implementation
 
 A private Weekly child can enter Discovery context only when its joined parent
 has `user_id === authenticated user.id` and its `run_id` matches that parent's ID.
@@ -66,7 +126,7 @@ grants, service-role permissions, qualification, promotion or shared-consumption
 policy changes are required. This protects the Data Moat from fresh cross-owner
 input contamination without changing its learning rules.
 
-## Exact files changed
+### Exact files changed
 
 - `lib/knowledge/discovery-data-moat-sources.ts`: require caller identity and
   enforce parent/child ownership at data access and projection.
@@ -78,7 +138,7 @@ input contamination without changing its learning rules.
 - `docs/DISCOVERY_WEEKLY_OWNER_ISOLATION.md`: reproduction, contract and delivery
   considerations.
 
-## Verification
+### Verification
 
 - Original-code reproduction: expected failure, proving all four exposure stages.
 - Focused compatibility run: 120 tests passed, zero failures/skips, across the
@@ -107,7 +167,7 @@ mismatched parent/child projections, shared-only context, both initial and
 replacement model inputs, persisted mock writes, Snapshot adapter input and
 returned output. No broad database/paid-provider suites were run.
 
-## Remaining risks, deployment and rollback
+### Remaining risks, deployment and rollback
 
 No migration or production configuration change is required. The joins use
 existing foreign keys. A missing/stale PostgREST relationship or query failure

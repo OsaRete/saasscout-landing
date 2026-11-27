@@ -55,9 +55,11 @@ function messageFor(error: unknown) {
 
 export async function runKnowledgeEvolutionDiscoveryDiagnostics({
   client,
+  ownerId,
   problems,
 }: {
   client: KnowledgeEvolutionSupabaseClient;
+  ownerId: string;
   problems: DiscoveryProblemForEvolutionDiagnostics[];
 }): Promise<KnowledgeEvolutionDiscoveryDiagnostics> {
   const diagnostics: KnowledgeEvolutionDiscoveryDiagnostics = {
@@ -72,6 +74,7 @@ export async function runKnowledgeEvolutionDiscoveryDiagnostics({
 
     try {
       const result = await assessProblemEvolution(client, {
+        ownerId,
         problemTitle: title,
         limit: 25,
       });

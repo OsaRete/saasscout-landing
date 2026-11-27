@@ -61,7 +61,7 @@ type QueryBuilder = QueryResult & {
 export type DataMoatAggregationClient = { from(table: string): QueryBuilder };
 
 export type DataMoatAggregationOptions = Readonly<{
-  includeSharedContext?: boolean;
+  includeSharedContext?: false;
   limitPerSource?: number;
   now?: () => number;
   logger?: Pick<Console, "info" | "warn">;
@@ -101,7 +101,7 @@ function normalizeRow(source: DataMoatSource, kind: DataMoatItemKind, row: Recor
   const id = text(row.id ?? row.snapshot_id ?? row.opportunity_id, "");
   if (!id) return null;
   const ownerId = typeof row.user_id === "string" ? row.user_id : typeof row.owner_id === "string" ? row.owner_id : null;
-  if (source !== "shared_problem_intelligence" && ownerId !== userId) return null;
+  if (ownerId !== userId) return null;
 
   const occurredAt = timestamp(row.created_at ?? row.period_end ?? row.last_seen_at);
   const scanTitle = [row.market, row.audience, row.region].filter((value) => typeof value === "string" && value.trim()).join(" / ");
@@ -189,16 +189,15 @@ export async function aggregateUserDataMoat(
   const diagnostics = { sourcesQueried: [] as DataMoatSource[], countsBySource: emptyCounts(), skippedSources: [] as Array<{ source: DataMoatSource; reason: string }>, normalizationFailures: [] as Array<{ source: DataMoatSource; id: string; reason: string }> };
   const read = (source: DataMoatSource, fn: () => QueryResult) => { diagnostics.sourcesQueried.push(source); return safeRead(source, fn, diagnostics); };
 
-  const [scans, opportunities, discoveries, acceptedProblems, savedIdeas, weeklyReports, snapshots, activity, shared] = await Promise.all([
+  const [scans, opportunities, discoveries, acceptedProblems, savedIdeas, weeklyReports, snapshots, activity] = await Promise.all([
     read("completed_scans", () => client.from("scan").select("id,user_id,market,audience,region,status,evidence,created_at").eq("user_id", authenticatedUserId).eq("status", "completed").order("created_at", { ascending: false }).limit(limit)),
     read("generated_opportunities", () => client.from("opportunities").select("id,user_id,scan_id,title,summary,score,created_at").eq("user_id", authenticatedUserId).order("created_at", { ascending: false }).limit(limit)),
     read("discover_history", () => client.from("opportunity_discoveries").select("id,user_id,summary,status,total_sources_analyzed,created_at").eq("user_id", authenticatedUserId).order("created_at", { ascending: false }).limit(limit)),
     read("accepted_discover_problems", () => client.from("discovered_problems").select("id,user_id,discovery_id,problem_title,problem_summary,problem_cluster,status,pain_score,revenue_score,urgency_score,buying_signal_score,frequency_score,source_quality_score,opportunity_score,created_at").eq("user_id", authenticatedUserId).eq("status", "accepted").order("created_at", { ascending: false }).limit(limit)),
     read("saved_ideas", () => client.from("saved_ideas").select("id,user_id,opportunity_id,created_at").eq("user_id", authenticatedUserId).order("created_at", { ascending: false }).limit(limit)),
-    read("weekly_reports", () => client.from("weekly_intelligence_runs").select("id,user_id,summary,status,period_start,period_end,created_at").eq("user_id", authenticatedUserId).eq("status", "completed").order("period_end", { ascending: false }).limit(limit)),
+    read("weekly_reports", () => client.from("weekly_intelligence_runs").select("id,user_id,is_global,summary,status,period_start,period_end,created_at").eq("user_id", authenticatedUserId).eq("is_global", false).eq("status", "completed").order("period_end", { ascending: false }).limit(limit)),
     read("snapshots", () => client.from("snapshot_identities").select("id,snapshot_id,owner_id,discovery_id,lifecycle_state,created_at").eq("owner_id", authenticatedUserId).order("created_at", { ascending: false }).limit(limit)),
     read("historical_user_evidence", () => client.from("discovery_actions").select("id,user_id,action_type,discovery_id,problem_id,created_at").eq("user_id", authenticatedUserId).order("created_at", { ascending: false }).limit(limit)),
-    options.includeSharedContext === false ? Promise.resolve([]) : read("shared_problem_intelligence", () => client.from("problem_intelligence").select("id,problem_title,problem_summary,intelligence_score,last_seen_at").order("intelligence_score", { ascending: false }).limit(Math.min(limit, 10))),
   ]);
 
   const bySource = {
@@ -207,10 +206,10 @@ export async function aggregateUserDataMoat(
     discover_history: addNormalized(discoveries, "discover_history", "discover_run", authenticatedUserId, diagnostics),
     accepted_discover_problems: addNormalized(acceptedProblems, "accepted_discover_problems", "discover_problem", authenticatedUserId, diagnostics),
     saved_ideas: addNormalized(savedIdeas, "saved_ideas", "saved_idea", authenticatedUserId, diagnostics),
-    weekly_reports: addNormalized(weeklyReports, "weekly_reports", "weekly_report", authenticatedUserId, diagnostics),
+    weekly_reports: addNormalized(weeklyReports.filter((row) => row.is_global === false), "weekly_reports", "weekly_report", authenticatedUserId, diagnostics),
     snapshots: addNormalized(snapshots, "snapshots", "snapshot", authenticatedUserId, diagnostics),
     historical_user_evidence: addNormalized(activity, "historical_user_evidence", "user_activity", authenticatedUserId, diagnostics),
-    shared_problem_intelligence: addNormalized(shared, "shared_problem_intelligence", "shared_problem_intelligence", authenticatedUserId, diagnostics),
+    shared_problem_intelligence: [],
   } satisfies Record<DataMoatSource, NormalizedDataMoatItem[]>;
 
   const sharedContext = bySource.shared_problem_intelligence;

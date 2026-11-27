@@ -55,22 +55,6 @@ type DiscoveredProblem = {
   created_at: string;
 };
 
-type ProblemIntelligence = {
-  id: string;
-  problem_title: string;
-  prepared_count: number;
-  converted_count: number;
-  avg_pain_score: number;
-  avg_revenue_score: number;
-  avg_urgency_score: number;
-  avg_buying_signal_score?: number | null;
-  avg_frequency_score?: number | null;
-  avg_source_quality_score?: number | null;
-  avg_opportunity_score?: number | null;
-  intelligence_score: number;
-  updated_at: string;
-};
-
 type FounderMatch = {
   id: string;
   user_id: string;
@@ -111,14 +95,9 @@ function scoreWidth(score: number | null | undefined) {
   return `${Math.min(100, Math.max(0, Number(score || 0) * 10))}%`;
 }
 
-function getOpportunityScore(
-  problem: DiscoveredProblem,
-  intelligence: ProblemIntelligence | null
-) {
+function getOpportunityScore(problem: DiscoveredProblem) {
   return Number(
-    problem.opportunity_score ||
-      intelligence?.avg_opportunity_score ||
-      intelligence?.intelligence_score ||
+    problem.opportunity_score ??
       ((Number(problem.pain_score || 0) +
         Number(problem.revenue_score || 0) +
         Number(problem.urgency_score || 0)) /
@@ -157,9 +136,6 @@ export default function DiscoverPage() {
 
   const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
   const [problems, setProblems] = useState<DiscoveredProblem[]>([]);
-  const [problemIntelligence, setProblemIntelligence] = useState<
-    ProblemIntelligence[]
-  >([]);
   const [founderMatches, setFounderMatches] = useState<FounderMatch[]>([]);
   const [selectedDiscoveryId, setSelectedDiscoveryId] = useState<string | null>(
     null
@@ -209,16 +185,12 @@ export default function DiscoverPage() {
       const { data, error } = await supabase
         .from("discovered_problems")
         .select("*")
+        .eq("user_id", user.id)
         .in("discovery_id", discoveryIds);
 
       if (error) console.error(error);
       else problemsData = data || [];
     }
-
-    const { data: intelligenceData } = await supabase
-      .from("problem_intelligence")
-      .select("*")
-      .order("intelligence_score", { ascending: false });
 
     const { data: founderMatchData } = await supabase
       .from("founder_problem_matches")
@@ -227,7 +199,6 @@ export default function DiscoverPage() {
 
     setDiscoveries(discoveryData || []);
     setProblems(problemsData);
-    setProblemIntelligence(intelligenceData || []);
     setFounderMatches(founderMatchData || []);
     setSelectedDiscoveryId((current) => current || discoveryData?.[0]?.id || null);
     setLoadingData(false);
@@ -249,19 +220,9 @@ export default function DiscoverPage() {
     return discoveries.find((item) => item.id === selectedDiscoveryId) || null;
   }, [discoveries, selectedDiscoveryId]);
 
-  function getProblemIntelligence(problemTitle: string) {
-    return (
-      problemIntelligence.find(
-        (item) =>
-          item.problem_title.trim().toLowerCase() ===
-          problemTitle.trim().toLowerCase()
-      ) || null
-    );
-  }
-
-  function getFounderMatch(problemId: string) {
-    return founderMatches.find((match) => match.problem_id === problemId) || null;
-  }
+  const founderMatchesByProblem = useMemo(() => new Map(
+    founderMatches.map((match) => [match.problem_id, match])
+  ), [founderMatches]);
 
   const selectedProblems = useMemo(() => {
     if (!selectedDiscovery) return [];
@@ -269,51 +230,17 @@ export default function DiscoverPage() {
     return problems
       .filter((problem) => problem.discovery_id === selectedDiscovery.id)
       .sort((a, b) => {
-        const intelA = getProblemIntelligence(a.problem_title);
-        const intelB = getProblemIntelligence(b.problem_title);
+        const founderA = founderMatchesByProblem.get(a.id)?.founder_fit_score || 0;
+        const founderB = founderMatchesByProblem.get(b.id)?.founder_fit_score || 0;
 
-        const founderA = getFounderMatch(a.id)?.founder_fit_score || 0;
-        const founderB = getFounderMatch(b.id)?.founder_fit_score || 0;
-
-        const scoreA = getOpportunityScore(a, intelA) + founderA * 0.4;
-        const scoreB = getOpportunityScore(b, intelB) + founderB * 0.4;
+        const scoreA = getOpportunityScore(a) + founderA * 0.4;
+        const scoreB = getOpportunityScore(b) + founderB * 0.4;
 
         return scoreB - scoreA;
       });
-  }, [problems, selectedDiscovery, problemIntelligence, founderMatches]);
+  }, [problems, selectedDiscovery, founderMatchesByProblem]);
 
   const bestProblem = selectedProblems[0] || null;
-
-  const dataMoatStats = useMemo(() => {
-    const totalPrepared = problemIntelligence.reduce(
-      (sum, item) => sum + Number(item.prepared_count || 0),
-      0
-    );
-
-    const totalConverted = problemIntelligence.reduce(
-      (sum, item) => sum + Number(item.converted_count || 0),
-      0
-    );
-
-    const avgMoatScore =
-      problemIntelligence.length > 0
-        ? Number(
-            (
-              problemIntelligence.reduce(
-                (sum, item) => sum + Number(item.intelligence_score || 0),
-                0
-              ) / problemIntelligence.length
-            ).toFixed(1)
-          )
-        : 0;
-
-    return {
-      knownProblems: problemIntelligence.length,
-      totalPrepared,
-      totalConverted,
-      avgMoatScore,
-    };
-  }, [problemIntelligence]);
 
   async function handleAnalyzeMarket() {
     if (!userId || analyzing) return;
@@ -528,13 +455,12 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
           <div className="mt-4 grid gap-8 lg:grid-cols-[1fr_360px]">
             <div>
               <h1 className="text-4xl font-bold tracking-tight md:text-5xl">
-                Discover SaaS opportunities from live market signals and your data moat.
+                Discover SaaS opportunities from market signals and your research.
               </h1>
 
               <p className="mt-5 max-w-3xl text-gray-400">
-                Discover searches external sources, compares them with internal intelligence,
-                updates the data moat, and ranks opportunities by evidence, buying intent,
-                frequency, source quality, and founder fit.
+                Discover analyzes available external sources and your Weekly Intelligence history.
+                Review opportunities ranked by evidence, buying intent, frequency, source quality, and founder fit.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3 text-xs">
@@ -542,7 +468,7 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
                   Live external search
                 </span>
                 <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-violet-200">
-                  Data moat scoring
+                  Your research history
                 </span>
                 <span className="rounded-full border border-green-500/30 bg-green-500/10 px-4 py-2 text-green-200">
                   Founder fit ready
@@ -572,7 +498,7 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
               </button>
 
               <p className="mt-3 text-xs leading-relaxed text-gray-500">
-                Discovery uses available live and internal sources. Live search depends on available capacity.
+                Live search depends on available capacity.
               </p>
             </div>
           </div>
@@ -587,33 +513,11 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
           )}
         </section>
 
-        <section className="mt-8 grid gap-5 md:grid-cols-4">
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Known moat problems</p>
-            <h2 className="mt-3 text-4xl font-bold">{dataMoatStats.knownProblems}</h2>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Prepared scans</p>
-            <h2 className="mt-3 text-4xl font-bold">{dataMoatStats.totalPrepared}</h2>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Converted ideas</p>
-            <h2 className="mt-3 text-4xl font-bold">{dataMoatStats.totalConverted}</h2>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
-            <p className="text-sm text-gray-400">Avg moat score</p>
-            <h2 className="mt-3 text-4xl font-bold">{dataMoatStats.avgMoatScore}</h2>
-          </div>
-        </section>
-
         {discoveries.length === 0 ? (
           <EmptyState
             icon="✦"
             title="No discoveries yet"
-            description="Run your first discovery to search live market signals and feed the data moat."
+            description="Run your first discovery to analyze available market and research signals."
             primaryAction={<Button onClick={handleAnalyzeMarket} disabled={analyzing}>{analyzing ? "Analyzing available signals..." : "Run Discovery"}</Button>}
             className="mt-10"
           />
@@ -624,7 +528,7 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
                 <div>
                   <h2 className="text-xl font-bold">Discovery history</h2>
                   <p className="mt-1 text-sm text-gray-500">
-                    Compare live discovery runs and see how the data moat evolves.
+                    Review and compare your previous discovery runs.
                   </p>
                 </div>
 
@@ -665,11 +569,10 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
                   {selectedProblems.map((problem, index) => {
                     const niches = splitByPipe(problem.affected_niches);
                     const solutions = splitByPipe(problem.suggested_solutions);
-                    const intelligence = getProblemIntelligence(problem.problem_title);
-                    const founderMatch = getFounderMatch(problem.id);
+                    const founderMatch = founderMatchesByProblem.get(problem.id);
 
                     const sourceEvidence = displaySourceEvidence(problem.source_evidence, selectedDiscovery.total_sources_analyzed);
-                    const opportunityScore = getOpportunityScore(problem, intelligence);
+                    const opportunityScore = getOpportunityScore(problem);
                     const founderFitScore = Number(founderMatch?.founder_fit_score || 0);
 
                     return (
@@ -691,10 +594,6 @@ ${displaySourceEvidence(problem.source_evidence, selectedDiscovery?.total_source
                             <div className="mt-5 flex flex-wrap gap-3">
                               <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-200">
                                 Cluster: {problem.problem_cluster || "General"}
-                              </span>
-
-                              <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
-                                Data moat: {intelligence ? "Known signal" : "New signal"}
                               </span>
 
                               <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-300">

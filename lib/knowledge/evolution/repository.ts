@@ -2,7 +2,6 @@ import { classifyProblemEvolution } from "./classifier.ts";
 import type { ProblemEvolutionAssessment, ProblemEvolutionClassifierOptions, ProblemEvolutionObservation } from "./types.ts";
 import {
   discoveredProblemRowToEvolutionObservation,
-  problemIntelligenceRowToEvolutionObservation,
   weeklyDetectedProblemRowToEvolutionObservation,
   weeklySourceRowToEvolutionObservation,
   type EvolutionSourceTable,
@@ -11,9 +10,10 @@ import {
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+type OwnerEvolutionSourceTable = Exclude<EvolutionSourceTable, "problem_intelligence">;
 
 export type KnowledgeEvolutionSupabaseClient = {
-  from(table: EvolutionSourceTable): KnowledgeEvolutionQueryBuilder;
+  from(table: OwnerEvolutionSourceTable): KnowledgeEvolutionQueryBuilder;
 };
 
 type QueryResult = {
@@ -24,15 +24,16 @@ type QueryResult = {
 type QueryPromise = PromiseLike<QueryResult>;
 
 type KnowledgeEvolutionQueryBuilder = QueryPromise & {
-  select?(columns: string): KnowledgeEvolutionQueryBuilder;
+  select(columns: string): KnowledgeEvolutionQueryBuilder;
   ilike?(column: string, pattern: string): KnowledgeEvolutionQueryBuilder;
-  eq?(column: string, value: unknown): KnowledgeEvolutionQueryBuilder;
+  eq(column: string, value: unknown): KnowledgeEvolutionQueryBuilder;
   gte?(column: string, value: unknown): KnowledgeEvolutionQueryBuilder;
   order?(column: string, options: { ascending: boolean }): KnowledgeEvolutionQueryBuilder;
   limit?(count: number): QueryPromise;
 };
 
 export type ProblemEvolutionRepositoryOptions = {
+  ownerId: string;
   problemTitle?: string;
   since?: string | Date;
   limit?: number;
@@ -84,8 +85,7 @@ export type RecentProblemEvolutionAssessmentsResult = {
   warnings: string[];
 };
 
-const ADAPTERS: Record<EvolutionSourceTable, (row: RowLike) => ProblemEvolutionObservation> = {
-  problem_intelligence: problemIntelligenceRowToEvolutionObservation,
+const ADAPTERS: Record<OwnerEvolutionSourceTable, (row: RowLike) => ProblemEvolutionObservation> = {
   weekly_detected_problems: weeklyDetectedProblemRowToEvolutionObservation,
   weekly_sources: weeklySourceRowToEvolutionObservation,
   discovered_problems: discoveredProblemRowToEvolutionObservation,
@@ -108,25 +108,27 @@ function messageFor(error: unknown) {
   return String(error || "Unknown query failure");
 }
 
-function requestedTables(options: ProblemEvolutionRepositoryOptions): EvolutionSourceTable[] {
+function requestedTables(options: ProblemEvolutionRepositoryOptions): OwnerEvolutionSourceTable[] {
   return [
-    "problem_intelligence",
     "weekly_detected_problems",
     ...(options.includeWeeklySources === false ? [] : ["weekly_sources" as const]),
     ...(options.includeDiscoveredProblems === false ? [] : ["discovered_problems" as const]),
   ];
 }
 
-async function readTable(client: KnowledgeEvolutionSupabaseClient, table: EvolutionSourceTable, options: ProblemEvolutionRepositoryOptions, limit: number): Promise<{ rows: RowLike[]; diagnostic: ProblemEvolutionSourceDiagnostic; warning?: string }> {
+async function readTable(client: KnowledgeEvolutionSupabaseClient, table: OwnerEvolutionSourceTable, options: ProblemEvolutionRepositoryOptions, limit: number): Promise<{ rows: RowLike[]; diagnostic: ProblemEvolutionSourceDiagnostic; warning?: string }> {
   try {
-    let query = client.from(table);
-    if (query.select) {
-      query = query.select("*");
-    }
+    const directOwner = table === "discovered_problems";
+    let query = directOwner
+      ? client.from(table).select("*").eq("user_id", options.ownerId)
+      : client.from(table).select("*,weekly_intelligence_runs!inner(id,user_id,is_global)")
+          .eq("weekly_intelligence_runs.user_id", options.ownerId)
+          .eq("weekly_intelligence_runs.is_global", false);
     const since = isoOrNull(options.since);
 
     if (options.problemTitle?.trim() && query.ilike) {
-      query = query.ilike("problem_title", `%${options.problemTitle.trim()}%`);
+      const title = table === "weekly_sources" ? "source_title" : "problem_title";
+      query = query.ilike(title, `%${options.problemTitle.trim()}%`);
     }
 
     if (since && query.gte) {
@@ -144,7 +146,13 @@ async function readTable(client: KnowledgeEvolutionSupabaseClient, table: Evolut
       return { rows: [], warning, diagnostic: { table, attempted: true, succeeded: false, rowCount: 0, warning } };
     }
 
-    const rows = Array.isArray(result.data) ? result.data : [];
+    const rows = (Array.isArray(result.data) ? result.data : []).flatMap((row) => {
+      if (directOwner) return row.user_id === options.ownerId ? [row] : [];
+      const run = row.weekly_intelligence_runs;
+      if (!run || typeof run !== "object" || !("id" in run) || !("user_id" in run) || !("is_global" in run)
+        || typeof row.run_id !== "string" || row.run_id !== run.id || run.user_id !== options.ownerId || run.is_global !== false) return [];
+      return [{ ...row, user_id: options.ownerId }];
+    });
     return { rows, diagnostic: { table, attempted: true, succeeded: true, rowCount: rows.length } };
   } catch (error) {
     const warning = `${table} read failed: ${messageFor(error)}`;
@@ -168,7 +176,8 @@ function buildDiagnostics({ options, limit, diagnostics, observationCount }: { o
   };
 }
 
-export async function getProblemEvolutionObservations(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions = {}): Promise<ProblemEvolutionObservationsResult> {
+export async function getProblemEvolutionObservations(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions): Promise<ProblemEvolutionObservationsResult> {
+  if (typeof options?.ownerId !== "string" || !options.ownerId.trim()) throw new Error("Knowledge Evolution requires an authenticated owner.");
   const limit = normalizeLimit(options.limit);
   const warnings: string[] = [];
   const observations: ProblemEvolutionObservation[] = [];
@@ -192,7 +201,7 @@ export async function getProblemEvolutionObservations(client: KnowledgeEvolution
   };
 }
 
-export async function assessProblemEvolution(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions & { classifierOptions?: ProblemEvolutionClassifierOptions } = {}): Promise<ProblemEvolutionAssessmentResult> {
+export async function assessProblemEvolution(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions & { classifierOptions?: ProblemEvolutionClassifierOptions }): Promise<ProblemEvolutionAssessmentResult> {
   const result = await getProblemEvolutionObservations(client, options);
   return {
     ...result,
@@ -200,7 +209,7 @@ export async function assessProblemEvolution(client: KnowledgeEvolutionSupabaseC
   };
 }
 
-export async function getRecentProblemEvolutionAssessments(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions & { classifierOptions?: ProblemEvolutionClassifierOptions } = {}): Promise<RecentProblemEvolutionAssessmentsResult> {
+export async function getRecentProblemEvolutionAssessments(client: KnowledgeEvolutionSupabaseClient, options: ProblemEvolutionRepositoryOptions & { classifierOptions?: ProblemEvolutionClassifierOptions }): Promise<RecentProblemEvolutionAssessmentsResult> {
   const result = await getProblemEvolutionObservations(client, options);
   const grouped = new Map<string, ProblemEvolutionObservation[]>();
 

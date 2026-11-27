@@ -258,34 +258,6 @@ if (profileData) {
     return result as { success: true; scanId: string };
   }
 
-  async function recordDiscoveryConversion({
-    accessToken,
-    cleanMarket,
-  }: {
-    accessToken: string;
-    cleanMarket: string;
-  }) {
-    if (!discoveryIdParam || !problemIdParam) return;
-
-    const response = await fetch("/api/problem-intelligence/conversion", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        discoveryId: discoveryIdParam,
-        problemId: problemIdParam,
-        problemTitle: problemTitleParam || cleanMarket,
-      }),
-    });
-
-    if (!response.ok) {
-      const result = await response.json().catch(() => null);
-      console.error("Problem intelligence conversion update error:", result);
-    }
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
@@ -321,7 +293,6 @@ if (profileData) {
       setLoadingStep("generating");
       await runServerScanWorkflow({ accessToken, cleanMarket, cleanAudience, cleanRegion });
       setLoadingStep("completed");
-      await recordDiscoveryConversion({ accessToken, cleanMarket });
 
       router.push("/results");
     } catch (error) {

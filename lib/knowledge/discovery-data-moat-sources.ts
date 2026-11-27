@@ -11,7 +11,7 @@ export type DiscoverySource = {
 };
 
 type SupabaseQueryResultBuilder = {
-  eq(column: string, value: string): SupabaseQueryResultBuilder;
+  eq(column: string, value: string | boolean): SupabaseQueryResultBuilder;
   order(column: string, options: { ascending: boolean }): SupabaseQueryResultBuilder;
   limit(count: number): PromiseLike<{ data: Record<string, unknown>[] | null; error?: unknown }>;
 };
@@ -41,18 +41,13 @@ export async function collectDataMoatSources(
   }
   supabaseClient ??= getSupabaseAdminClient();
 
-  const { data: intelligence } = await supabaseClient
-    .from("problem_intelligence")
-    .select("*")
-    .order("intelligence_score", { ascending: false })
-    .limit(15);
-
-  // Both child tables inherit ownership through run_id. The inner join excludes
-  // foreign, ownerless and orphaned runs before ordering/limits are applied.
+  // Both child tables inherit ownership through run_id. Filter before applying
+  // limits and verify the parent again before constructing any prompt context.
   const { data: weeklyProblems, error: weeklyProblemsError } = await supabaseClient
     .from("weekly_detected_problems")
-    .select("*,weekly_intelligence_runs!inner(id,user_id)")
+    .select("*,weekly_intelligence_runs!inner(id,user_id,is_global)")
     .eq("weekly_intelligence_runs.user_id", userId)
+    .eq("weekly_intelligence_runs.is_global", false)
     .order("created_at", { ascending: false })
     .limit(15);
 
@@ -60,8 +55,9 @@ export async function collectDataMoatSources(
 
   const { data: weeklySources, error: weeklySourcesError } = await supabaseClient
     .from("weekly_sources")
-    .select("*,weekly_intelligence_runs!inner(id,user_id)")
+    .select("*,weekly_intelligence_runs!inner(id,user_id,is_global)")
     .eq("weekly_intelligence_runs.user_id", userId)
+    .eq("weekly_intelligence_runs.is_global", false)
     .order("created_at", { ascending: false })
     .limit(20);
 
@@ -70,24 +66,12 @@ export async function collectDataMoatSources(
   function hasOwnedRun(item: Record<string, unknown>) {
     const run = item.weekly_intelligence_runs;
     return run !== null && typeof run === "object" && !Array.isArray(run)
-      && "id" in run && "user_id" in run
+      && "id" in run && "user_id" in run && "is_global" in run
       && typeof item.run_id === "string" && item.run_id === run.id
-      && run.user_id === userId;
+      && run.user_id === userId && run.is_global === false;
   }
 
   const moatSources: DiscoverySource[] = [];
-
-  for (const item of intelligence || []) {
-    moatSources.push({
-      title: `Data Moat Problem: ${item.problem_title}`,
-      url: null,
-      snippet: `Known problem. Intelligence score: ${item.intelligence_score}. Prepared: ${item.prepared_count}. Converted: ${item.converted_count}.`,
-      source_type: "data_moat",
-      source_rank: moatSources.length + 1,
-      signal_score: Number(item.intelligence_score || 0),
-      category: "Data Moat",
-    });
-  }
 
   for (const item of weeklyProblems || []) {
     if (!hasOwnedRun(item)) continue;

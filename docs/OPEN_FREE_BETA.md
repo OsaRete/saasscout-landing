@@ -16,7 +16,7 @@ Read the existing audit, membership rollout/rollback guide, Validation release/d
 
 `application_beta_member(uuid)` now checks persisted Auth state: confirmed email, nonanonymous identity, no Auth deletion, no current Auth ban, no application suspension and no deletion-review hold. It serves authenticated `application_beta_access()`, all 31 existing restrictive browser policies, protected APIs and scheduled Weekly recipients. Owner predicates/grants remain necessary. Email/OAuth user metadata, payment, signup and frontend state cannot confer administration. OAuth must result in a confirmed Auth identity; an external provider handshake is not claimed by local tests. Password recovery remains independent.
 
-There is one database-owner-controlled, default-false `application_beta_release.open_free_beta` launch gate. It prevents the incomplete spending boundary from becoming public. Once separately authorized launch requirements are satisfied and this single gate is opened, every eligible verified user is admitted automatically, including new registrations: no invitation, individual admission row or subscription is necessary. Missing gate state denies. The application service role can read, but cannot change, this gate.
+The default-false `application_beta_release.open_free_beta` launch gate is operated by the database owner. Opening it admits every eligible verified user automatically, including new registrations, without requiring an invitation, individual admission row, or subscription. Missing gate state denies. The application has no route that writes the gate.
 
 `application_user_access.owner_administrator` is a separate default-false bit. It preserves existing internal-tester role/activity/expiry/unlimited fields and the founder's existing Auth identity. Administrator assignment bypasses individual Scan and Discovery limits only; it never bypasses ownership, account status, Validation release gates or the required dependent global provider budget. Existing unexpired tester unlimited Scan entitlements remain independent.
 
@@ -198,3 +198,33 @@ Revoke early with
 With public Beta closed, the same session loses workspace access on its next
 admission check. Auth and previously created records remain available to their
 respective recovery and retention processes. Revoke test publications separately.
+
+## BETA-01 local admission
+
+The Docker database for `saasscout-landing` uses the existing gate for invitation-free
+local admission. Confirm the active stack, the expected migration ledger, and that
+the browser and server point to `http://127.0.0.1:54321`. Confirm that the database
+spending policy has `enabled=false` and `weekly_max_executions=0` and that the app
+has `WEEKLY_SCHEDULED_GENERATION_ENABLED=false`. The local change is:
+
+```sh
+docker exec -i supabase_db_saasscout-landing psql -X -U postgres -d postgres \
+  -v ON_ERROR_STOP=1 -c 'UPDATE public.application_beta_release SET open_free_beta=true WHERE singleton AND NOT open_free_beta RETURNING open_free_beta;'
+```
+
+The operation updates one existing row. It creates no invitation, access-role
+assignment, or entitlement. The public admission default remains false in the
+migration chain. Sign in at `http://localhost:3000/login`, confirm that the
+Intelligence Control Center and history load, and refresh the Dashboard to
+confirm the session persists. Keep using the same app origin during the test.
+
+To reverse the local change and restore invitation-based admission, run:
+
+```sh
+docker exec -i supabase_db_saasscout-landing psql -X -U postgres -d postgres \
+  -v ON_ERROR_STOP=1 -c 'UPDATE public.application_beta_release SET open_free_beta=false WHERE singleton AND open_free_beta RETURNING open_free_beta;'
+```
+
+Refresh a workspace page to recheck admission. Existing eligible named grants
+continue to apply. The privacy migration remains in force. This operation is
+for the local Docker stack only. Hosted admission requires separate acceptance.

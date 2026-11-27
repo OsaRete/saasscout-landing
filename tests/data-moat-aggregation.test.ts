@@ -54,7 +54,10 @@ const baseTables = {
     { id: "prob-pending", user_id: "user-1", discovery_id: "disc-1", status: "pending", problem_title: "Pending", created_at: "2026-07-06T00:00:00.000Z" },
   ],
   saved_ideas: [{ id: "save-1", user_id: "user-1", opportunity_id: "opp-1", created_at: "2026-07-07T00:00:00.000Z" }],
-  weekly_intelligence_runs: [{ id: "week-1", user_id: "user-1", status: "completed", summary: "Weekly", period_end: "2026-07-08T00:00:00.000Z", created_at: "2026-07-08T00:00:00.000Z" }],
+  weekly_intelligence_runs: [
+    { id: "week-1", user_id: "user-1", is_global: false, status: "completed", summary: "Weekly", period_end: "2026-07-08T00:00:00.000Z", created_at: "2026-07-08T00:00:00.000Z" },
+    { id: "week-legacy", user_id: "user-1", is_global: true, status: "completed", summary: "Unproven private history", period_end: "2026-07-08T00:00:00.000Z", created_at: "2026-07-08T00:00:00.000Z" },
+  ],
   snapshot_identities: [{ id: "snap-ident-1", snapshot_id: "snap-1", owner_id: "user-1", lifecycle_state: "persisted", created_at: "2026-07-09T00:00:00.000Z" }],
   discovery_actions: [{ id: "act-1", user_id: "user-1", action_type: "accepted", discovery_id: "disc-1", problem_id: "prob-1", created_at: "2026-07-10T00:00:00.000Z" }],
   problem_intelligence: [{ id: "pi-1", problem_title: "Shared", intelligence_score: 99, last_seen_at: "2026-07-11T00:00:00.000Z" }],
@@ -68,12 +71,13 @@ test("aggregates only authenticated user data and excludes another user's record
   assert.equal(result.bySource.weekly_reports.length, 1);
 });
 
-test("keeps optional shared context supplementary", async () => {
-  const withShared = await aggregateUserDataMoat(clientWith(baseTables), "user-1", { now: () => 10 });
-  assert.equal(withShared.items.some((item) => item.kind === "shared_problem_intelligence"), false);
-  assert.equal(withShared.sharedContext.length, 1);
-  const withoutShared = await aggregateUserDataMoat(clientWith(baseTables), "user-1", { includeSharedContext: false, now: () => 10 });
-  assert.equal(withoutShared.sharedContext.length, 0);
+test("aggregation excludes legacy shared context and reports only owned Weekly records", async () => {
+  const client = clientWith(baseTables);
+  const result = await aggregateUserDataMoat(client, "user-1", { now: () => 10 });
+  assert.equal(result.items.some((item) => item.kind === "shared_problem_intelligence"), false);
+  assert.deepEqual(result.sharedContext, []);
+  assert.deepEqual(result.bySource.weekly_reports.map((item) => item.id), ["week-1"]);
+  assert.ok(client.reads.every((read) => read.table !== "problem_intelligence"));
 });
 
 test("normalization and ordering are deterministic", async () => {
@@ -94,7 +98,7 @@ test("aggregation is read-only and performs no Problem Intelligence writes", asy
   const client = clientWith(baseTables);
   await aggregateUserDataMoat(client, "user-1", { now: () => 10 });
   assert.deepEqual(client.writes, []);
-  assert.equal(client.reads.some((read) => read.table === "problem_intelligence"), true);
+  assert.equal(client.reads.some((read) => read.table === "problem_intelligence"), false);
 });
 
 test("existing workflow compatible weekly evidence shapes can be derived", async () => {

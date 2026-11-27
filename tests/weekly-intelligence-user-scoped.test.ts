@@ -9,7 +9,6 @@ import {
   isInsideWeeklyPeriod,
   validateWeeklyModelOutput,
   type WeeklyEvidenceSource,
-  type WeeklySharedSource,
 } from "../lib/weekly-intelligence.ts";
 
 test("weekly period boundaries are deterministic UTC Monday with exclusive end", () => {
@@ -36,18 +35,19 @@ test("weekly evidence counts authenticated user's eligible Scan and Discover act
   assert.deepEqual(countWeeklyEvidence(evidence), { scan: 1, discover: 1, saved_idea: 0, conversion: 0, external: 0 });
 });
 
-test("prompt separates user-owned evidence from supplementary shared intelligence", () => {
+test("prompt keeps user-owned evidence and ignores a legacy shared field", () => {
   const period = getWeeklyIntelligencePeriod(new Date("2026-07-19T12:30:00.000Z"));
   const userEvidence: WeeklyEvidenceSource[] = [
     { type: "scan", id: "user-scan", title: "User-owned Scan", summary: "Private user scan evidence", created_at: "2026-07-14T00:00:00.000Z" },
   ];
-  const sharedContext: WeeklySharedSource[] = [
+  const sharedContext = [
     { type: "problem_intelligence", id: "shared-1", title: "Shared aggregate", summary: "Aggregate score only" },
   ];
-  const prompt = buildWeeklyIntelligencePrompt({ period, userEvidence, priorUserContext: [], sharedContext });
+  const legacyInput = { period, userEvidence, priorUserContext: [], sharedContext };
+  const prompt = buildWeeklyIntelligencePrompt(legacyInput);
   assert.match(prompt, /User-owned evidence for this period/);
-  assert.match(prompt, /Optional shared aggregate context/);
-  assert.match(prompt, /must never be presented as private user activity/);
+  assert.match(prompt, /Private user scan evidence/);
+  assert.doesNotMatch(prompt, /Shared aggregate|Aggregate score only|shared-1/);
 });
 
 test("another user's private history is excluded by owner-scoped filtering contract", () => {
@@ -64,8 +64,8 @@ test("empty evidence produces controlled non-fabricated report", () => {
   const period = getWeeklyIntelligencePeriod(new Date("2026-07-19T12:30:00.000Z"));
   const report = buildEmptyWeeklyReport(period);
   assert.equal(report.problems.length, 0);
-  assert.match(report.summary, /No eligible user-owned activity/);
-  assert.match(report.summary, /not fabricating/);
+  assert.match(report.summary, /No eligible evidence/);
+  assert.ok(report.summary.includes(period.period_start));
 });
 
 test("malformed model output is rejected safely", () => {
@@ -137,22 +137,23 @@ test("weekly evidence is collected through Data Moat aggregation and preserves s
       calls.push(userId);
       return {
         items: [
-          { kind: "scan", source: "completed_scans", id: "scan-start", title: "CRM / Agencies", summary: "Scan at period start", occurredAt: "2026-07-13T00:00:00.000Z", metadata: {} },
-          { kind: "discover_run", source: "discover_history", id: "discover-mid", title: "Discover generation", summary: "Discovery evidence", occurredAt: "2026-07-14T00:00:00.000Z", metadata: { sourceCount: 4 } },
-          { kind: "saved_idea", source: "saved_ideas", id: "saved-mid", title: "Saved", summary: "Saved", occurredAt: "2026-07-15T00:00:00.000Z", metadata: { opportunityId: "opp-1" } },
-          { kind: "user_activity", source: "historical_user_evidence", id: "action-mid", title: "Action", summary: "Action", occurredAt: "2026-07-16T00:00:00.000Z", parentId: "disc-1", metadata: { actionType: "accepted", problemId: "prob-1" } },
-          { kind: "discover_problem", source: "accepted_discover_problems", id: "problem-mid", title: "Accepted problem", summary: "Accepted problem summary", occurredAt: "2026-07-17T00:00:00.000Z", metadata: {} },
-          { kind: "opportunity", source: "generated_opportunities", id: "opp-mid", title: "Generated opportunity", summary: "Opportunity summary", occurredAt: "2026-07-18T00:00:00.000Z", metadata: {} },
-          { kind: "scan", source: "completed_scans", id: "scan-before", title: "Old", summary: "Old", occurredAt: "2026-07-12T23:59:59.999Z", metadata: {} },
-          { kind: "scan", source: "completed_scans", id: "scan-end", title: "End", summary: "End", occurredAt: "2026-07-20T00:00:00.000Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "scan-start", ownerId: userId, title: "CRM / Agencies", summary: "Scan at period start", occurredAt: "2026-07-13T00:00:00.000Z", metadata: {} },
+          { kind: "discover_run", source: "discover_history", id: "discover-mid", ownerId: userId, title: "Discover generation", summary: "Discovery evidence", occurredAt: "2026-07-14T00:00:00.000Z", metadata: { sourceCount: 4 } },
+          { kind: "saved_idea", source: "saved_ideas", id: "saved-mid", ownerId: userId, title: "Saved", summary: "Saved", occurredAt: "2026-07-15T00:00:00.000Z", metadata: { opportunityId: "opp-1" } },
+          { kind: "user_activity", source: "historical_user_evidence", id: "action-mid", ownerId: userId, title: "Action", summary: "Action", occurredAt: "2026-07-16T00:00:00.000Z", parentId: "disc-1", metadata: { actionType: "accepted", problemId: "prob-1" } },
+          { kind: "discover_problem", source: "accepted_discover_problems", id: "problem-mid", ownerId: userId, title: "Accepted problem", summary: "Accepted problem summary", occurredAt: "2026-07-17T00:00:00.000Z", metadata: {} },
+          { kind: "opportunity", source: "generated_opportunities", id: "opp-mid", ownerId: userId, title: "Generated opportunity", summary: "Opportunity summary", occurredAt: "2026-07-18T00:00:00.000Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "scan-before", ownerId: userId, title: "Old", summary: "Old", occurredAt: "2026-07-12T23:59:59.999Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "scan-end", ownerId: userId, title: "End", summary: "End", occurredAt: "2026-07-20T00:00:00.000Z", metadata: {} },
+          { kind: "scan", source: "completed_scans", id: "foreign", ownerId: "user-b", title: "Foreign", summary: "Foreign evidence", occurredAt: "2026-07-14T00:00:00.000Z", metadata: {} },
         ],
         bySource: {
           weekly_reports: [
-            { kind: "weekly_report", source: "weekly_reports", id: "prior-week", title: "Prior", summary: "Prior summary", occurredAt: "2026-07-06T00:00:00.000Z", metadata: {} },
-            { kind: "weekly_report", source: "weekly_reports", id: "current-week", title: "Current", summary: "Current summary", occurredAt: "2026-07-14T00:00:00.000Z", metadata: {} },
+            { kind: "weekly_report", source: "weekly_reports", id: "prior-week", ownerId: userId, title: "Prior", summary: "Prior summary", occurredAt: "2026-07-06T00:00:00.000Z", metadata: {} },
+            { kind: "weekly_report", source: "weekly_reports", id: "current-week", ownerId: userId, title: "Current", summary: "Current summary", occurredAt: "2026-07-14T00:00:00.000Z", metadata: {} },
+            { kind: "weekly_report", source: "weekly_reports", id: "unowned-week", ownerId: null, title: "Unowned", summary: "Unowned summary", occurredAt: "2026-07-06T00:00:00.000Z", metadata: {} },
           ],
         },
-        sharedContext: [{ kind: "shared_problem_intelligence", source: "shared_problem_intelligence", id: "shared-1", title: "Shared", summary: "Shared context", occurredAt: "2026-07-18T00:00:00.000Z", metadata: { score: 9 } }],
       };
     },
   });
@@ -161,10 +162,9 @@ test("weekly evidence is collected through Data Moat aggregation and preserves s
   assert.deepEqual(result.userEvidence.map((item) => item.id), ["scan-start", "discover-mid", "saved-mid", "action-mid", "problem-mid", "opp-mid"]);
   assert.deepEqual(countWeeklyEvidence(result.userEvidence), { scan: 1, discover: 3, saved_idea: 1, conversion: 1, external: 0 });
   assert.deepEqual(result.priorUserContext.map((item) => item.id), ["prior-week"]);
-  assert.deepEqual(result.sharedContext.map((item) => item.id), ["shared-1"]);
 });
 
-test("shared context alone remains supplementary and does not create personalized insights", async () => {
+test("legacy shared context alone cannot create personalized insights", async () => {
   const period = getWeeklyIntelligencePeriod(new Date("2026-07-19T12:30:00.000Z"));
   const result = await collectWeeklyEvidenceFromDataMoat({
     userId: "user-a",
@@ -176,7 +176,7 @@ test("shared context alone remains supplementary and does not create personalize
     }),
   });
   assert.equal(result.userEvidence.length, 0);
-  assert.equal(result.sharedContext.length, 1);
+  assert.deepEqual(result.priorUserContext, []);
   assert.equal(buildEmptyWeeklyReport(period).problems.length, 0);
   assert.throws(() => validateWeeklyModelOutput({ summary: "bad", problems: [{ problem_title: "Fabricated" }] }, result.userEvidence), /without user evidence/);
 });

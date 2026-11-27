@@ -8,12 +8,12 @@ type QueryCall = {
   select?: string;
   order?: { column: string; ascending: boolean };
   limit?: number;
-  eq?: { column: string; value: string };
+  eq?: { column: string; value: string | boolean }[];
 };
 
 const ownerA = "00000000-0000-4000-8000-000000000001";
 const ownerB = "00000000-0000-4000-8000-000000000002";
-const ownedRun = { run_id: "run-a", weekly_intelligence_runs: { id: "run-a", user_id: ownerA } };
+const ownedRun = { run_id: "run-a", weekly_intelligence_runs: { id: "run-a", user_id: ownerA, is_global: false } };
 
 // Deliberately returns rows without filtering, to exercise the defensive
 // projection check independently of the database-side join assertions below.
@@ -32,8 +32,8 @@ function createMockClient(dataByTable: Record<string, Record<string, unknown>[]>
             call.select = columns;
             return this;
           },
-          eq(column: string, value: string) {
-            call.eq = { column, value };
+          eq(column: string, value: string | boolean) {
+            (call.eq ??= []).push({ column, value });
             return this;
           },
           order(column: string, options: { ascending: boolean }) {
@@ -51,29 +51,23 @@ function createMockClient(dataByTable: Record<string, Record<string, unknown>[]>
 }
 
 describe("collectDataMoatSources", () => {
-  it("preserves Data Moat table reads, ordering and limits", async () => {
+  it("queries only owned Weekly tables and preserves ordering and limits", async () => {
     const { client, calls } = createMockClient({});
 
     await collectDataMoatSources(ownerA, client);
 
     assert.deepEqual(calls, [
       {
-        table: "problem_intelligence",
-        select: "*",
-        order: { column: "intelligence_score", ascending: false },
-        limit: 15,
-      },
-      {
         table: "weekly_detected_problems",
-        select: "*,weekly_intelligence_runs!inner(id,user_id)",
-        eq: { column: "weekly_intelligence_runs.user_id", value: ownerA },
+        select: "*,weekly_intelligence_runs!inner(id,user_id,is_global)",
+        eq: [{ column: "weekly_intelligence_runs.user_id", value: ownerA }, { column: "weekly_intelligence_runs.is_global", value: false }],
         order: { column: "created_at", ascending: false },
         limit: 15,
       },
       {
         table: "weekly_sources",
-        select: "*,weekly_intelligence_runs!inner(id,user_id)",
-        eq: { column: "weekly_intelligence_runs.user_id", value: ownerA },
+        select: "*,weekly_intelligence_runs!inner(id,user_id,is_global)",
+        eq: [{ column: "weekly_intelligence_runs.user_id", value: ownerA }, { column: "weekly_intelligence_runs.is_global", value: false }],
         order: { column: "created_at", ascending: false },
         limit: 20,
       },
@@ -115,20 +109,11 @@ describe("collectDataMoatSources", () => {
 
     assert.deepEqual(sources, [
       {
-        title: "Data Moat Problem: Manual CRM cleanup",
-        url: null,
-        snippet: "Known problem. Intelligence score: 91. Prepared: 3. Converted: 2.",
-        source_type: "data_moat",
-        source_rank: 1,
-        signal_score: 91,
-        category: "Data Moat",
-      },
-      {
         title: "Weekly Problem: Slow client reporting",
         url: null,
         snippet: "Agencies spend hours preparing reports. Evidence: Repeated weekly mentions.",
         source_type: "data_moat",
-        source_rank: 2,
+        source_rank: 1,
         signal_score: 70,
         category: "Weekly Intelligence",
       },
@@ -137,7 +122,7 @@ describe("collectDataMoatSources", () => {
         url: "https://example.com/reporting",
         snippet: "Manual reporting is painful.",
         source_type: "data_moat",
-        source_rank: 3,
+        source_rank: 2,
         signal_score: 42,
         category: "Operations",
       },
@@ -165,7 +150,7 @@ describe("collectDataMoatSources", () => {
     const sources = await collectDataMoatSources(ownerA, client);
 
     assert.equal(sources.length, 30);
-    assert.equal(sources.at(-1)?.title, "Weekly Problem: Weekly Problem 15");
+    assert.equal(sources.at(-1)?.title, "Weekly Source 15");
   });
 
   it("rejects missing owner before constructing a client or reading any table", async () => {
@@ -176,21 +161,21 @@ describe("collectDataMoatSources", () => {
     assert.deepEqual(calls, []);
   });
 
-  it("retains shared aggregates when the caller has no owned Weekly context", async () => {
-    const { client } = createMockClient({
+  it("returns no context when only quarantined or foreign records exist", async () => {
+    const { client, calls } = createMockClient({
       problem_intelligence: [{ problem_title: "Shared context", intelligence_score: 91 }],
       weekly_detected_problems: [{ run_id: "run-b", weekly_intelligence_runs: { id: "run-b", user_id: ownerB }, problem_title: "B private problem" }],
       weekly_sources: [{ run_id: "run-b", weekly_intelligence_runs: { id: "run-b", user_id: ownerB }, source_title: "B private source" }],
     });
     const sources = await collectDataMoatSources(ownerA, client);
-    assert.equal(sources.length, 1);
-    assert.equal(sources[0].title, "Data Moat Problem: Shared context");
-    assert.equal(sources[0].signal_score, 91);
+    assert.deepEqual(sources, []);
+    assert.ok(calls.every((call) => call.table !== "problem_intelligence"));
   });
 
-  it("excludes foreign, ownerless, orphaned and mismatched parent/child records", async () => {
+  it("excludes foreign, legacy global, ownerless, orphaned and mismatched parents", async () => {
     const invalidRuns = [
-      { run_id: "run-b", weekly_intelligence_runs: { id: "run-b", user_id: ownerB } },
+      { run_id: "run-b", weekly_intelligence_runs: { id: "run-b", user_id: ownerB, is_global: false } },
+      { run_id: "run-assigned", weekly_intelligence_runs: { id: "run-assigned", user_id: ownerA, is_global: true } },
       { run_id: "run-global", weekly_intelligence_runs: { id: "run-global", user_id: null, is_global: true } },
       { run_id: null, weekly_intelligence_runs: null },
       { run_id: "run-b", weekly_intelligence_runs: ownedRun.weekly_intelligence_runs },
@@ -210,9 +195,9 @@ describe("collectDataMoatSources", () => {
     });
     const sources = await collectDataMoatSources(ownerA, client);
     assert.deepEqual(sources.map((source) => source.title), [
-      "Data Moat Problem: Authorized shared aggregate", "Weekly Problem: A private problem", "A private source",
+      "Weekly Problem: A private problem", "A private source",
     ]);
-    assert.deepEqual(sources.map((source) => source.source_rank), [1, 2, 3]);
+    assert.deepEqual(sources.map((source) => source.source_rank), [1, 2]);
     assert.doesNotMatch(JSON.stringify(sources), /UNAUTHORIZED|weekly_intelligence_runs|run_id|user_id/);
   });
 });

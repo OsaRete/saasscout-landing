@@ -27,7 +27,7 @@ export type IdeaValidationResult = PublicIdeaValidationResult & Readonly<{ diagn
 export type PublicIdeaValidationResponse = PublicIdeaValidationResult;
 export type IdeaValidationDataMoatContext = Readonly<{ userId: string; items: readonly NormalizedDataMoatItem[]; sharedContext: readonly NormalizedDataMoatItem[]; evidenceCounts: Readonly<Record<DataMoatSource, number>>; aggregationDiagnostics: DataMoatAggregation["diagnostics"] }>;
 export type IdeaValidationSignal = Readonly<{ direction: IdeaValidationSignalDirection; source: DataMoatSource; kind: DataMoatItemKind; itemId: string; title: string; occurredAt: string; strength: number; reason: string }>;
-export type ValidateIdeaInput = Readonly<{ userId: string; idea: Readonly<{ title: string; summary?: string; problem?: string; audience?: string }>; includeSharedContext?: boolean; limitPerSource?: number; now?: () => number; aggregation?: DataMoatAggregation }>;
+export type ValidateIdeaInput = Readonly<{ userId: string; idea: Readonly<{ title: string; summary?: string; problem?: string; audience?: string }>; includeSharedContext?: false; limitPerSource?: number; now?: () => number; aggregation?: DataMoatAggregation }>;
 export type ValidateIdeaAgainstDataMoatContextInput = Readonly<{ userId: string; idea: ValidateIdeaInput["idea"]; dataMoatContext: IdeaValidationDataMoatContext; now?: () => number }>;
 
 const SUPPORTING_KINDS = new Set<DataMoatItemKind>(["scan", "opportunity", "discover_run", "discover_problem", "saved_idea", "weekly_report", "snapshot", "user_activity"]);
@@ -62,7 +62,7 @@ export function buildIdeaValidationDataMoatContext(aggregation: DataMoatAggregat
   return Object.freeze({
     userId: aggregation.userId,
     items: Object.freeze([...aggregation.items]),
-    sharedContext: Object.freeze([...aggregation.sharedContext]),
+    sharedContext: Object.freeze([]),
     evidenceCounts: Object.freeze({ ...aggregation.diagnostics.countsBySource }),
     aggregationDiagnostics: aggregation.diagnostics,
   });

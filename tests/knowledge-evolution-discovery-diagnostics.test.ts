@@ -14,6 +14,7 @@ function clientFor(tables: Partial<Record<EvolutionSourceTable, RowLike[] | Erro
         const value = tables[table] || [];
         const builder = {
           select() { return builder; },
+          eq() { return builder; },
           ilike() { return builder; },
           gte() { return builder; },
           order() { return builder; },
@@ -67,11 +68,12 @@ test("diagnostics enabled assesses a discovered problem without changing workflo
   try {
     const workflowOutput = { success: true, problems: [{ id: "p1" }] };
     const { client } = clientFor({
-      discovered_problems: [{ problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "reported by agencies" }],
+      discovered_problems: [{ user_id: "founder-a", problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "reported by agencies" }],
     });
 
     const result = await runKnowledgeEvolutionDiscoveryDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [{ problem_title: "Client reporting bottlenecks" }],
     });
 
@@ -88,7 +90,6 @@ test("repository failure is logged safely and does not throw", async () => {
   const logger = silenceConsole();
   try {
     const { client } = clientFor({
-      problem_intelligence: new Error("database offline"),
       weekly_detected_problems: new Error("database offline"),
       weekly_sources: new Error("database offline"),
       discovered_problems: new Error("database offline"),
@@ -96,6 +97,7 @@ test("repository failure is logged safely and does not throw", async () => {
 
     const result = await runKnowledgeEvolutionDiscoveryDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [{ problem_title: "Offline assessment" }],
     });
 
@@ -111,15 +113,16 @@ test("multiple discovered problems and partial source failures are reported", as
   const logger = silenceConsole();
   try {
     const { client } = clientFor({
-      problem_intelligence: new Error("one source unavailable"),
+      weekly_sources: new Error("one source unavailable"),
       discovered_problems: [
-        { problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "agency evidence" },
-        { problem_title: "Spreadsheet onboarding gaps", created_at: "2026-06-02", pain_score: 7, source_evidence: "operator evidence" },
+        { user_id: "founder-a", problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "agency evidence" },
+        { user_id: "founder-a", problem_title: "Spreadsheet onboarding gaps", created_at: "2026-06-02", pain_score: 7, source_evidence: "operator evidence" },
       ],
     });
 
     const result = await runKnowledgeEvolutionDiscoveryDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [
         { problem_title: "Client reporting bottlenecks" },
         { problem_title: "Spreadsheet onboarding gaps" },
@@ -129,7 +132,7 @@ test("multiple discovered problems and partial source failures are reported", as
     assert.equal(result.assessed_problem_count, 2);
     assert.equal(result.failed_problem_count, 0);
     assert.equal(result.problems.length, 2);
-    assert.ok(result.warnings.some((warning) => warning.includes("problem_intelligence read failed")));
+    assert.ok(result.warnings.some((warning) => warning.includes("weekly_sources read failed")));
   } finally {
     logger.restore();
   }

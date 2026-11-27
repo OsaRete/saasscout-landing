@@ -23,7 +23,7 @@ export type WeeklyEvidenceSource = {
   published_at?: string | null;
 };
 
-export const WEEKLY_MODEL_ENVELOPE_LIMITS = Object.freeze({ externalEvidence: 20, currentInternalEvidence: 8, historicalContext: 4, titleCharacters: 140, excerptCharacters: 360, topicCharacters: 100, historicalTitleCharacters: 100, historicalSummaryCharacters: 240, sharedContext: 2, sharedTitleCharacters: 100, sharedSummaryCharacters: 180, problems: 3, reportSummaryCharacters: 500, problemTitleCharacters: 100, problemFieldCharacters: 360, evidenceReferences: 8, maxOutputTokens: 3000 } as const);
+export const WEEKLY_MODEL_ENVELOPE_LIMITS = Object.freeze({ externalEvidence: 20, currentInternalEvidence: 8, historicalContext: 4, titleCharacters: 140, excerptCharacters: 360, topicCharacters: 100, historicalTitleCharacters: 100, historicalSummaryCharacters: 240, problems: 3, reportSummaryCharacters: 500, problemTitleCharacters: 100, problemFieldCharacters: 360, evidenceReferences: 8, maxOutputTokens: 3000 } as const);
 
 function boundedPromptText(value: unknown, maximum: number) {
   const normalized = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -45,14 +45,6 @@ export function selectWeeklyModelEvidence(evidence: readonly WeeklyEvidenceSourc
   while (selected.length < limit && topics.some((topic) => (groups.get(topic)?.length || 0) > 0)) for (const topic of topics) { const item = groups.get(topic)?.shift(); if (item) selected.push(item); if (selected.length === limit) break; }
   return [...internal, ...historical, ...selected];
 }
-
-export type WeeklySharedSource = {
-  type: "problem_intelligence" | "data_moat";
-  id: string;
-  title: string;
-  summary: string;
-  created_at?: string | null;
-};
 
 export type WeeklyReportProblem = {
   problem_title: string;
@@ -324,6 +316,7 @@ export type WeeklyAggregationItem = {
   kind: string;
   source: string;
   id: string;
+  ownerId: string | null;
   title: string;
   summary: string;
   occurredAt: string;
@@ -333,7 +326,6 @@ export type WeeklyAggregationItem = {
 
 export type WeeklyAggregationInput = {
   items: WeeklyAggregationItem[];
-  sharedContext: WeeklyAggregationItem[];
   bySource?: Partial<Record<string, WeeklyAggregationItem[]>>;
   diagnostics?: {
     countsBySource?: Record<string, number>;
@@ -391,15 +383,15 @@ export function mapAggregationItemToWeeklyEvidence(item: WeeklyAggregationItem):
   return { type, id: item.id, title: item.title, summary: item.summary, created_at };
 }
 
-export function buildWeeklyEvidenceFromAggregation(aggregation: WeeklyAggregationInput, period: WeeklyPeriod) {
+function buildWeeklyEvidenceFromAggregation(aggregation: WeeklyAggregationInput, period: WeeklyPeriod, userId: string) {
   const userEvidence = aggregation.items
-    .filter((item) => isInsideWeeklyPeriod(item.occurredAt, period))
+    .filter((item) => item.ownerId === userId && isInsideWeeklyPeriod(item.occurredAt, period))
     .map(mapAggregationItemToWeeklyEvidence)
     .filter((item): item is WeeklyEvidenceSource => Boolean(item))
     .sort(deterministicWeeklySort);
 
   const priorUserContext = (aggregation.bySource?.weekly_reports || [])
-    .filter((item) => isBeforeWeeklyPeriod(item.occurredAt, period))
+    .filter((item) => item.ownerId === userId && isBeforeWeeklyPeriod(item.occurredAt, period))
     .slice()
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.id.localeCompare(b.id))
     .slice(0, 3)
@@ -411,15 +403,7 @@ export function buildWeeklyEvidenceFromAggregation(aggregation: WeeklyAggregatio
       created_at: item.occurredAt,
     }));
 
-  const sharedContext = aggregation.sharedContext.map((item) => ({
-    type: "problem_intelligence" as const,
-    id: item.id,
-    title: item.title,
-    summary: item.summary || `Shared aggregate intelligence score: ${item.metadata?.score || 0}.`,
-    created_at: item.occurredAt,
-  }));
-
-  return { userEvidence, priorUserContext, sharedContext };
+  return { userEvidence, priorUserContext };
 }
 
 export async function collectWeeklyEvidenceFromDataMoat(input: {
@@ -429,7 +413,7 @@ export async function collectWeeklyEvidenceFromDataMoat(input: {
 }) {
   if (!input.userId) throw new Error("Weekly Data Moat evidence requires an authenticated user.");
   const aggregation = await input.aggregate(input.userId);
-  return { aggregation, ...buildWeeklyEvidenceFromAggregation(aggregation, input.period) };
+  return { aggregation, ...buildWeeklyEvidenceFromAggregation(aggregation, input.period, input.userId) };
 }
 
 export function countWeeklyEvidence(sources: WeeklyEvidenceSource[]): Record<Exclude<WeeklyEvidenceSourceType, "historical_context">, number> {
@@ -445,7 +429,7 @@ export function hasMeaningfulWeeklyEvidence(sources: WeeklyEvidenceSource[]) {
 
 export function buildEmptyWeeklyReport(period: WeeklyPeriod) {
   return {
-    summary: `No eligible user-owned activity was found for ${period.period_start} through ${period.period_end}. SaaSScout is not fabricating personalized weekly insights from shared trends.`,
+    summary: `No eligible evidence was found for ${period.period_start} through ${period.period_end}.`,
     problems: [] as WeeklyReportProblem[],
   };
 }
@@ -454,11 +438,9 @@ export function buildWeeklyIntelligencePrompt(input: {
   period: WeeklyPeriod;
   userEvidence: WeeklyEvidenceSource[];
   priorUserContext: WeeklyEvidenceSource[];
-  sharedContext: WeeklySharedSource[];
   executionMode?: WeeklyExecutionMode;
 }) {
   const historical = input.priorUserContext.slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalContext);
-  const shared = input.sharedContext.slice(0, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedContext);
   return `You are SaaSScout's Weekly Intelligence engine.
 
 Reporting period:
@@ -472,9 +454,6 @@ ${input.userEvidence.map((source) => JSON.stringify({ evidenceId: source.id, evi
 
 Prior user context, outside the reporting period, for continuity only:
 ${historical.map((source) => JSON.stringify({ contextClass: "historical_context_non_citable", title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalTitleCharacters), theme: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.historicalSummaryCharacters) })).join("\n") || "None"}
-
-Optional shared aggregate context. This is supplementary only and must never be presented as private user activity:
-${shared.map((source) => JSON.stringify({ contextClass: "shared_context_non_citable", title: boundedPromptText(source.title, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedTitleCharacters), theme: boundedPromptText(source.summary, WEEKLY_MODEL_ENVELOPE_LIMITS.sharedSummaryCharacters) })).join("\n") || "None"}
 
 Generation constraints:
 - Synthesize across evidence to find non-obvious connections; do not merely restate snippets or broad pain.
@@ -491,7 +470,7 @@ Generation constraints:
 - Return no scores; SaaSScout scores deterministically. Unsupported optional fields are null, never filler.
 - Return one JSON object only, no Markdown/commentary. Return at most ${WEEKLY_MODEL_ENVELOPE_LIMITS.problems} high-value, distinct problems; synthesize rather than restate/repeat.
 - Keep summary <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.reportSummaryCharacters} characters, problem_title <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemTitleCharacters}, and every other prose field <= ${WEEKLY_MODEL_ENVELOPE_LIMITS.problemFieldCharacters} characters.
-- Prior/shared context is non-citable. Do not return unsupported market/trend claims or scores. Top level is { "summary": string, "problems": array }.
+- Prior context is non-citable. Do not return unsupported market/trend claims or scores. Top level is { "summary": string, "problems": array }.
 - Problem keys/types: problem_title:string; problem_summary:string; underlying_cause:string; affected_users,affected_niches,business_impact,existing_workaround,why_existing_solutions_fail,repeated_pattern,monetization_angle,recommended_deep_scan:string|null; observed_evidence,recommended_validation:string; evidence_references:string[]; novelty:new_problem|new_angle_on_known_problem|stronger_evidence|recurring_problem|null; commercial_signal:{type:direct_buying_signal|indirect_commercial_signal|no_monetization_evidence_yet,rationale:string}; best_opportunity:Opportunity; alternative_opportunities:Opportunity[0..2].
 - Opportunity keys/types: solution_type:${WEEKLY_SOLUTION_TYPES.join("|")}; title,short_description,why_it_fits,rationale:string; monetization_model:string|null; evidence_basis:observed|inferred.`;
 }

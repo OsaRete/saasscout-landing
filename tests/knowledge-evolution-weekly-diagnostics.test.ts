@@ -4,6 +4,8 @@ import test from "node:test";
 import { runKnowledgeEvolutionWeeklyDiagnostics } from "../lib/knowledge/evolution/weekly-diagnostics.ts";
 import type { EvolutionSourceTable, RowLike } from "../lib/knowledge/evolution/index.ts";
 
+const ownedRun = { run_id: "run-a", weekly_intelligence_runs: { id: "run-a", user_id: "founder-a", is_global: false } };
+
 function clientFor(tables: Partial<Record<EvolutionSourceTable, RowLike[] | Error>>) {
   const calls: EvolutionSourceTable[] = [];
   return {
@@ -14,6 +16,7 @@ function clientFor(tables: Partial<Record<EvolutionSourceTable, RowLike[] | Erro
         const value = tables[table] || [];
         const builder = {
           select() { return builder; },
+          eq() { return builder; },
           ilike() { return builder; },
           gte() { return builder; },
           order() { return builder; },
@@ -67,12 +70,13 @@ test("weekly diagnostics enabled assesses detected problems without changing API
   try {
     const apiOutput = { success: true, problems: [{ id: "weekly-p1" }] };
     const { client, calls } = clientFor({
-      weekly_detected_problems: [{ problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "weekly evidence" }],
-      weekly_sources: [{ problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", source_quality_score: 7, source_type: "x" }],
+      weekly_detected_problems: [{ ...ownedRun, user_id: "founder-a", problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "weekly evidence" }],
+      weekly_sources: [{ ...ownedRun, user_id: "founder-a", problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", source_quality_score: 7, source_type: "x" }],
     });
 
     const result = await runKnowledgeEvolutionWeeklyDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [{ problem_title: "Client reporting bottlenecks" }],
     });
 
@@ -90,13 +94,13 @@ test("weekly repository failures are logged safely and do not throw", async () =
   const logger = silenceConsole();
   try {
     const { client } = clientFor({
-      problem_intelligence: new Error("database offline"),
       weekly_detected_problems: new Error("database offline"),
       weekly_sources: new Error("database offline"),
     });
 
     const result = await runKnowledgeEvolutionWeeklyDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [{ problem_title: "Offline weekly assessment" }],
     });
 
@@ -112,15 +116,16 @@ test("weekly diagnostics reports multiple detected problems and partial assessme
   const logger = silenceConsole();
   try {
     const { client } = clientFor({
-      problem_intelligence: new Error("one source unavailable"),
+      weekly_sources: new Error("one source unavailable"),
       weekly_detected_problems: [
-        { problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "agency evidence" },
-        { problem_title: "Spreadsheet onboarding gaps", created_at: "2026-06-02", pain_score: 7, source_evidence: "operator evidence" },
+        { ...ownedRun, user_id: "founder-a", problem_title: "Client reporting bottlenecks", created_at: "2026-06-01", pain_score: 8, source_evidence: "agency evidence" },
+        { ...ownedRun, user_id: "founder-a", problem_title: "Spreadsheet onboarding gaps", created_at: "2026-06-02", pain_score: 7, source_evidence: "operator evidence" },
       ],
     });
 
     const result = await runKnowledgeEvolutionWeeklyDiagnostics({
       client,
+      ownerId: "founder-a",
       problems: [
         { problem_title: "Client reporting bottlenecks" },
         { problem_title: "Spreadsheet onboarding gaps" },
@@ -130,7 +135,7 @@ test("weekly diagnostics reports multiple detected problems and partial assessme
     assert.equal(result.assessed_problem_count, 2);
     assert.equal(result.failed_problem_count, 0);
     assert.equal(result.problems.length, 2);
-    assert.ok(result.warnings.some((warning) => warning.includes("problem_intelligence read failed")));
+    assert.ok(result.warnings.some((warning) => warning.includes("weekly_sources read failed")));
   } finally {
     logger.restore();
   }

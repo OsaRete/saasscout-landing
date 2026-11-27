@@ -11,6 +11,7 @@ type Opportunity = {
   created_at: string;
   user_id: string;
   scan_id: string;
+  source_problem_id: string | null;
   title: string;
   score: number;
   pain: string;
@@ -41,18 +42,6 @@ type EvidenceAnalysis = {
 };
 
 
-
-type OpportunityIntelligence = {
-  id: string;
-  opportunity_id: string;
-  user_id: string;
-  founder_fit_score: number;
-  intelligence_score: number;
-  prepared_count: number;
-  converted_count: number;
-  confidence_label: string | null;
-  recommendation: string | null;
-};
 
 function splitByComma(text: string | null | undefined) {
   return String(text || "")
@@ -88,8 +77,7 @@ export default function OpportunityPage() {
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
   const [evidenceAnalysis, setEvidenceAnalysis] =
   useState<EvidenceAnalysis | null>(null);
-  const [opportunityIntelligence, setOpportunityIntelligence] =
-  useState<OpportunityIntelligence | null>(null);
+  const [founderFit, setFounderFit] = useState<number | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -128,6 +116,7 @@ export default function OpportunityPage() {
       }
 
       setOpportunity(data);
+      setFounderFit(null);
 
       const { data: analysisData, error: analysisError } = await supabase
         .from("evidence_analysis")
@@ -155,34 +144,14 @@ export default function OpportunityPage() {
         setSaveMessage("Idea already saved.");
       }
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        setSaveMessage("Your session expired. Please log in again.");
-        setLoadingOpportunity(false);
-        return;
-      }
-
-      const intelligenceResponse = await fetch("/api/opportunity-intelligence", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          opportunityId,
-          problemTitle: data.problem_summary || data.title,
-        }),
-      });
-      
-      const intelligenceResult = await intelligenceResponse.json();
-      
-      if (intelligenceResponse.ok && intelligenceResult.intelligence) {
-        setOpportunityIntelligence(intelligenceResult.intelligence);
-      } else {
-        console.error("Opportunity intelligence error:", intelligenceResult);
+      if (data.source_problem_id) {
+        const { data: match } = await supabase
+          .from("founder_problem_matches")
+          .select("founder_fit_score")
+          .eq("user_id", user.id)
+          .eq("problem_id", data.source_problem_id)
+          .maybeSingle();
+        setFounderFit(match?.founder_fit_score ?? null);
       }
 
       setLoadingOpportunity(false);
@@ -620,52 +589,12 @@ export default function OpportunityPage() {
               </div>
             )}
 
-<div className="rounded-3xl border border-cyan-500/30 bg-cyan-500/10 p-7">
-  <p className="text-sm uppercase tracking-widest text-cyan-300">
-    Opportunity Intelligence
-  </p>
-
-  <h3 className="mt-3 text-2xl font-bold">
-    {opportunityIntelligence?.recommendation || "Calculating..."}
-  </h3>
-
-  <div className="mt-6 grid grid-cols-2 gap-3">
-    <div className="rounded-2xl bg-black/20 p-4">
-      <p className="text-xs text-gray-500">Founder Fit</p>
-      <p className="mt-1 text-2xl font-bold">
-        {opportunityIntelligence?.founder_fit_score || 0}
-      </p>
-    </div>
-
-    <div className="rounded-2xl bg-black/20 p-4">
-      <p className="text-xs text-gray-500">Market Signal</p>
-      <p className="mt-1 text-2xl font-bold">
-        {opportunityIntelligence?.intelligence_score || 0}
-      </p>
-    </div>
-
-    <div className="rounded-2xl bg-black/20 p-4">
-      <p className="text-xs text-gray-500">Prepared</p>
-      <p className="mt-1 text-2xl font-bold">
-        {opportunityIntelligence?.prepared_count || 0}
-      </p>
-    </div>
-
-    <div className="rounded-2xl bg-black/20 p-4">
-      <p className="text-xs text-gray-500">Converted</p>
-      <p className="mt-1 text-2xl font-bold">
-        {opportunityIntelligence?.converted_count || 0}
-      </p>
-    </div>
-  </div>
-
-  <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
-    <p className="text-xs text-gray-500">Confidence</p>
-    <p className="mt-1 text-lg font-bold text-cyan-200">
-      {opportunityIntelligence?.confidence_label || "Low"}
-    </p>
-  </div>
-</div>
+            {founderFit !== null && (
+              <div className="rounded-3xl border border-cyan-500/30 bg-cyan-500/10 p-7">
+                <h3 className="text-xl font-bold">Founder Fit</h3>
+                <p className="mt-4 text-4xl font-bold text-cyan-200">{founderFit}</p>
+              </div>
+            )}
 
             <div className="rounded-3xl border border-violet-500/30 bg-violet-500/10 p-7">
               <h3 className="text-xl font-bold">Recommended Next Step</h3>

@@ -4,9 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { AuthError, requireUser } from "../_utils/auth";
 import { requireBetaMember } from "@/lib/auth/beta-membership";
-import { buildWeeklyIntelligencePrompt, WEEKLY_EXECUTION_CONTRACT_VERSION, WEEKLY_MODEL_ENVELOPE_LIMITS, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklySharedSource, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
+import { buildWeeklyIntelligencePrompt, WEEKLY_EXECUTION_CONTRACT_VERSION, WEEKLY_MODEL_ENVELOPE_LIMITS, type WeeklyEvidenceSource, type WeeklyExecutionMode, type WeeklyPeriod, type WeeklyReportProblem } from "@/lib/weekly-intelligence";
 import { aggregateUserDataMoat, type DataMoatAggregation, type DataMoatAggregationClient } from "@/lib/data-moat/aggregation";
-import { updateWeeklyProblemIntelligence } from "@/lib/knowledge/problem-intelligence-store";
 import { runKnowledgeEvolutionWeeklyDiagnostics, type KnowledgeEvolutionSupabaseClient } from "@/lib/knowledge/evolution";
 import { runAuthoritativeWeeklyGenerationForUser, type AuthoritativeWeeklyGenerationRepository, type WeeklyEntryPath } from "@/lib/weekly-intelligence-service";
 import type { WeeklyMonitoringRecord } from "@/lib/weekly-monitoring-context";
@@ -100,6 +99,7 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
         throw error;
       }
       const claim = parseWeeklyClaimRpcResponse(data);
+      if (claim.run.user_id !== userId || claim.run.is_global !== false) throw new Error("Weekly claim RPC returned a run outside the owner workspace.");
       if (claim.status === "claimed" || claim.status === "reclaimed") bindWeeklySpendingAttempt(claim.run);
       return claim;
     },
@@ -110,38 +110,33 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
         .update({ user_id: userId, period_start: period.period_start, period_end: period.period_end, timezone: period.timezone, status: "completed", total_sources_analyzed: totalSourcesAnalyzed, summary, execution_contract_version: WEEKLY_EXECUTION_CONTRACT_VERSION, execution_mode: executionMode, external_provider_state: providerState, external_sources_persisted: externalSourcesPersisted, source_degraded: sourceDegraded })
         .eq("id", runId)
         .eq("user_id", userId)
+        .eq("is_global", false)
         .neq("status", "completed")
         .select()
         .single();
       if (error || !data) throw error || new Error("Could not complete weekly intelligence run.");
       return data;
     },
-    async replaceProblems({ runId, problems }) {
-      const { data: runRow, error: runError } = await getSupabaseAdminClient().from("weekly_intelligence_runs").select("status").eq("id", runId).single();
-      if (runError) throw runError;
-      if (runRow?.status === "completed") return getProblemsForRun(runId);
+    async replaceProblems({ runId, userId, problems }) {
+      const run = await requireOwnedWeeklyRun(runId, userId);
+      if (run.status === "completed") return getProblemsForRun(runId, userId);
       const { error: deleteError } = await getSupabaseAdminClient().from("weekly_detected_problems").delete().eq("run_id", runId);
       if (deleteError) throw deleteError;
       if (problems.length === 0) return [];
       const problemRows = problems.map((problem: WeeklyReportProblem) => ({ ...problem, problem_title_key: problem.problem_title.trim().replace(/\s+/g, " ").toLowerCase(), run_id: runId }));
       const { data, error } = await getSupabaseAdminClient().from("weekly_detected_problems").insert(problemRows).select();
       if (error) throw error;
-      for (const problem of problems) {
-        if ([problem.pain_score, problem.revenue_score, problem.urgency_score, problem.trend_score].every((score) => typeof score === "number")) {
-          await updateWeeklyProblemIntelligence(problem as WeeklyReportProblem & { pain_score: number; revenue_score: number; urgency_score: number; trend_score: number });
-        }
-      }
       if (isKnowledgeEvolutionDiagnosticsEnabled()) {
-        await runKnowledgeEvolutionWeeklyDiagnostics({ client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient, problems });
+        await runKnowledgeEvolutionWeeklyDiagnostics({ client: getSupabaseAdminClient() as unknown as KnowledgeEvolutionSupabaseClient, ownerId: userId, problems });
       }
       return data || [];
     },
-    async markRunFailed({ runId }) {
-      await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId).neq("status", "completed");
+    async markRunFailed({ runId, userId }) {
+      await getSupabaseAdminClient().from("weekly_intelligence_runs").update({ status: "failed" }).eq("id", runId).eq("user_id", userId).eq("is_global", false).neq("status", "completed");
     },
     async loadExternalHistory({ userId, beforePeriodStart }) {
       const client = getSupabaseAdminClient();
-      const { data: runs, error: runError } = await client.from("weekly_intelligence_runs").select("id,period_start").eq("user_id", userId).lt("period_start", beforePeriodStart).order("period_start", { ascending: false }).limit(52);
+      const { data: runs, error: runError } = await client.from("weekly_intelligence_runs").select("id,period_start").eq("user_id", userId).eq("is_global", false).lt("period_start", beforePeriodStart).order("period_start", { ascending: false }).limit(52);
       if (runError) { safePostgrestFailure("weekly_external_history_runs_select", runError); throw runError; }
       if (!runs?.length) return [];
       const periods = new Map(runs.map((run) => [run.id, run.period_start]));
@@ -149,8 +144,9 @@ export function buildWeeklyGenerationRepository(): AuthoritativeWeeklyGeneration
       if (error) { safePostgrestFailure("weekly_external_history_sources_select", error); throw error; }
       return normalizeWeeklyExternalHistoryRows(data || [], periods);
     },
-    async persistExternalSources({ runId, sources }) {
+    async persistExternalSources({ runId, userId, sources }) {
       if (!sources.length) return 0;
+      await requireOwnedWeeklyRun(runId, userId);
       const rows = sources.map((source: WeeklyExternalEvidence, index) => ({ run_id: runId, evidence_id: source.evidenceId, source_title: source.title, source_url: source.url, source_snippet: source.snippet, source_type: source.sourceType, source_rank: source.sourceRank ?? index + 1, monitoring_topic_fingerprint: source.monitoringTopicFingerprint, source_provider: source.sourceProvider, canonical_url: source.canonicalUrl, published_at: source.publishedAt, collected_at: source.collectedAt, first_seen_at: source.firstSeenAt, last_seen_at: source.lastSeenAt, first_seen_period_start: source.firstSeenPeriodStart, content_fingerprint: source.contentFingerprint, freshness_class: source.freshness, origin_class: source.originClass }));
       const client = getSupabaseAdminClient();
       const { error } = await client.from("weekly_sources").upsert(rows, { onConflict: "run_id,evidence_id", ignoreDuplicates: true });
@@ -171,7 +167,6 @@ export async function runWeeklyGenerationForUser(userId: string, period: WeeklyP
       repository: buildWeeklyGenerationRepository(),
       aggregate: (authenticatedUserId) =>
         aggregateUserDataMoat(getSupabaseAdminClient() as unknown as DataMoatAggregationClient, authenticatedUserId, {
-          includeSharedContext: true,
           limitPerSource: 100,
           logger: { info: logWeeklyDiagnosticInfo, warn: logWeeklyDiagnosticWarning },
         }),
@@ -191,6 +186,7 @@ async function loadPriorWeeklyMonitoringRecords(userId: string, period: WeeklyPe
     .from("weekly_intelligence_runs")
     .select("id,user_id,total_sources_analyzed,period_end")
     .eq("user_id", userId)
+    .eq("is_global", false)
     .eq("status", "completed")
     .lt("period_end", period.period_start)
     .order("period_end", { ascending: false })
@@ -222,7 +218,15 @@ async function loadPriorWeeklyMonitoringRecords(userId: string, period: WeeklyPe
   });
 }
 
-async function getProblemsForRun(runId: string) {
+async function requireOwnedWeeklyRun(runId: string, userId: string) {
+  const { data, error } = await getSupabaseAdminClient().from("weekly_intelligence_runs").select("status")
+    .eq("id", runId).eq("user_id", userId).eq("is_global", false).single();
+  if (error || !data) throw error || new Error("Weekly run is unavailable.");
+  return data;
+}
+
+async function getProblemsForRun(runId: string, userId: string) {
+  await requireOwnedWeeklyRun(runId, userId);
   const { data, error } = await getSupabaseAdminClient()
     .from("weekly_detected_problems")
     .select("*")
@@ -256,7 +260,6 @@ async function analyzeUserScopedWeeklySignals(input: {
   period: WeeklyPeriod;
   userEvidence: WeeklyEvidenceSource[];
   priorUserContext: WeeklyEvidenceSource[];
-  sharedContext: WeeklySharedSource[];
   executionMode: WeeklyExecutionMode;
   correctiveInstruction?: string;
 }) {
@@ -285,7 +288,7 @@ const SAFE_WEEKLY_RUN_FIELDS = "id,status,total_sources_analyzed,summary,period_
 const SAFE_WEEKLY_PROBLEM_FIELDS = "id,run_id,problem_title,problem_summary,affected_users,affected_niches,observed_evidence,repeated_patterns,business_impact,why_existing_tools_fail,suggested_solutions,suggested_mvp,monetization_angle,recommended_validation,recommended_deep_scan,evidence_references,pain_score,revenue_score,urgency_score,trend_score,intelligence_score,confidence_score,evidence_strength,source_evidence,created_at";
 const SAFE_WEEKLY_SOURCE_FIELDS = "id,evidence_id,run_id,source_title,source_url,source_snippet,source_type,source_provider,canonical_url,published_at,collected_at,first_seen_at,last_seen_at,first_seen_period_start,content_fingerprint,freshness_class,origin_class,source_rank,category,created_at";
 
-/** Authenticated, ownership-checked projection. The browser never reads Weekly tables directly. */
+/** Authenticated, ownership-checked projection for the Weekly workspace. */
 export async function GET(req: Request) {
   try {
     const user = await requireUser(req);
@@ -294,6 +297,7 @@ export async function GET(req: Request) {
       .from("weekly_intelligence_runs")
       .select(SAFE_WEEKLY_RUN_FIELDS)
       .eq("user_id", user.id)
+      .eq("is_global", false)
       .order("created_at", { ascending: false })
       .limit(20);
     if (requestedRunId) runsQuery = runsQuery.eq("id", requestedRunId);

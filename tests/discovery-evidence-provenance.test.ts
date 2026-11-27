@@ -73,7 +73,6 @@ function fixture(t: TestContext, mode: "empty" | "missing" | "grounded" | "inval
     if (init?.method === "POST") {
       writes.push(table!);
       switch (table) {
-        case "problem_intelligence":
         case "operational_events": return new Response(null, { status: 201 });
         case "opportunity_discoveries": return Response.json({ id: "discovery-fixture", user_id: userId });
         case "discovered_problems": return Response.json(JSON.parse(String(init.body)));
@@ -119,13 +118,16 @@ test("missing model source evidence persists an interpretation without promoting
   assert.deepEqual(mock.writes, ["operational_events", "opportunity_discoveries", "discovered_problems", "operational_events"]);
 });
 
-test("matched source evidence is attributed and eligible for the existing intelligence write", async (t) => {
+test("matched source evidence retains attribution in the owner's Discovery history", async (t) => {
   const mock = fixture(t, "grounded", 2);
   const result = await mock.run();
   assert.equal(result.limited_search_coverage, true);
+  assert.equal(result.problems.length, 1);
+  assert.equal(result.problems[0].user_id, userId);
+  assert.equal(result.problems[0].discovery_id, "discovery-fixture");
   assert.equal(result.problems[0].source_evidence, `External source: Reporting source (https://example.test/reporting)
 “${snippet}”`);
-  assert.ok(mock.writes.includes("problem_intelligence"));
+  assert.deepEqual(mock.writes, ["operational_events", "opportunity_discoveries", "discovered_problems", "operational_events"]);
 });
 
 test("Discovery logs only a fixed diagnostic for malformed model JSON", async (t) => {

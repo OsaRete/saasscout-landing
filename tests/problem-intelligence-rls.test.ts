@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const migrationPath = "supabase/migrations/20260719001000_restrict_problem_intelligence_authenticated_writes.sql";
@@ -9,8 +9,6 @@ const historicalMigration = readFileSync(
   "utf8"
 );
 const scanPage = readFileSync("app/scan/page.tsx", "utf8");
-const conversionRoute = readFileSync("app/api/problem-intelligence/conversion/route.ts", "utf8");
-const problemStore = readFileSync("lib/knowledge/problem-intelligence-store.ts", "utf8");
 const browserSources = [
   ["app/scan/page.tsx", scanPage],
   ["app/discover/page.tsx", readFileSync("app/discover/page.tsx", "utf8")],
@@ -35,7 +33,7 @@ test("historical policy audit captures prior authenticated problem_intelligence 
   );
 });
 
-test("new migration removes authenticated problem_intelligence writes while preserving intended reads", () => {
+test("historical write-hardening migration left authenticated reads in place", () => {
   assert.match(migration, /DROP POLICY IF EXISTS "Users can insert problem intelligence"/);
   assert.match(migration, /DROP POLICY IF EXISTS "Users can update problem intelligence"/);
   assert.match(migration, /DROP POLICY IF EXISTS "Users can delete problem intelligence"/);
@@ -54,18 +52,16 @@ test("new migration removes authenticated problem_intelligence writes while pres
   assert.doesNotMatch(migration, /USING \(true\).*FOR (INSERT|UPDATE|DELETE)/i);
 });
 
-test("browser code does not write problem_intelligence or import service-role helpers", () => {
+test("browser code has no legacy problem catalog access or service-role helpers", () => {
   for (const [file, source] of browserSources) {
-    assert.doesNotMatch(source, /from\("problem_intelligence"\)[\s\S]{0,200}\.(insert|update|delete)\(/, file);
+    assert.doesNotMatch(source, /from\("problem_intelligence"\)/, file);
     assert.doesNotMatch(source, /SUPABASE_SERVICE_ROLE_KEY|server-admin|createSupabaseAdminClient/, file);
   }
-  assert.match(scanPage, /fetch\("\/api\/problem-intelligence\/conversion"/);
+  assert.doesNotMatch(scanPage, /fetch\("\/api\/problem-intelligence\/conversion"/);
 });
 
-test("trusted server write paths use the server admin client boundary", () => {
-  assert.match(conversionRoute, /import \{ createSupabaseAdminClient \} from .*[";]$/m);
-  assert.match(conversionRoute, /await requireUser\(req\)/);
-  assert.match(conversionRoute, /\.from\("problem_intelligence"\)[\s\S]*\.update\(/);
-  assert.match(problemStore, /createSupabaseAdminClient\(\)/);
-  assert.doesNotMatch(problemStore, /SUPABASE_SERVICE_ROLE_KEY/);
+test("legacy shared conversion, scoring and writer entrypoints are retired", () => {
+  assert.equal(existsSync("app/api/problem-intelligence/conversion/route.ts"), false);
+  assert.equal(existsSync("app/api/opportunity-intelligence/route.ts"), false);
+  assert.equal(existsSync("lib/knowledge/problem-intelligence-store.ts"), false);
 });

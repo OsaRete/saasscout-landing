@@ -23,7 +23,7 @@ const supportingTables = {
   opportunity_discoveries: [{ id: "disc-1", user_id: "user-1", status: "completed", summary: "Invoice reconciliation pain in finance teams", created_at: "2026-07-03T00:00:00.000Z" }],
   discovered_problems: [{ id: "prob-1", user_id: "user-1", discovery_id: "disc-1", status: "accepted", problem_title: "Invoice reconciliation wastes finance time", problem_summary: "Teams need AI invoice matching", opportunity_score: 88, created_at: "2026-07-04T00:00:00.000Z" }],
   saved_ideas: [{ id: "save-1", user_id: "user-1", opportunity_id: "opp-1", created_at: "2026-07-05T00:00:00.000Z" }],
-  weekly_intelligence_runs: [{ id: "week-1", user_id: "user-1", status: "completed", summary: "Invoice reconciliation remains a recurring finance team problem", period_end: "2026-07-06T00:00:00.000Z", created_at: "2026-07-06T00:00:00.000Z" }],
+  weekly_intelligence_runs: [{ id: "week-1", user_id: "user-1", is_global: false, status: "completed", summary: "Invoice reconciliation remains a recurring finance team problem", period_end: "2026-07-06T00:00:00.000Z", created_at: "2026-07-06T00:00:00.000Z" }],
   snapshot_identities: [], discovery_actions: [{ id: "act-1", user_id: "user-1", action_type: "accepted", problem_id: "prob-1", created_at: "2026-07-07T00:00:00.000Z" }], problem_intelligence: [{ id: "pi-1", problem_title: "Shared invoice", intelligence_score: 99, last_seen_at: "2026-07-08T00:00:00.000Z" }],
 };
 
